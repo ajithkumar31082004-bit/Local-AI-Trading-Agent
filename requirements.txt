@@ -1,0 +1,4 @@
+# Install with:  pip install -r requirements.txt
+crewai>=0.80.0
+streamlit>=1.40.0
+requests>=2.31.0
