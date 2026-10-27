@@ -80,13 +80,29 @@ class DailyRiskState:
             if (cur-then).total_seconds() < self.cfg.cooldown_after_loss_minutes*60:
                 return False,"Loss cooldown active; block revenge/FOMO entries.",state
         return True,"Daily risk guards passed.",state
-    def record_trade(self, pnl_cash: float, equity_at_start: float, now=None):
-        state=self.load(now)
-        state["trades"]=int(state["trades"])+1
-        state["realized_pnl"]=float(state["realized_pnl"])+float(pnl_cash)/max(float(equity_at_start),1e-9)
-        if pnl_cash < 0:
-            dt=now or datetime.now(timezone.utc)
-            if dt.tzinfo is None: raise ValueError("now must be timezone-aware")
-            state["last_loss_at"]=dt.isoformat()
+    def reserve_trade(self, now=None):
+        """Reserve the one-per-day trade slot when an alert is accepted for paper tracking."""
+        allowed, reason, state = self.can_trade(now)
+        if not allowed:
+            raise RuntimeError(reason)
+        state["trades"] = int(state["trades"]) + 1
         self.save(state)
         return state
+
+    def record_result(self, pnl_cash: float, equity_at_start: float, now=None):
+        """Record the outcome for an already-reserved paper trade without double-counting it."""
+        state = self.load(now)
+        state["realized_pnl"] = float(state["realized_pnl"]) + float(pnl_cash) / max(float(equity_at_start), 1e-9)
+        if pnl_cash < 0:
+            dt = now or datetime.now(timezone.utc)
+            if dt.tzinfo is None: raise ValueError("now must be timezone-aware")
+            state["last_loss_at"] = dt.isoformat()
+        self.save(state)
+        return state
+
+    def record_trade(self, pnl_cash: float, equity_at_start: float, now=None):
+        """Convenience method for a completed trade when no reservation was made beforehand."""
+        state = self.load(now)
+        state["trades"] = int(state["trades"]) + 1
+        self.save(state)
+        return self.record_result(pnl_cash, equity_at_start, now)
