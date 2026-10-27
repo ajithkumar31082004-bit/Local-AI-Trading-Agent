@@ -1,4 +1,15 @@
-# Install with:  pip install -r requirements.txt
+# Core Agent & UI
 crewai>=0.80.0
 streamlit>=1.40.0
 requests>=2.31.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+
+# Financial Data & Quantitative Analysis
+pandas>=2.0.0
+numpy>=1.24.0
+yfinance>=0.2.40
+plotly>=5.18.0
+
+# Testing & Quality Assurance
+pytest>=8.0.0
