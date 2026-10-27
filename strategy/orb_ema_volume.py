@@ -62,9 +62,12 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
     session = df[(df.index >= session_start) & (df.index < session_start + pd.Timedelta(days=1))]
     opening = session[(session.index >= session_start) & (session.index < session_end)]
     expected = cfg.orb_minutes // 5
-    if now < session_end or len(opening) < expected:
-        return _no_trade(f"Opening range not complete: need {expected} completed 5m candles from {cfg.session_start} {cfg.timezone}.", base_check, now)
-    opening = opening.iloc[:expected]
+    expected_index = pd.date_range(start=session_start, periods=expected, freq="5min")
+    if now < session_end or len(opening) < expected or not expected_index.isin(opening.index).all():
+        return _no_trade(f"Opening range incomplete or missing candles: need bars at {cfg.session_start}, +5m and +10m ({cfg.timezone}).", base_check, now)
+    opening = opening.reindex(expected_index)
+    if opening[["Open", "High", "Low", "Close", "Volume"]].isna().any().any():
+        return _no_trade("NO TRADE: one or more opening-range candles are missing.", base_check, now)
     orb_high, orb_low = float(opening["High"].max()), float(opening["Low"].min())
     checklist = dict(base_check)
     checklist["orb_set"] = True
@@ -138,6 +141,9 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
             ema_ok = close < float(ema_now) and float(ema_now) < float(ema_prev)
         if touches and holds and rejection:
             checklist.update({"retest": True, "rejection": True, "ema_ok": bool(ema_ok), "breakout_close": True})
+            if crosses > cfg.max_ema_crosses:
+                failed_reason = f"NO TRADE: price chopped around EMA20 ({crosses} crosses in last 10 candles)."
+                break
             if not ema_ok:
                 failed_reason = "NO TRADE: EMA20 trend filter failed on retest candle."
                 break
