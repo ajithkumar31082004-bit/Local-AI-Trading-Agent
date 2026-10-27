@@ -6,7 +6,7 @@ from typing import Optional
 from agents.trading_supervisor import TradingSupervisor
 from agents.ollama_client import OllamaClient
 from config.settings import settings
-from agents.orb_tools import orb_current_signal, explain_no_trade
+from agents.orb_tools import orb_current_signal, explain_no_trade, backtest_orb_csv, assess_orb_risk, journal_summary
 
 
 def render_assistant(supervisor: TradingSupervisor):
@@ -74,7 +74,7 @@ def render_assistant(supervisor: TradingSupervisor):
             st.markdown(user_input)
 
         # Deterministic ORB tools run before generic symbol analysis.
-        orb_intent = any(term in user_input.lower() for term in ("orb", "xautusd", "why no trade", "opening range"))
+        orb_intent = any(term in user_input.lower() for term in ("orb", "xautusd", "why no trade", "opening range", "journal summary", "backtest"))
         symbol_match = re.search(r"\banalyze\s+([A-Za-z0-9\.\-\_\^]+)", user_input, re.IGNORECASE)
         tool_data = None
         assistant_reply = ""
@@ -83,7 +83,23 @@ def render_assistant(supervisor: TradingSupervisor):
             with st.spinner("Analyzing with local agents..."):
                 if orb_intent:
                     try:
-                        tool_data = explain_no_trade() if "why no trade" in user_input.lower() else orb_current_signal()
+                        lowered = user_input.lower()
+                        if "journal summary" in lowered:
+                            tool_data = journal_summary()
+                        elif "backtest" in lowered:
+                            csv_paths = [token.strip("\\'\\\",()") for token in user_input.split() if token.lower().endswith(".csv")]
+                            if not csv_paths:
+                                raise ValueError("For a deterministic backtest, include the local 5m CSV path, e.g. data/xautusd_5m.csv.")
+                            tool_data = backtest_orb_csv(csv_paths[0])
+                        elif "risk" in lowered and all(label in lowered for label in ("entry", "stop", "equity")):
+                            entry_match = re.search(r"entry\\s*[:=]?\\s*\\$?([0-9]+(?:\\.[0-9]+)?)", user_input, re.I)
+                            stop_match = re.search(r"stop\\s*[:=]?\\s*\\$?([0-9]+(?:\\.[0-9]+)?)", user_input, re.I)
+                            equity_match = re.search(r"equity\\s*[:=]?\\s*\\$?([0-9]+(?:\\.[0-9]+)?)", user_input, re.I)
+                            if not (entry_match and stop_match and equity_match):
+                                raise ValueError("Specify numeric entry, stop, and equity values.")
+                            tool_data = assess_orb_risk(float(entry_match.group(1)), float(stop_match.group(1)), float(equity_match.group(1)))
+                        else:
+                            tool_data = explain_no_trade() if "why no trade" in lowered else orb_current_signal()
                         sys_prompt = (
                             "Explain the supplied deterministic strategy output in plain language. "
                             "Do not invent or change prices, signal direction, risk status, or checklist values. "
