@@ -23,6 +23,8 @@ def orb_current_signal(lookback_candles: int = 500, equity: float = 10000.0) -> 
             reason = guard_reason if not allowed else risk.reason
             data.update({"direction":"NO TRADE","entry":None,"sl":None,"tp":None,"r_multiple":0.0,
                          "reason":f"NO TRADE: {reason}"})
+    ORBJournal().log("signal" if data["direction"] in {"LONG","SHORT"} else "skipped_setup",
+                     data, extra={"daily_risk_guard": data.get("daily_risk_guard"), "risk": data.get("risk")})
     return data
 
 def explain_no_trade(lookback_candles: int = 500) -> dict:
