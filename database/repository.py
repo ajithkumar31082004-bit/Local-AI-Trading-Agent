@@ -14,14 +14,16 @@ from database.models import (
     OrderStatus,
     OrderSide,
 )
+from database.supabase_client import SupabaseClient
 
 
 class DatabaseRepository:
-    """Thread-safe SQLite repository with transaction guarantees."""
+    """Thread-safe SQLite repository with transaction guarantees and optional Supabase cloud sync."""
 
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(self, db_path: Optional[Path] = None, supabase_client: Optional[SupabaseClient] = None):
         self.db_path = db_path or settings.db_path
         self._lock = threading.Lock()
+        self.supabase = supabase_client or SupabaseClient()
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -111,6 +113,13 @@ class DatabaseRepository:
                 """, (settings.default_starting_balance, settings.default_starting_balance, settings.default_starting_balance, now_str))
 
             conn.commit()
+
+        # Cloud sync
+        if self.supabase and self.supabase.enabled:
+            try:
+                self.supabase.reset_remote_account(balance)
+            except Exception:
+                pass
 
     def reset_account(self, starting_balance: Optional[float] = None) -> None:
         """Completely reset the paper trading account, positions, and trade history."""
@@ -347,7 +356,18 @@ class DatabaseRepository:
             """, (new_cash, realized_pnl_delta, fee_delta, new_peak, now_str))
 
             conn.commit()
-            return trade_id
+
+        # Cloud synchronization with Supabase
+        if self.supabase and self.supabase.enabled:
+            try:
+                self.supabase.sync_trade(trade)
+                if updated_position:
+                    self.supabase.sync_position(updated_position)
+                self.supabase.sync_account(self.get_account_state())
+            except Exception:
+                pass
+
+        return trade_id
 
     def get_trades(self, limit: int = 100) -> List[TradeRecord]:
         """Fetch historical trades ordered by timestamp descending."""

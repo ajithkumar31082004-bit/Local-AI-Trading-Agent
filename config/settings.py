@@ -44,6 +44,13 @@ class Settings(BaseModel):
     data_cache_expiry_minutes: int = int(os.getenv("DATA_CACHE_EXPIRY_MINUTES", "5"))
     default_symbol: str = os.getenv("DEFAULT_SYMBOL", "AAPL")
 
+    # Supabase Cloud Database Configuration
+    supabase_enabled: bool = os.getenv("SUPABASE_ENABLED", "false").lower() == "true"
+    supabase_url: str = os.getenv("SUPABASE_URL", "")
+    supabase_key: str = os.getenv("SUPABASE_KEY", "")
+    supabase_secret: str = os.getenv("SUPABASE_SECRET", "")
+    supabase_publishable: str = os.getenv("SUPABASE_PUBLISHABLE", "")
+
     model_config = {"arbitrary_types_allowed": True}
 
 

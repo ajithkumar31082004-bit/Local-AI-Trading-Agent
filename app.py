@@ -79,8 +79,16 @@ def main():
     else:
         st.sidebar.error("Ollama: Disconnected")
 
+    # Supabase Cloud Status
+    if repo.supabase and repo.supabase.enabled:
+        sb_status = repo.supabase.check_connection()
+        if sb_status["available"]:
+            st.sidebar.success("Supabase: Cloud Sync Active")
+        else:
+            st.sidebar.info("Supabase: Configured (Local fallback)")
+
     st.sidebar.caption(f"Data Provider: {data_provider.provider_name}")
-    st.sidebar.caption("All orders executed in local simulated SQLite database.")
+    st.sidebar.caption("Orders recorded in local SQLite with optional Supabase sync.")
 
     # Render selected view
     if choice == "Dashboard":
