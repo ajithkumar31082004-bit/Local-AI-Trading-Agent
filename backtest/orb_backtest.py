@@ -37,8 +37,9 @@ def run_backtest(candles: pd.DataFrame, initial_equity: float = 10000.0,
         day_traded=False; pending=None; day_r=0.0
         # Replay prefixes; evaluate strategy only on information available at each close.
         for i in range(1,len(day_frame)+1):
-            prefix=day_frame.iloc[:i]
-            ts=prefix.index[-1]
+            ts=day_frame.index[i-1]
+            # Keep prior sessions in the prefix so EMA20 and prior-volume averages are warmed up.
+            prefix=df.loc[df.index <= ts]
             # If in a simulated position, use next candle's high/low to test SL/TP.
             if pending and i-1 > pending["entry_i"]:
                 candle=prefix.iloc[-1]
