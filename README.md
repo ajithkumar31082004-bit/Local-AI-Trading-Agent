@@ -244,7 +244,13 @@ Install existing dependencies (the feature uses packages already listed in `requ
 python -m pip install -r requirements.txt
 ```
 
-Fetch public 5m candles and evaluate once:
+
+Monitor new completed candles and alert only on a newly valid setup:
+```powershell
+python cli.py watch --symbol XAUTUSD --candles 500 --equity 10000 --poll-seconds 60
+```
+Stop with Ctrl+C. The live watch reserves the daily trade slot when a risk-approved paper alert is emitted; use `record-result` to record its simulated outcome.
+\nFetch public 5m candles and evaluate once:
 ```powershell
 python cli.py once --symbol XAUTUSD --candles 500 --equity 10000
 ```
