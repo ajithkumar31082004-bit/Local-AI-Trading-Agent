@@ -5,7 +5,7 @@ import streamlit as st
 from typing import Optional
 from agents.trading_supervisor import TradingSupervisor
 from agents.ollama_client import OllamaClient
-from config.settings import settings
+from config.settings import settings\nfrom agents.orb_tools import orb_current_signal, explain_no_trade
 
 
 def render_assistant(supervisor: TradingSupervisor):
@@ -25,7 +25,7 @@ def render_assistant(supervisor: TradingSupervisor):
 
     # Preset Quick Prompts
     st.markdown("**Quick Prompts:**")
-    q_cols = st.columns(5)
+    q_cols = st.columns(7)
     preset_prompt = None
     if q_cols[0].button("Analyze AAPL"):
         preset_prompt = "Analyze AAPL with Moving Average Crossover"
