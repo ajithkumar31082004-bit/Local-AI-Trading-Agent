@@ -1,207 +1,215 @@
-# Local Agents: CrewAI + Ollama
+# Local AI Trading Agent
 
-Two chat apps that run entirely on your machine. Ask a question, an agent
-answers in the chat. No API keys, no cost per run, nothing sent to a hosted
-provider.
+A local-first quantitative trading research, strategy backtesting, and paper-trading platform powered by **local Ollama LLM inference (`llama3.2:1b`)**, deterministic Python financial indicators, and SQLite persistence.
 
-- `single_agent/` one agent answers your question
-- `multi_agent/` one agent answers, a second one tightens the answer first
+> **CRITICAL NOTICE: PAPER TRADING ONLY**
+> This application defaults strictly to simulated **Paper Trading** using virtual money. Real-money brokerage order execution is not enabled. All trades require explicit user confirmation and pass through deterministic risk filters before execution.
 
-Both have their own Streamlit UI and both talk to a local Ollama server running
-`llama3.2:1b` (about 1.3 GB).
+---
 
-## Layout
+## Architecture Overview
 
 ```
-local_agent/
-  README.md            this file
-  OLLAMA_SETUP.md      install Ollama, pull the model, fix common errors
-  requirements.txt
-  single_agent/
-    app.py             the whole chat app, about 85 lines
-    README.md
-  multi_agent/
-    app.py             the whole chat app, about 125 lines
-    README.md
+Local_AI_Agent/
+├── app.py                      # Streamlit Multi-Page Trading Dashboard
+├── config/
+│   ├── settings.py             # Pydantic configuration & .env loader
+│   └── __init__.py
+├── agents/                     # Specialized AI Agents
+│   ├── ollama_client.py        # Local Ollama HTTP interface for llama3.2:1b
+│   ├── market_research.py      # Agent 1: Market Research (Price action, OHLCV facts)
+│   ├── technical_analysis.py   # Agent 2: Technical Analysis (SMA, EMA, RSI, MACD, BB)
+│   ├── strategy_agent.py       # Agent 3: Strategy (Evaluates deterministic rules)
+│   ├── risk_agent.py           # Agent 4: Risk Management (Capital allocation & sizing)
+│   ├── portfolio_agent.py      # Agent 5: Portfolio (Equity tracking & performance)
+│   └── trading_supervisor.py   # Agent 6: Supervisor (Workflow orchestration & trade gate)
+├── market_data/                # Market Data Providers
+│   ├── base.py                 # Abstract BaseMarketDataProvider interface
+│   ├── yfinance_provider.py    # Yahoo Finance feed with caching & validation
+│   └── mock_provider.py        # Offline synthetic generator for reproducible testing
+├── services/                   # Deterministic Core Financial Services
+│   ├── indicators.py           # Pure Python indicator calculations (Wilder's RSI, MACD, ATR)
+│   ├── signal_engine.py        # Strategy signal coordinator
+│   ├── risk_manager.py         # Position sizing and hard risk limit enforcement
+│   ├── paper_broker.py         # Simulated order execution with slippage & transaction fees
+│   ├── portfolio_service.py    # Mark-to-market valuations and trade statistics
+│   └── backtester.py           # Strict candle-by-candle backtesting engine
+├── strategies/                 # Trading Strategies
+│   ├── base.py                 # BaseStrategy contract
+│   ├── moving_average.py       # EMA Crossover Strategy
+│   ├── rsi_strategy.py         # RSI Mean-Reversion with Confirmation
+│   ├── trend_following.py      # Multi-Factor Trend Following (Trend + RSI + Volume)
+│   └── custom_strategy.py      # Flexible user-configurable indicator rules
+├── database/                   # SQLite Persistence
+│   ├── models.py               # Domain dataclasses (Trade, Position, Signal, Snapshot)
+│   └── repository.py           # Thread-safe SQLite repository with WAL mode & transactions
+├── ui/                         # Streamlit Dashboard Views
+│   ├── dashboard.py            # Portfolio equity, cash, open positions, P&L
+│   ├── market_watch.py         # Candlestick charts, overlays & indicator subplots
+│   ├── assistant.py            # Conversational AI assistant grounded in tool data
+│   ├── signals.py              # Strategy signals, badges, and invalidation rules
+│   ├── paper_trading.py        # Order desk with pre-trade risk audit & user confirmation
+│   ├── backtesting.py          # Backtest runner, equity curves & trade logs
+│   └── risk_settings.py        # Configurable risk thresholds & account reset
+├── tests/                      # Automated Test Suite (23 automated unit tests)
+│   ├── test_indicators.py
+│   ├── test_strategies.py
+│   ├── test_risk_manager.py
+│   ├── test_paper_broker.py
+│   ├── test_backtester.py
+│   ├── test_ollama_resilience.py
+│   └── test_app_import.py
+├── single_agent/               # Preserved original single-agent chat app
+├── multi_agent/                # Preserved original dual-agent chat app
+├── requirements.txt            # Project dependencies
+├── .env.example                # Sample environment variables
+└── README.md                   # This documentation
 ```
 
-Each app is a single file that runs top to bottom, so you can read it in order
-with no jumping between modules.
+---
 
-Each folder is self contained, so you can copy one on its own and it still runs.
+## Core Features
 
-## Setup
+### 1. Multi-Agent AI System
+- **Agent 1: Market Research Agent**: Analyzes OHLCV price action, trends, and volume; strictly distinguishes observed market facts from AI interpretation.
+- **Agent 2: Technical Analysis Agent**: Calculates technical indicators in pure Python without LLM hallucination:
+  - SMA (20, 50)
+  - EMA (12, 26)
+  - Wilder's RSI (14)
+  - MACD (12, 26, 9)
+  - Bollinger Bands (20, 2)
+  - ATR (14)
+  - 20-period Volume SMA & surge ratio
+  - Support and resistance levels
+- **Agent 3: Strategy Agent**: Generates deterministic `BUY`, `SELL`, `HOLD`, or `NO_SIGNAL` outputs with clear entry conditions and invalidation criteria.
+- **Agent 4: Risk Management Agent**: Audits every proposed order against portfolio risk rules:
+  - Risk per trade (% of equity)
+  - Position sizing based on distance to stop-loss: $\text{Size} = \frac{\text{Equity} \times \text{Risk\%}}{\text{Price} - \text{SL}}$
+  - Maximum position allocation limit (% of portfolio)
+  - Maximum daily realized loss circuit breaker
+  - Maximum open positions ceiling
+  - Transaction fee and slippage modeling
+- **Agent 5: Portfolio Agent**: Tracks starting capital, liquid cash, unrealized/realized P&L, drawdown from peak, win rate, and profit factor.
+- **Agent 6: Trading Supervisor**: Orchestrates the multi-agent pipeline and enforces mandatory user confirmation before any simulated trade execution.
 
-**1. Install Ollama and pull the model.** Full instructions with troubleshooting
-are in [OLLAMA_SETUP.md](OLLAMA_SETUP.md). The short version:
+### 2. Local-First & Privacy-Preserving
+- **Local LLM**: Powered by Ollama running `llama3.2:1b` at `http://localhost:11434`.
+- **Zero Cloud Leakage**: No private trading data, account balances, or prompts leave your machine.
+- **Deterministic Math**: LLM models explain and synthesize, but all indicator values, position sizing, and signals are computed in deterministic Python.
 
-```bash
-# install Ollama from https://ollama.com/download, then:
+### 3. Comprehensive Streamlit UI
+- **Dashboard**: High-level portfolio equity, cash, unrealized & realized P&L, open positions table, and recent trades.
+- **Market Watch**: Interactive Plotly candlestick charts, overlays (SMA, EMA, Bollinger Bands), volume bars, RSI subplots, and support/resistance zones. Supports US equities (e.g., `AAPL`, `MSFT`, `NVDA`) and Indian NSE symbols (e.g., `RELIANCE.NS`, `TCS.NS`, `INFY.NS`).
+- **AI Trading Assistant**: Conversational reasoning directly with `llama3.2:1b`, grounded in tool telemetry. Try asking: *"Analyze AAPL"* or *"Explain RSI"*.
+- **Trading Signals**: Visual evaluation of all strategies with color-coded status badges, rationales, and stop-loss/take-profit targets.
+- **Paper Trading**: Virtual order desk with real-time pre-trade risk checks (dollar risk, max allowed size, effective slippage, fees) and explicit user execution confirmation.
+- **Strategy Backtesting**: Event-driven candle-by-candle historical simulation with look-ahead bias protection, next-bar execution, fees, slippage, and interactive equity vs. benchmark charts.
+- **Risk Settings**: Sliders to adjust risk limits and an account reset utility.
+
+---
+
+## Windows Installation & Quickstart
+
+### Prerequisites
+1. **Windows 10/11**
+2. **Python 3.10+** (Python 3.13 supported)
+3. **Ollama**: Installed from [https://ollama.com](https://ollama.com)
+
+### Step 1: Pull the Local LLM Model
+Open PowerShell and pull `llama3.2:1b`:
+```powershell
 ollama pull llama3.2:1b
-ollama list          # confirm llama3.2:1b is there
+ollama list
 ```
+Confirm `llama3.2:1b` appears in the list.
 
-**2. Install the Python packages.** Use a virtual environment. CrewAI pulls in a
-large dependency tree and upgrades shared packages such as `pillow`, `rich` and
-`opentelemetry`, which can break unrelated projects if installed globally:
+### Step 2: Set Up Virtual Environment & Dependencies
+In PowerShell, navigate to the project directory:
+```powershell
+cd c:\Users\ajith\Downloads\Local_AI_Agent
 
-```bash
+# Create and activate virtual environment
 python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # macOS and Linux
+.\.venv\Scripts\Activate.ps1
+
+# Install requirements
 pip install -r requirements.txt
 ```
 
-## Running
+### Step 3: Configure Environment Variables (Optional)
+Copy `.env.example` to `.env`:
+```powershell
+Copy-Item .env.example .env
+```
+Default settings will work out of the box (`http://localhost:11434` with `llama3.2:1b`).
 
-Run each app from inside its own folder:
-
-```bash
-cd single_agent
-streamlit run app.py
+### Step 4: Run Automated Tests
+Verify all 23 unit tests pass:
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/ -v
 ```
 
-```bash
+### Step 5: Launch the Streamlit Dashboard
+```powershell
+.\.venv\Scripts\streamlit.exe run app.py
+```
+Open your browser at `http://localhost:8501`.
+
+---
+
+## Strategy Details
+
+1. **Moving Average Crossover**:
+   - Golden Cross: Short EMA (12) crosses above Long EMA (26) $\rightarrow$ `BUY` signal with ATR-based trailing stop.
+   - Death Cross: Short EMA (12) crosses below Long EMA (26) $\rightarrow$ `SELL` signal.
+   - Prevents whipsaws by requiring previous candle state confirmation.
+
+2. **RSI Reversal with Confirmation**:
+   - Reversal: Triggers `BUY` only when 14-period RSI dips into oversold ($\le 30$) and crosses back upward with volume confirmation.
+   - Prevents catching falling knives in strong downtrends.
+
+3. **Multi-Factor Trend Following**:
+   - Requires confluence of Price > 50-day SMA, 12-EMA > 26-EMA, positive MACD histogram, healthy RSI (45-75), and volume expansion.
+
+4. **Custom Flexible Strategy**:
+   - Allows traders to toggle and tune moving average filters, RSI thresholds, and Bollinger Band boundary touches directly in the UI.
+
+---
+
+## Backtesting Methodology & Look-Ahead Protection
+
+- **Event-Driven Next-Bar Execution**: If a signal is triggered at candle $t$ close, execution occurs strictly at candle $t+1$ Open.
+- **Realistic Friction**: Every backtested trade accounts for user-configurable broker commissions (default 0.1%) and execution slippage (default 0.05%).
+- **Conservative Intra-Bar Assumptions**: If both Stop-Loss and Take-Profit price levels are touched within the same candle's High-Low range, the simulator conservatively assumes the Stop-Loss was triggered first.
+- **Performance Reporting**:
+  - Total Return % vs. Benchmark Buy & Hold %
+  - Annualized Return %
+  - Maximum Drawdown %
+  - Sharpe Ratio (annualized using daily return volatility)
+  - Win Rate % & Profit Factor
+  - Complete trade-by-trade log
+
+---
+
+## Preserved Legacy Apps
+
+The original general-purpose single-agent and multi-agent chat apps are preserved in their respective subdirectories:
+- `single_agent/app.py`: CrewAI single-agent chat.
+- `multi_agent/app.py`: CrewAI dual-agent pipeline (Assistant + Editor).
+
+To run them individually:
+```powershell
+cd single_agent
+streamlit run app.py
+
 cd multi_agent
 streamlit run app.py
 ```
 
-Streamlit opens http://localhost:8501. To run both at once, give the second one
-a different port:
+---
 
-```bash
-streamlit run app.py --server.port 8502
-```
+## Known Limitations & Disclaimers
 
-## How the two differ
-
-**Single agent.** Your question goes to one `Helpful Assistant` agent and its
-answer appears in the chat. One model call, so it is the faster of the two.
-
-**Multi agent.** The assistant answers, then an `Editor` agent rewrites that
-answer to be shorter and clearer, and the chat shows the edited version. The
-original is kept under an expander so you can see what changed. Two model calls,
-so expect about twice the wait.
-
-The hand-off between them is one argument:
-
-```python
-edit_task = Task(
-    description="Improve the answer you were given ...",
-    agent=editor,
-    context=[answer_task],     # the editor receives the assistant's answer
-)
-```
-
-Without `context`, the editor would answer the question itself instead of
-editing.
-
-## Follow-up questions
-
-Streamlit re-runs the script on every interaction, so each app keeps the
-conversation in `st.session_state.messages` and pastes the last few turns into
-the task description. Ask "What is Python?" then "Who created it?" and the
-second answer knows what "it" refers to.
-
-## Pointing at a different model
-
-Pull the model, then change one line at the top of the `app.py` you are using:
-
-```bash
-ollama pull llama3.2:3b
-```
-
-```python
-MODEL = "llama3.2:3b"
-```
-
-`BASE_URL` sits next to it if your Ollama server is not on the default port.
-
-## One thing to be careful about
-
-Where each app builds its `LLM`, the model string is prefixed with `ollama/`:
-
-```python
-LLM(model="ollama/" + model, base_url=base_url)
-```
-
-That prefix is what tells CrewAI to use Ollama. **If you remove it, CrewAI treats
-the model as OpenAI's**, picks up an `OPENAI_API_KEY` from your environment if
-one is set, and sends your content to a hosted API. Keep the prefix.
-
-## Speed
-
-The model generates at a fixed rate, a few seconds per answer for
-`llama3.2:1b` on this machine. No code change moves that number, so what is left is
-not asking it for tokens you do not need, and not making it reload.
-
-**Answers are capped** at `max_tokens=600`. Left uncapped a small model pads and
-repeats, and you wait for text you would not read. Raise it in `app.py` if you
-want longer answers.
-
-**Keep the model loaded.** Ollama unloads an idle model after 5 minutes, and the
-next question then waits a couple of seconds for it to reload before anything
-happens. Pin it for half an hour:
-
-```bash
-curl http://localhost:11434/api/generate -d "{\"model\":\"llama3.2:1b\",\"prompt\":\"\",\"keep_alive\":\"30m\"}"
-```
-
-Setting `OLLAMA_KEEP_ALIVE=30m` in your environment makes that the default.
-
-**The single agent app is the faster one.** The multi agent app makes two model
-calls per question by design.
-
-### A note on streaming
-
-An earlier version of these apps streamed tokens into the page as they were
-produced, which made them feel much quicker even though the total time was the
-same. It needed a CrewAI event listener class, and these apps are deliberately
-plain, so it is not here. The chat shows a spinner and then the whole answer. If
-you want it back, CrewAI emits `LLMStreamChunkEvent` per token when the `LLM` is
-built with `stream=True`.
-
-### What did not work
-
-Tuning `num_thread` looked like a 33% gain on a single run. Repeated three times
-per setting the difference vanished: 35.1 tok/s default against 34.7 at four
-threads and 34.9 at six, which is measurement noise. It is not worth setting,
-and the first result was a reminder to repeat a benchmark before believing it.
-
-### If you need it genuinely faster
-
-The remaining levers are hardware and model size, not code:
-
-- A GPU is the real answer. Ollama uses it automatically when present.
-- Ask for shorter answers. Time scales almost linearly with tokens produced.
-- Use the single agent app.
-
-A *bigger* model such as `qwen2.5:3b` answers noticeably better but runs slower,
-so that trade runs the other way.
-
-## Which model, and why
-
-`llama3.2:1b` (1.3 GB) is the default. It is small enough to run on a laptop and
-answers in English without being told to.
-
-The project started on `qwen2.5:0.5b`, which is only 397 MB. It was dropped for
-one measured reason: Qwen2.5 is trained heavily on Chinese and answers a
-contentless prompt like "hi" in Chinese about 10% of the time.
-
-| Model | Size | Chinese reply to bare "hi" |
-|---|---|---|
-| `qwen2.5:0.5b` | 397 MB | 2 of 20 |
-| `llama3.2:1b` | 1.3 GB | 0 of 20 |
-
-There is no separate "English build" of Qwen to download. It is one multilingual
-model, so re-pulling the same tag changes nothing. The fixes are an explicit
-English instruction in the prompt, which both apps now carry anyway, or an
-English-first model, which is the route taken here.
-
-Either way this is a small model. It repeats itself and sometimes answers a
-slightly different question than the one you asked. To improve that, pull a
-bigger one and change `MODEL` at the top of the `app.py` you are using:
-
-```bash
-ollama pull llama3.2:3b
-```
+1. **Public Market Data Delay**: Free market data feeds from Yahoo Finance are delayed by 15-20 minutes. Do not use for high-frequency or tick-level execution.
+2. **Local Model Capacity**: `llama3.2:1b` is an ultra-compact 1.3 GB local model. System prompts are optimized for concise, factual explanations. If you have a dedicated GPU, you can switch to `llama3.2:3b` or `qwen2.5:7b` in `.env`.
+3. **No Financial Advice**: This software is intended purely for research, backtesting, and educational paper trading. It is not financial or investment advice.
