@@ -8,16 +8,21 @@ from strategy.orb_ema_volume import evaluate_orb
 from risk.position_sizing import size_position, DailyRiskState
 from backtest.orb_backtest import run_backtest
 
-def orb_current_signal(lookback_candles: int = 500) -> dict:
+def orb_current_signal(lookback_candles: int = 500, equity: float = 10000.0) -> dict:
     """Tool: evaluate latest completed XAUTUSD 5m candle using deterministic rules."""
     frame=fetch_5m_candles(settings.symbol,lookback_candles)
     signal=evaluate_orb(frame)
     allowed, guard_reason, _ = DailyRiskState().can_trade(frame.index[-1].to_pydatetime())
     data=signal.to_dict()
     data["daily_risk_guard"]={"allowed":allowed,"reason":guard_reason}
-    if signal.direction in {"LONG","SHORT"} and not allowed:
-        data.update({"direction":"NO TRADE","entry":None,"sl":None,"tp":None,"r_multiple":0.0,
-                     "reason":f"NO TRADE: {guard_reason}"})
+    if signal.direction in {"LONG","SHORT"}:
+        risk = size_position(signal.entry, signal.sl, equity)
+        data["risk"] = risk.to_dict()
+        data["checklist"]["risk_ok"] = risk.approved
+        if not allowed or not risk.approved:
+            reason = guard_reason if not allowed else risk.reason
+            data.update({"direction":"NO TRADE","entry":None,"sl":None,"tp":None,"r_multiple":0.0,
+                         "reason":f"NO TRADE: {reason}"})
     return data
 
 def explain_no_trade(lookback_candles: int = 500) -> dict:
