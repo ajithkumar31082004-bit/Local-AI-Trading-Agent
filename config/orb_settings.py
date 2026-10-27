@@ -45,7 +45,7 @@ class ORBSettings:
     max_margin_pct_equity: float = _float("ORB_MAX_MARGIN_PCT_EQUITY", 10.0)
     state_path: Path = ROOT / "data" / "orb_risk_state.json"
     journal_path: Path = ROOT / "data" / "orb_journal.sqlite3"
-    api_base_url: str = os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange").rstrip("/")
+    api_base_url: str = os.getenv("ORB_DELTA_API_BASE_URL", "https://api.india.delta.exchange").rstrip("/")
     request_timeout_seconds: int = _int("DELTA_PUBLIC_TIMEOUT_SECONDS", 10)
 
 settings = ORBSettings()
