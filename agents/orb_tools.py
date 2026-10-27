@@ -6,7 +6,7 @@ from data.delta_candles import fetch_5m_candles
 from data.csv_loader import load_candles_csv
 from strategy.orb_ema_volume import evaluate_orb
 from risk.position_sizing import size_position, DailyRiskState
-from backtest.orb_backtest import run_backtest
+from backtest.orb_backtest import run_backtest\nfrom journal.orb_journal import ORBJournal
 
 def orb_current_signal(lookback_candles: int = 500, equity: float = 10000.0) -> dict:
     """Tool: evaluate latest completed XAUTUSD 5m candle using deterministic rules."""
@@ -39,3 +39,23 @@ def backtest_orb_csv(path: str, initial_equity: float = 10000.0) -> dict:
 def assess_orb_risk(entry: float, stop: float, equity: float) -> dict:
     """Tool: deterministic minimum-lot, risk and margin calculation."""
     return size_position(float(entry),float(stop),float(equity)).to_dict()
+
+def journal_summary(limit: int = 20) -> dict:
+    """Tool: summarize recent saved signals, skipped setups and paper results."""
+    rows = ORBJournal().recent(limit)
+    return {"count": len(rows), "events": rows}
+
+ORB_TOOL_REGISTRY = {
+    "orb_current_signal": orb_current_signal,
+    "explain_no_trade": explain_no_trade,
+    "backtest_orb_csv": backtest_orb_csv,
+    "assess_orb_risk": assess_orb_risk,
+    "journal_summary": journal_summary,
+}
+
+def run_orb_tool(name: str, **kwargs) -> dict:
+    """Allowlisted tool dispatcher for deterministic ORB/risk/backtest/journal functions."""
+    if name not in ORB_TOOL_REGISTRY:
+        raise ValueError(f"Unknown ORB tool: {name}")
+    result = ORB_TOOL_REGISTRY[name](**kwargs)
+    return result if isinstance(result, dict) else result
