@@ -71,8 +71,6 @@ def main():
     result_cmd = sub.add_parser("record-result", help="Record P&L for an already reserved paper alert")
     result_cmd.add_argument("--pnl", type=float, required=True, help="Realized paper P&L in account currency")
     result_cmd.add_argument("--equity", type=float, required=True, help="Equity at start of the day")
-    if hasattr(sub, "add_parser"):
-        pass
     args = p.parse_args()
     if args.command == "once":
         try:
@@ -105,6 +103,13 @@ def main():
         show_signal(load_candles_csv(args.path, settings.timezone), args.equity, reserve_alert=False)
     elif args.command == "record-result":
         state = DailyRiskState().record_result(args.pnl, args.equity)
+        ORBJournal().log("paper_result", {
+            "direction": "PAPER_RESULT",
+            "reason": "Recorded paper-trade result; no exchange order was placed.",
+            "pnl": args.pnl,
+            "equity_at_start": args.equity,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
         print(json.dumps(state, indent=2))
     else:
         result = run_backtest(load_candles_csv(args.path, settings.timezone), args.equity)
