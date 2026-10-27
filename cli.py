@@ -57,6 +57,11 @@ def main():
     live.add_argument("--candles", type=int, default=500)
     live.add_argument("--symbol", default=settings.symbol)
     live.add_argument("--equity", type=float, default=10000.0, help="Paper equity in USD for risk sizing")
+    watch = sub.add_parser("watch", help="Poll completed 5m candles and alert on each new candle")
+    watch.add_argument("--candles", type=int, default=500)
+    watch.add_argument("--symbol", default=settings.symbol)
+    watch.add_argument("--equity", type=float, default=10000.0)
+    watch.add_argument("--poll-seconds", type=int, default=60)
     csv = sub.add_parser("csv", help="Evaluate the latest candle from CSV")
     csv.add_argument("path")
     csv.add_argument("--equity", type=float, default=10000.0)
@@ -75,6 +80,27 @@ def main():
         except DeltaCandleError as exc:
             raise SystemExit(f"Data error: {exc}")
         show_signal(frame, args.equity, reserve_alert=True)
+    elif args.command == "watch":
+        if args.poll_seconds < 10:
+            raise SystemExit("--poll-seconds must be at least 10 to avoid excessive API requests.")
+        print("Watching completed 5m candles. Press Ctrl+C to stop. " + DISCLAIMER)
+        last_timestamp = None
+        try:
+            import time
+            while True:
+                try:
+                    frame = fetch_5m_candles(args.symbol, args.candles)
+                    timestamp = str(frame.index[-1])
+                    if timestamp != last_timestamp:
+                        last_timestamp = timestamp
+                        signal = show_signal(frame, args.equity, reserve_alert=True)
+                        if signal.direction in {"LONG", "SHORT"}:
+                            print("\\aALERT: valid paper setup completed; no order was placed.")
+                except DeltaCandleError as exc:
+                    print(f"Market data unavailable: {exc}")
+                time.sleep(args.poll_seconds)
+        except KeyboardInterrupt:
+            print("\\nWatch stopped.")
     elif args.command == "csv":
         show_signal(load_candles_csv(args.path, settings.timezone), args.equity, reserve_alert=False)
     elif args.command == "record-result":
