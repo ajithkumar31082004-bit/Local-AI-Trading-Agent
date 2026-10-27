@@ -5,7 +5,8 @@ import streamlit as st
 from typing import Optional
 from agents.trading_supervisor import TradingSupervisor
 from agents.ollama_client import OllamaClient
-from config.settings import settings\nfrom agents.orb_tools import orb_current_signal, explain_no_trade
+from config.settings import settings
+from agents.orb_tools import orb_current_signal, explain_no_trade
 
 
 def render_assistant(supervisor: TradingSupervisor):
@@ -37,6 +38,10 @@ def render_assistant(supervisor: TradingSupervisor):
         preset_prompt = "What are the core risk limits in place to protect my paper capital?"
     if q_cols[4].button("Golden Cross?"):
         preset_prompt = "What is a Golden Cross in technical analysis?"
+    if q_cols[5].button("Today's XAUT ORB"):
+        preset_prompt = "Show today's XAUTUSD ORB signal"
+    if q_cols[6].button("Why no trade?"):
+        preset_prompt = "Why no trade now for XAUTUSD ORB?"
 
     # Chat history session state
     if "agent_chat_messages" not in st.session_state:
@@ -68,14 +73,36 @@ def render_assistant(supervisor: TradingSupervisor):
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        # Check for symbol analysis intent
+        # Deterministic ORB tools run before generic symbol analysis.
+        orb_intent = any(term in user_input.lower() for term in ("orb", "xautusd", "why no trade", "opening range"))
         symbol_match = re.search(r"\banalyze\s+([A-Za-z0-9\.\-\_\^]+)", user_input, re.IGNORECASE)
         tool_data = None
         assistant_reply = ""
 
         with st.chat_message("assistant"):
             with st.spinner("Analyzing with local agents..."):
-                if symbol_match:
+                if orb_intent:
+                    try:
+                        tool_data = explain_no_trade() if "why no trade" in user_input.lower() else orb_current_signal()
+                        sys_prompt = (
+                            "Explain the supplied deterministic strategy output in plain language. "
+                            "Do not invent or change prices, signal direction, risk status, or checklist values. "
+                            "If direction is NO TRADE, explain the exact reason and preserve NO TRADE. "
+                            "This is paper/alert-only educational information, not financial advice."
+                        )
+                        u_prompt = "Deterministic XAUTUSD ORB tool output (authoritative; do not override):\n" + str(tool_data)
+                        assistant_reply = ollama.generate_response(sys_prompt, u_prompt)
+                        if not assistant_reply:
+                            assistant_reply = (
+                                f"**{tool_data.get('direction', 'NO TRADE')}** — {tool_data.get('reason', 'No reason returned.')}\n\n"
+                                f"ORB High: {tool_data.get('orb_high')} | ORB Low: {tool_data.get('orb_low')}\n\n"
+                                "The Python rule engine is authoritative; the language model cannot override its signal. "
+                                "Paper/alert-only. Educational tool, not financial advice."
+                            )
+                    except Exception as exc:
+                        assistant_reply = f"XAUTUSD ORB data/strategy tool unavailable: {exc}. No signal is assumed."
+                        tool_data = {"direction": "NO TRADE", "reason": str(exc)}
+                elif symbol_match:
                     target_symbol = symbol_match.group(1).upper()
                     # Determine strategy if mentioned
                     strat = "Moving Average Crossover"
