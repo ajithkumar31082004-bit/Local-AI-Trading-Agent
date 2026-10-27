@@ -67,7 +67,7 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
     opening = session[(session.index >= session_start) & (session.index < session_end)]
     expected = cfg.orb_minutes // 5
     expected_index = pd.date_range(start=session_start, periods=expected, freq="5min")
-    if now < session_end or len(opening) < expected or not expected_index.isin(opening.index).all():
+    if now + pd.Timedelta(minutes=5) < session_end or len(opening) < expected or not expected_index.isin(opening.index).all():
         return _no_trade(f"Opening range incomplete or missing candles: need bars at {cfg.session_start}, +5m and +10m ({cfg.timezone}).", base_check, now)
     opening = opening.reindex(expected_index)
     if opening[["Open", "High", "Low", "Close", "Volume"]].isna().any().any():
