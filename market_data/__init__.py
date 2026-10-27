@@ -7,6 +7,7 @@ from market_data.base import (
 )
 from market_data.yfinance_provider import YFinanceProvider
 from market_data.mock_provider import MockMarketDataProvider
+from market_data.delta_exchange import DeltaExchangeClient
 
 __all__ = [
     "BaseMarketDataProvider",
@@ -14,4 +15,5 @@ __all__ = [
     "MarketDataMeta",
     "YFinanceProvider",
     "MockMarketDataProvider",
+    "DeltaExchangeClient",
 ]

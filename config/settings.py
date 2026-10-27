@@ -51,6 +51,12 @@ class Settings(BaseModel):
     supabase_secret: str = os.getenv("SUPABASE_SECRET", "")
     supabase_publishable: str = os.getenv("SUPABASE_PUBLISHABLE", "")
 
+    # Delta Exchange Configuration
+    delta_exchange_enabled: bool = os.getenv("DELTA_EXCHANGE_ENABLED", "false").lower() == "true"
+    delta_exchange_base_url: str = os.getenv("DELTA_EXCHANGE_BASE_URL", "https://india.delta.exchange")
+    delta_exchange_api_key: str = os.getenv("DELTA_EXCHANGE_API_KEY", "")
+    delta_exchange_api_secret: str = os.getenv("DELTA_EXCHANGE_API_SECRET", "")
+
     model_config = {"arbitrary_types_allowed": True}
 
 
