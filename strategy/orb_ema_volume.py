@@ -49,7 +49,7 @@ def _prepare(frame: pd.DataFrame, cfg: ORBSettings) -> pd.DataFrame:
 def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
     """Evaluate the latest completed candle. Session start is local time in cfg.timezone."""
     base_check = {"orb_set": False, "breakout_close": False, "ema_ok": False, "volume_ok": False,
-                  "retest": False, "rejection": False, "rr_ok": False, "risk_ok": False}
+                  "retest": False, "rejection": False, "rr_ok": False, "risk_ok": None}
     if frame.empty:
         return _no_trade("No candle data available.", base_check)
     df = _prepare(frame, cfg)
@@ -68,7 +68,6 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
     orb_high, orb_low = float(opening["High"].max()), float(opening["Low"].min())
     checklist = dict(base_check)
     checklist["orb_set"] = True
-    checklist["risk_ok"] = True
     session = session[session.index >= session_end]
     if session.empty:
         return _no_trade("Opening range is set; waiting for a breakout close.", checklist, now, orb_high, orb_low)
