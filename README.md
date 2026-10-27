@@ -213,3 +213,61 @@ streamlit run app.py
 1. **Public Market Data Delay**: Free market data feeds from Yahoo Finance are delayed by 15-20 minutes. Do not use for high-frequency or tick-level execution.
 2. **Local Model Capacity**: `llama3.2:1b` is an ultra-compact 1.3 GB local model. System prompts are optimized for concise, factual explanations. If you have a dedicated GPU, you can switch to `llama3.2:3b` or `qwen2.5:7b` in `.env`.
 3. **No Financial Advice**: This software is intended purely for research, backtesting, and educational paper trading. It is not financial or investment advice.
+
+
+---
+
+## XAUTUSD ORB + EMA20 + Volume Assistant (v1)
+
+This feature is additive: it preserves the existing Streamlit app, supervisor, Ollama client, SQLite repository, risk manager, and backtester. The new strategy is deterministic Python; the LLM may explain the returned checklist but cannot override the signal.
+
+### Safety defaults
+- PAPER / ALERT-ONLY only. No exchange order-placement implementation exists in this feature.
+- Educational tool, not financial advice. Paper results are not evidence of future performance.
+- Public candle requests need no API key. Do not put exchange secrets in logs, screenshots, prompts, or Git.
+- Default Delta India public API base: `https://api.india.delta.exchange`; candles: `GET /v2/history/candles`, resolution `5m`, Unix seconds for `start` and `end`. See the [official Delta Exchange API documentation](https://docs.delta.exchange/).
+- Contract size, fees, spread/slippage, leverage and session time are configurable; re-verify the live contract specification before relying on any estimate.
+
+### Default strategy rules
+1. Session start is `09:00` Asia/Kolkata by default. The ORB is the high/low of the first three completed 5-minute candles.
+2. LONG requires a completed candle close above ORB high, close above EMA20, rising EMA20, and breakout volume above the mean of the prior 20 candles.
+3. SHORT mirrors those conditions below ORB low with falling EMA20.
+4. A later retest must touch the broken ORB boundary, hold outside the range, and print a directionally colored rejection candle with a configurable wick/body ratio.
+5. Stop goes beyond the retest candle/invalidation boundary; target defaults to 2R.
+6. No trade when ORB is incomplete, breakout only wicks through the range, price closes back inside, volume/EMA filters fail, EMA20 is chopped, the breakout/retest is overextended or late, minimum lot risk exceeds budget, daily limits are reached, or the post-loss cooldown is active.
+7. Defaults are conservative starting parameters, not proven profitable settings. Calibrate them with out-of-sample data and realistic contract-specific costs.
+
+### Run the CLI on Windows
+
+Install existing dependencies (the feature uses packages already listed in `requirements.txt`):
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Fetch public 5m candles and evaluate once:
+```powershell
+python cli.py once --symbol XAUTUSD --candles 500 --equity 10000
+```
+
+Evaluate the latest candle in a CSV:
+```powershell
+python cli.py csv .\data\xautusd_5m.csv --equity 10000
+```
+
+Replay a historical CSV and generate a Plotly equity curve:
+```powershell
+python cli.py backtest .\data\xautusd_5m.csv --equity 10000
+```
+
+CSV must include a timestamp/date/time column and Open, High, Low, Close, Volume columns. Naive timestamps are interpreted in the configured timezone; ambiguous/nonexistent DST timestamps are rejected. A sample data file is not bundled.
+
+After recording a paper alert and later determining its simulated result:
+```powershell
+python cli.py record-result --pnl -25 --equity 10000
+```
+Use the actual paper-trade P&L and starting equity, not example numbers. A live fetch reserves the daily trade slot when a risk-approved alert is emitted. CSV evaluation does not reserve the live daily slot.
+
+### Important modeling limitations
+- The ORB default session start of 09:00 IST is configurable and is not claimed to be an exchange-defined XAUTUSD session open. Choose and validate the intended session for the instrument.
+- Historical API candle availability, volume meaning, funding, mark-price behavior, contract tick/lot constraints, and current fees must be checked against Delta's current product documentation.
+- The initial backtester is a research baseline; verify same-bar stop/target ordering, end-of-day open positions, cost assumptions, and all risk-state edge cases before using its metrics to make decisions.
