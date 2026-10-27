@@ -50,6 +50,10 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
     """Evaluate the latest completed candle. Session start is local time in cfg.timezone."""
     base_check = {"orb_set": False, "breakout_close": False, "ema_ok": False, "volume_ok": False,
                   "retest": False, "rejection": False, "rr_ok": False, "risk_ok": None}
+    if cfg.target_r < 2.0:
+        return _no_trade("NO TRADE: configured target offers less than the required 1:2 reward-to-risk ratio.", base_check)
+    if cfg.orb_minutes != 15:
+        return _no_trade("NO TRADE: v1 requires a 15-minute opening range (three 5m candles).", base_check)
     if frame.empty:
         return _no_trade("No candle data available.", base_check)
     df = _prepare(frame, cfg)
