@@ -187,3 +187,26 @@ def render_market_watch(data_provider: BaseMarketDataProvider):
         m2.metric("MACD Hist", f"{snapshot.macd_hist:.3f}" if snapshot.macd_hist else "N/A")
         m3.metric("ATR (14 Volatility)", f"${snapshot.atr_14:.2f}" if snapshot.atr_14 else "N/A")
         m4.metric("Support / Resistance", f"${snapshot.support:.2f} / ${snapshot.resistance:.2f}")
+
+    # Financial News & Sentiment Section (Powered by NewsAPI)
+    from market_data.news_provider import NewsProvider
+    news_provider = NewsProvider()
+    if news_provider.api_key:
+        st.markdown("### Market News & Headline Sentiment")
+        news_summary = news_provider.get_sentiment_summary(symbol)
+        
+        sent_color = "#00C853" if news_summary["sentiment"] == "Bullish" else "#D50000" if news_summary["sentiment"] == "Bearish" else "#B0BEC5"
+        st.markdown(
+            f"**Headline Sentiment:** <span style='background-color: {sent_color}; color: white; padding: 3px 10px; border-radius: 4px; font-weight: bold;'>"
+            f"{news_summary['sentiment']}</span> (Score: {news_summary['score']:+d})",
+            unsafe_allow_html=True,
+        )
+
+        if news_summary["articles"]:
+            for art in news_summary["articles"]:
+                with st.expander(f"{art['title']} — *{art['source']}* ({art['published_at']})"):
+                    st.write(art["description"])
+                    if art["url"]:
+                        st.markdown(f"[Read Full Article]({art['url']})")
+        else:
+            st.caption("No recent headlines found for this ticker.")

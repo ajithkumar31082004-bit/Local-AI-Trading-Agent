@@ -57,6 +57,12 @@ class Settings(BaseModel):
     delta_exchange_api_key: str = os.getenv("DELTA_EXCHANGE_API_KEY", "")
     delta_exchange_api_secret: str = os.getenv("DELTA_EXCHANGE_API_SECRET", "")
 
+    # NewsAPI Configuration
+    newsapi_key: str = os.getenv("NEWSAPI_KEY", "")
+
+    # Alpha Vantage Configuration
+    alpha_vantage_api_key: str = os.getenv("ALPHA_VANTAGE_API_KEY", "")
+
     model_config = {"arbitrary_types_allowed": True}
 
 
