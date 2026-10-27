@@ -87,7 +87,7 @@ def render_assistant(supervisor: TradingSupervisor):
                         if "journal summary" in lowered:
                             tool_data = journal_summary()
                         elif "backtest" in lowered:
-                            csv_paths = [token.strip("\\'\\\",()") for token in user_input.split() if token.lower().endswith(".csv")]
+                            csv_paths = [token.strip(" '\"(),") for token in user_input.split() if token.lower().endswith(".csv")]
                             if not csv_paths:
                                 raise ValueError("For a deterministic backtest, include the local 5m CSV path, e.g. data/xautusd_5m.csv.")
                             tool_data = backtest_orb_csv(csv_paths[0])
