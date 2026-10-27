@@ -109,12 +109,19 @@ def render_assistant(supervisor: TradingSupervisor):
                         u_prompt = "Deterministic XAUTUSD ORB tool output (authoritative; do not override):\n" + str(tool_data)
                         assistant_reply = ollama.generate_response(sys_prompt, u_prompt)
                         if not assistant_reply:
-                            assistant_reply = (
-                                f"**{tool_data.get('direction', 'NO TRADE')}** — {tool_data.get('reason', 'No reason returned.')}\n\n"
-                                f"ORB High: {tool_data.get('orb_high')} | ORB Low: {tool_data.get('orb_low')}\n\n"
-                                "The Python rule engine is authoritative; the language model cannot override its signal. "
-                                "Paper/alert-only. Educational tool, not financial advice."
-                            )
+                            if "direction" in tool_data:
+                                assistant_reply = (
+                                    f"**{tool_data.get('direction', 'NO TRADE')}** — {tool_data.get('reason', 'No reason returned.')}\n\n"
+                                    f"ORB High: {tool_data.get('orb_high')} | ORB Low: {tool_data.get('orb_low')}\n\n"
+                                    "The Python rule engine is authoritative; the language model cannot override its signal. "
+                                    "Paper/alert-only. Educational tool, not financial advice."
+                                )
+                            else:
+                                assistant_reply = (
+                                    "Deterministic tool result (source values unchanged):\n\n"
+                                    + str(tool_data)
+                                    + "\n\nEducational tool, not financial advice. Paper/alert-only."
+                                )
                     except Exception as exc:
                         assistant_reply = f"XAUTUSD ORB data/strategy tool unavailable: {exc}. No signal is assumed."
                         tool_data = {"direction": "NO TRADE", "reason": str(exc)}
