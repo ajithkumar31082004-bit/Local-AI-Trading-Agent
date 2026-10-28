@@ -1,4 +1,5 @@
 """Chronological day-by-day replay of historical 5m candles with identical strategy and risk rules."""
+import logging
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -6,6 +7,8 @@ import pandas as pd
 from config.orb_settings import ORBSettings, settings
 from strategy.orb_ema_volume import evaluate_orb
 from risk.position_sizing import estimate_lot_risk, size_position
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -56,7 +59,8 @@ def save_equity_curve_html(equity_curve: List[Dict[str, Any]], output_path: str 
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.write_html(out)
         return out
-    except Exception:
+    except Exception as exc:  # noqa: BLE001  – plotly is optional
+        logger.debug("Could not save equity curve HTML (plotly unavailable?): %s", exc)
         return None
 
 

@@ -65,8 +65,8 @@ class DeltaExchangeClient:
                     alt_res = requests.get(f"{alt_url}/v2/products", timeout=5)
                     if alt_res.status_code == 200:
                         self.base_url = alt_url
-                except Exception:
-                    pass
+                except Exception as alt_err:  # noqa: BLE001
+                    logger.debug("Delta Exchange fallback URL also unreachable: %s", alt_err)
         except Exception as e:
             return {"available": False, "authenticated": False, "error": f"Cannot reach Delta Exchange at {self.base_url}: {e}"}
 
@@ -107,7 +107,7 @@ class DeltaExchangeClient:
             if res.status_code == 200:
                 return res.json().get("result", [])
             return []
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Error fetching Delta wallet balances: %s", e)
             return []
 
