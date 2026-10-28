@@ -31,6 +31,12 @@ def hard_mock_guard(monkeypatch):
     monkeypatch.setattr(requests, "post", guarded_post)
 
 
+def test_hard_mock_guard_strictly_blocks_unmocked_order_requests():
+    """Explicitly verify that the test harness actively intercepts and blocks unmocked order endpoints."""
+    with pytest.raises(AssertionError, match="SAFETY VIOLATION"):
+        requests.post("https://api.india.delta.exchange/v2/orders", json={"product_id": 131253, "size": 1})
+
+
 # --------------------------------------------------------------------------
 # 1. Signature Calculation Tests
 # --------------------------------------------------------------------------

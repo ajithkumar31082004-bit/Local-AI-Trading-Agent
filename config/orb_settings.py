@@ -52,7 +52,7 @@ class ORBSettings:
     max_margin_pct_equity: float = _float("ORB_MAX_MARGIN_PCT_EQUITY", 10.0)
     state_path: Path = ROOT / "data" / "orb_risk_state.json"
     journal_path: Path = ROOT / "data" / "orb_journal.sqlite3"
-    api_base_url: str = os.getenv("ORB_DELTA_API_BASE_URL", os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")).rstrip("/")
+    api_base_url: str = os.getenv("ORB_DELTA_API_BASE_URL", os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")).rstrip("/").replace("https://india.delta.exchange", "https://api.india.delta.exchange")
     api_key: str = os.getenv("DELTA_EXCHANGE_API_KEY", "")
     api_secret: str = os.getenv("DELTA_EXCHANGE_API_SECRET", "")
     product_id: int = _int("ORB_DELTA_PRODUCT_ID", 131253)

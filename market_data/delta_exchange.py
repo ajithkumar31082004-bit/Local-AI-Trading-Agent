@@ -24,7 +24,10 @@ class DeltaExchangeClient:
     ):
         self.api_key = api_key or settings.delta_exchange_api_key
         self.api_secret = api_secret or settings.delta_exchange_api_secret
-        self.base_url = (base_url or settings.delta_exchange_base_url).rstrip("/")
+        base = (base_url or settings.delta_exchange_base_url).rstrip("/")
+        if base == "https://india.delta.exchange":
+            base = "https://api.india.delta.exchange"
+        self.base_url = base
         self.enabled = enabled if enabled is not None else settings.delta_exchange_enabled
 
     def _generate_signature(self, method: str, path: str, timestamp: str, payload: str = "", query_string: str = "") -> str:
