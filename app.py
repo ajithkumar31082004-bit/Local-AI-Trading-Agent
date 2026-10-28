@@ -45,8 +45,9 @@ def main():
 
     # Sidebar Navigation
     st.sidebar.title("📈 AI Trading Agent")
-    mode_color = "#D50000" if settings.trading_mode == "LIVE" else "#FF8F00" if settings.trading_mode == "ALERT_ONLY" else "#1E3A8A"
-    badge_label = "⚡ LIVE TRADING ACTIVE" if settings.trading_mode == "LIVE" else "🔔 ALERT ONLY MODE" if settings.trading_mode == "ALERT_ONLY" else "🛡️ PAPER TRADING ONLY"
+    current_mode = getattr(settings, "trading_mode", "PAPER")
+    mode_color = "#D50000" if current_mode == "LIVE" else "#FF8F00" if current_mode == "ALERT_ONLY" else "#1E3A8A"
+    badge_label = "⚡ LIVE TRADING ACTIVE" if current_mode == "LIVE" else "🔔 ALERT ONLY MODE" if current_mode == "ALERT_ONLY" else "🛡️ PAPER TRADING ONLY"
     st.sidebar.markdown(
         f"<div style='background-color: {mode_color}; color: white; padding: 6px 12px; border-radius: 6px; font-weight: bold; text-align: center; margin-bottom: 12px;'>"
         f"{badge_label}</div>",
@@ -82,8 +83,9 @@ def main():
         st.sidebar.error("Ollama: Disconnected")
 
     # Supabase Cloud Status
-    if repo.supabase and repo.supabase.enabled:
-        sb_status = repo.supabase.check_connection()
+    supabase_client = getattr(repo, "supabase", None)
+    if supabase_client and getattr(supabase_client, "enabled", False):
+        sb_status = supabase_client.check_connection()
         if sb_status["available"]:
             st.sidebar.success("Supabase: Cloud Sync Active")
         else:
