@@ -8,9 +8,47 @@ from services.portfolio_service import PortfolioService, PortfolioSummary
 from market_data.base import BaseMarketDataProvider
 
 
+from config.orb_settings import settings as orb_settings
+from services.delta_account_service import DeltaAccountService
+
+
 def render_dashboard(repo: DatabaseRepository, data_provider: BaseMarketDataProvider):
     st.subheader("Executive Portfolio Dashboard")
-    st.caption("Local-first paper trading portfolio and live market data telemetry.")
+    st.caption("Local-first paper trading portfolio and verified live exchange telemetry.")
+
+    # Section 1: Delta Exchange Real Account Telemetry
+    with st.container(border=True):
+        col_hdr1, col_hdr2 = st.columns([3, 1])
+        with col_hdr1:
+            st.markdown("### 🏛️ Delta Exchange Real Account (Live Telemetry)")
+        with col_hdr2:
+            mode_color = "#D50000" if orb_settings.mode == "LIVE" else "#FF8F00" if orb_settings.mode == "ALERT_ONLY" else "#1E88E5"
+            st.markdown(
+                f"<div style='text-align: right;'>"
+                f"<span style='background-color: {mode_color}; color: white; padding: 4px 12px; border-radius: 6px; font-weight: bold;'>"
+                f"MODE: {orb_settings.mode}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        account_svc = DeltaAccountService()
+        delta_acc = account_svc.get_account_state()
+
+        if not delta_acc.is_valid:
+            st.info(f"Delta Exchange Telemetry: {delta_acc.error or 'Credentials unconfigured (Read-only mode inactive).'}")
+        else:
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Verified Live Equity", f"${float(delta_acc.equity):,.2f} {delta_acc.currency}")
+            m2.metric("Available Free Margin", f"${float(delta_acc.available_margin):,.2f} {delta_acc.currency}")
+            m3.metric("Used Margin", f"${float(delta_acc.used_margin):,.2f} {delta_acc.currency}")
+            upnl_val = f"{'+' if delta_acc.unrealized_pnl >= 0 else ''}${float(delta_acc.unrealized_pnl):,.2f}"
+            m4.metric("Unrealized P&L", upnl_val)
+
+            sync_str = delta_acc.last_synced_at.strftime('%Y-%m-%d %H:%M:%S UTC') if delta_acc.last_synced_at else 'N/A'
+            st.caption(f"Source: Delta Exchange India Authenticated API | Last Synced: {sync_str} | Open Derivative Positions: {len(delta_acc.open_positions)} | Pending Orders: {len(delta_acc.open_orders)}")
+
+    st.markdown("---")
+    st.markdown("### 🛡️ Local Paper Portfolio (Simulated)")
+    st.caption("Simulated portfolio tracking virtual trades in SQLite. Real exchange equity is strictly isolated.")
 
     portfolio_service = PortfolioService(repo=repo, data_provider=data_provider)
     # Refresh mark-to-market prices

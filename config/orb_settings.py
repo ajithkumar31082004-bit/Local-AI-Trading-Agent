@@ -15,10 +15,17 @@ def _int(name: str, default: int) -> int:
     try: return int(os.getenv(name, str(default)))
     except (TypeError, ValueError): return default
 
+class ConfigurationError(ValueError):
+    """Raised when application or trading mode configuration fails validation."""
+    pass
+
+
 @dataclass(frozen=True)
 class ORBSettings:
     symbol: str = os.getenv("ORB_SYMBOL", "XAUTUSD")
-    mode: str = os.getenv("ORB_MODE", "PAPER").upper()
+    mode: str = os.getenv("TRADING_MODE", os.getenv("ORB_MODE", "PAPER")).upper()
+    live_trading_acknowledged: str = os.getenv("LIVE_TRADING_ACKNOWLEDGED", os.getenv("ORB_LIVE_TRADING_ACKNOWLEDGED", "NO")).upper()
+    kill_switch_active: bool = os.getenv("EMERGENCY_KILL_SWITCH", "false").lower() == "true"
     timezone: str = os.getenv("ORB_TIMEZONE", "Asia/Kolkata")
     session_start: str = os.getenv("ORB_SESSION_START", "09:00")
     orb_minutes: int = _int("ORB_MINUTES", 15)
@@ -45,10 +52,31 @@ class ORBSettings:
     max_margin_pct_equity: float = _float("ORB_MAX_MARGIN_PCT_EQUITY", 10.0)
     state_path: Path = ROOT / "data" / "orb_risk_state.json"
     journal_path: Path = ROOT / "data" / "orb_journal.sqlite3"
-    api_base_url: str = os.getenv("ORB_DELTA_API_BASE_URL", "https://api.india.delta.exchange").rstrip("/")
+    api_base_url: str = os.getenv("ORB_DELTA_API_BASE_URL", os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")).rstrip("/")
+    api_key: str = os.getenv("DELTA_EXCHANGE_API_KEY", "")
+    api_secret: str = os.getenv("DELTA_EXCHANGE_API_SECRET", "")
+    product_id: int = _int("ORB_DELTA_PRODUCT_ID", 131253)
     request_timeout_seconds: int = _int("DELTA_PUBLIC_TIMEOUT_SECONDS", 10)
 
+
+def validate_settings(cfg: ORBSettings) -> None:
+    """Strictly validate trading mode configuration without silent fallbacks."""
+    if cfg.mode not in {"PAPER", "ALERT_ONLY", "LIVE"}:
+        raise ConfigurationError(
+            f"Invalid trading mode: '{cfg.mode}'. Supported modes are: PAPER, ALERT_ONLY, LIVE."
+        )
+    if cfg.mode == "LIVE":
+        if cfg.live_trading_acknowledged != "YES":
+            raise ConfigurationError(
+                "LIVE trading mode requested but secondary confirmation switch LIVE_TRADING_ACKNOWLEDGED is not 'YES'. "
+                "Refusing to execute live orders."
+            )
+        if not cfg.api_key or cfg.api_key.startswith("<") or not cfg.api_secret or cfg.api_secret.startswith("<"):
+            raise ConfigurationError(
+                "LIVE trading mode requires valid, non-placeholder DELTA_EXCHANGE_API_KEY and DELTA_EXCHANGE_API_SECRET. "
+                "Please configure real exchange credentials."
+            )
+
+
 settings = ORBSettings()
-if settings.mode not in {"PAPER", "ALERT_ONLY"}:
-    # v1 intentionally has no live-order mode.
-    object.__setattr__(settings, "mode", "PAPER")
+validate_settings(settings)

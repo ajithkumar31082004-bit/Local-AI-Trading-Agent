@@ -45,9 +45,11 @@ def main():
 
     # Sidebar Navigation
     st.sidebar.title("📈 AI Trading Agent")
+    mode_color = "#D50000" if settings.trading_mode == "LIVE" else "#FF8F00" if settings.trading_mode == "ALERT_ONLY" else "#1E3A8A"
+    badge_label = "⚡ LIVE TRADING ACTIVE" if settings.trading_mode == "LIVE" else "🔔 ALERT ONLY MODE" if settings.trading_mode == "ALERT_ONLY" else "🛡️ PAPER TRADING ONLY"
     st.sidebar.markdown(
-        "<div style='background-color: #1E3A8A; color: white; padding: 6px 12px; border-radius: 6px; font-weight: bold; text-align: center; margin-bottom: 12px;'>"
-        "🛡️ PAPER TRADING ONLY</div>",
+        f"<div style='background-color: {mode_color}; color: white; padding: 6px 12px; border-radius: 6px; font-weight: bold; text-align: center; margin-bottom: 12px;'>"
+        f"{badge_label}</div>",
         unsafe_allow_html=True,
     )
 

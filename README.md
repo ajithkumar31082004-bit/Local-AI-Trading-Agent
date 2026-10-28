@@ -239,47 +239,85 @@ This feature is additive: it preserves the existing Streamlit app, supervisor, O
 
 ### Run the CLI on Windows
 
-Install existing dependencies (the feature uses packages already listed in `requirements.txt`):
+Install existing dependencies:
 ```powershell
-python -m pip install -r requirements.txt
+.venv\Scripts\python -m pip install -r requirements.txt
 ```
 
-
-Monitor new completed candles and alert only on a newly valid setup:
+#### Safe Account Inspection (Read-Only)
+Inspect verified Delta Exchange India real equity, free collateral, and active margin without placing trades:
 ```powershell
-python cli.py watch --symbol XAUTUSD --candles 500 --equity 10000 --poll-seconds 60
-```
-Stop with Ctrl+C. The live watch reserves the daily trade slot when a risk-approved paper alert is emitted; use `record-result` to record its simulated outcome.
-
-Fetch public 5m candles and evaluate once:
-```powershell
-python cli.py once --symbol XAUTUSD --candles 500 --equity 10000
+.venv\Scripts\python cli.py account
 ```
 
-Export strategy decision journal to CSV:
+#### Evaluate Market Candles Once
+Fetch completed 5m candles and evaluate current strategy rules:
 ```powershell
-python cli.py journal-export --out data/orb_journal_export.csv
+.venv\Scripts\python cli.py once --symbol XAUTUSD --candles 500
 ```
 
-Evaluate the latest candle in a CSV:
+#### Continuous Watch Mode
+Monitor completed 5m candles and alert on confirmed setups:
 ```powershell
-python cli.py csv .\data\xautusd_5m.csv --equity 10000
+.venv\Scripts\python cli.py watch --symbol XAUTUSD --candles 500 --poll-seconds 60
+```
+Stop with Ctrl+C.
+
+#### Export Strategy Journal to CSV
+```powershell
+.venv\Scripts\python cli.py journal-export --out data/orb_journal_export.csv
 ```
 
-Replay a historical CSV and generate a Plotly equity curve:
+#### Historical Backtest Replay
 ```powershell
-python cli.py backtest .\data\xautusd_5m.csv --equity 10000
+.venv\Scripts\python cli.py backtest .\data\xautusd_5m.csv --equity 10000
 ```
 
-CSV must include a timestamp/date/time column and Open, High, Low, Close, Volume columns. Naive timestamps are interpreted in the configured timezone; ambiguous/nonexistent DST timestamps are rejected. A sample data file is not bundled.
+---
 
-After recording a paper alert and later determining its simulated result:
-```powershell
-python cli.py record-result --pnl -25 --equity 10000
+## Delta Exchange India Integration & Live Execution Architecture
+
+### 1. Operational Modes & Strict Isolation
+The system provides three strictly isolated execution modes:
+- **`PAPER` (Default)**: Uses local SQLite simulated cash balance. Zero exchange orders are ever submitted.
+- **`ALERT_ONLY`**: Connects to real-time market data to compute technical indicators and strategy rules, printing alerts without executing orders.
+- **`LIVE`**: Evaluates real account equity via authenticated Delta Exchange API and submits real derivative limit orders with attached stop-loss and take-profit brackets.
+
+### 2. Live Mode Activation Safety Gates
+Live mode requires **two distinct explicit opt-in confirmations**:
+1. `TRADING_MODE=LIVE` in `.env`
+2. `LIVE_TRADING_ACKNOWLEDGED=YES` in `.env`
+
+If `TRADING_MODE=LIVE` is requested without `LIVE_TRADING_ACKNOWLEDGED=YES` or with placeholder credentials, the application **fails immediately with a `ConfigurationError`**. It never silently falls back to `PAPER`.
+
+### 3. Emergency Kill Switch
+To instantly halt all new order execution without modifying strategy logic:
+```env
+EMERGENCY_KILL_SWITCH=true
 ```
-Use the actual paper-trade P&L and starting equity, not example numbers. A live fetch reserves the daily trade slot when a risk-approved alert is emitted. CSV evaluation does not reserve the live daily slot.
+When active, the executor instantly rejects all entry attempts.
 
-### Important modeling limitations
-- The ORB default session start of 09:00 IST is configurable and is not claimed to be an exchange-defined XAUTUSD session open. Choose and validate the intended session for the instrument.
-- Historical API candle availability, volume meaning, funding, mark-price behavior, contract tick/lot constraints, and current fees must be checked against Delta's current product documentation.
-- The initial backtester is a research baseline; verify same-bar stop/target ordering, end-of-day open positions, cost assumptions, and all risk-state edge cases before using its metrics to make decisions.
+### 4. 10-Point Pre-Flight Safety Audit
+Before any live order payload is constructed, the following must pass:
+1. `TRADING_MODE == "LIVE"` verified.
+2. `LIVE_TRADING_ACKNOWLEDGED == "YES"` confirmed.
+3. Emergency Kill Switch is not active.
+4. Delta Exchange API credentials valid and non-placeholder.
+5. Instrument specifications verified (Product ID `131253`, `XAUTUSD`, `perpetual_futures`, `operational`).
+6. Real account equity and available margin verified via authenticated API.
+7. No conflicting open positions or pending orders exist for the product.
+8. Idempotency check: candle timestamp has not already been ordered.
+9. Daily risk guards pass (max 1 trade/day, loss cooldown inactive).
+10. Position sizing satisfies integer lot constraints, risk budget (0.5%), and margin budget (10%).
+
+### 5. Automated Tests (Zero Real Orders)
+All tests run with 100% mocked exchange endpoints and an active **Hard Mock Guard**:
+```powershell
+.venv\Scripts\python -m pytest tests/ -v
+```
+Any attempt to transmit an unmocked live order to `/v2/orders` during a test run raises an immediate `AssertionError`.
+
+### 6. Limitations & Risk Disclaimer
+- **Trading Derivatives Involves High Financial Risk**: Perpetual futures and gold tokens carry substantial risk of loss.
+- **Execution Slippage**: Volatile market breaks can cause slippage beyond modeled parameters.
+- **Network Latency**: WebSocket or REST API disconnects may delay fill confirmations. Always monitor open orders directly on the exchange.

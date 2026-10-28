@@ -27,9 +27,14 @@ class DeltaExchangeClient:
         self.base_url = (base_url or settings.delta_exchange_base_url).rstrip("/")
         self.enabled = enabled if enabled is not None else settings.delta_exchange_enabled
 
-    def _generate_signature(self, method: str, path: str, timestamp: str, payload: str = "") -> str:
-        """Create HMAC-SHA256 signature required by Delta Exchange."""
-        message = method.upper() + timestamp + path + payload
+    def _generate_signature(self, method: str, path: str, timestamp: str, payload: str = "", query_string: str = "") -> str:
+        """Create HMAC-SHA256 signature required by Delta Exchange.
+
+        According to official Delta Exchange v2 API docs:
+        signature_data = method.upper() + timestamp + path + query_string + payload
+        """
+        qs = query_string if (not query_string or query_string.startswith("?")) else f"?{query_string}"
+        message = method.upper() + timestamp + path + qs + payload
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
             message.encode("utf-8"),
@@ -37,7 +42,7 @@ class DeltaExchangeClient:
         ).hexdigest()
         return signature
 
-    def _get_headers(self, method: str, path: str, payload: str = "") -> Dict[str, str]:
+    def _get_headers(self, method: str, path: str, payload: str = "", query_string: str = "") -> Dict[str, str]:
         timestamp = str(int(time.time()))
         headers = {
             "Content-Type": "application/json",
@@ -47,7 +52,7 @@ class DeltaExchangeClient:
         if self.api_key and self.api_secret:
             headers["api-key"] = self.api_key
             headers["timestamp"] = timestamp
-            headers["signature"] = self._generate_signature(method, path, timestamp, payload)
+            headers["signature"] = self._generate_signature(method, path, timestamp, payload, query_string)
         return headers
 
     def check_connection(self) -> Dict[str, Any]:

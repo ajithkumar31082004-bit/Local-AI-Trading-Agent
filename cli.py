@@ -12,8 +12,10 @@ from risk.position_sizing import size_position, DailyRiskState
 from journal.orb_journal import ORBJournal
 from backtest.orb_backtest import run_backtest
 from config.orb_settings import settings
+from services.delta_account_service import DeltaAccountService
+from services.delta_live_executor import DeltaLiveExecutor
 
-DISCLAIMER = "Educational research tool, not financial advice. PAPER / ALERT-ONLY; no live orders are placed."
+DISCLAIMER = "Educational research tool, not financial advice. PAPER / ALERT-ONLY; no live orders are placed unless TRADING_MODE=LIVE and confirmed."
 
 
 def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: bool = False):
@@ -22,6 +24,18 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
     risk_state = DailyRiskState()
     risk_result = None
 
+    # In LIVE mode, strictly query verified exchange equity; never use hardcoded paper equity
+    effective_equity = equity
+    if settings.mode == "LIVE":
+        account_state = DeltaAccountService().get_account_state()
+        if not account_state.is_valid:
+            print(f"\n[CRITICAL ERROR] LIVE MODE ACTIVE BUT ACCOUNT LOOKUP FAILED: {account_state.error}")
+            print("Refusing to proceed with trade evaluation without verified live equity.\n")
+            sig.direction, sig.entry, sig.sl, sig.tp, sig.r_multiple = "NO TRADE", None, None, None, 0.0
+            sig.reason = f"NO TRADE: Real account verification failed: {account_state.error}"
+            return sig
+        effective_equity = float(account_state.equity)
+
     if sig.direction in {"LONG", "SHORT"}:
         allowed, reason, guard_state = risk_state.can_trade(now)
         if not allowed:
@@ -29,18 +43,33 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
             sig.reason = f"NO TRADE: {reason}"
             sig.checklist["risk_ok"] = False
         else:
-            risk_result = size_position(sig.entry, sig.sl, equity)
+            risk_result = size_position(sig.entry, sig.sl, effective_equity)
             sig.checklist["risk_ok"] = risk_result.approved
             if not risk_result.approved:
                 sig.direction, sig.entry, sig.sl, sig.tp, sig.r_multiple = "NO TRADE", None, None, None, 0.0
                 sig.reason = risk_result.reason
             elif reserve_alert:
-                try:
-                    risk_state.reserve_trade(now)
-                except RuntimeError as exc:
-                    sig.direction, sig.entry, sig.sl, sig.tp, sig.r_multiple = "NO TRADE", None, None, None, 0.0
-                    sig.reason = f"NO TRADE: {exc}"
-                    sig.checklist["risk_ok"] = False
+                if settings.mode == "LIVE":
+                    executor = DeltaLiveExecutor()
+                    exec_res = executor.execute_trade(
+                        symbol=settings.symbol,
+                        direction=sig.direction,
+                        entry=sig.entry,
+                        stop_loss=sig.sl,
+                        take_profit=sig.tp,
+                        candle_timestamp=sig.timestamp,
+                    )
+                    print("\n" + "#" * 70)
+                    print(f"LIVE EXECUTION STATUS: {exec_res.get('status')}")
+                    print(f"RESULT: {exec_res.get('message', exec_res.get('error'))}")
+                    print("#" * 70)
+                else:
+                    try:
+                        risk_state.reserve_trade(now)
+                    except RuntimeError as exc:
+                        sig.direction, sig.entry, sig.sl, sig.tp, sig.r_multiple = "NO TRADE", None, None, None, 0.0
+                        sig.reason = f"NO TRADE: {exc}"
+                        sig.checklist["risk_ok"] = False
 
     last_row = frame.iloc[-1] if not frame.empty else None
     ema_val = f"{last_row['EMA20']:.2f}" if (last_row is not None and "EMA20" in last_row and pd.notna(last_row["EMA20"])) else "N/A"
@@ -48,8 +77,11 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
     vol_val = f"{last_row['Volume']:,.0f}" if (last_row is not None and "Volume" in last_row) else "N/A"
     vol_avg_val = f"{last_row['VolumeAvg20Prior']:,.0f}" if (last_row is not None and "VolumeAvg20Prior" in last_row and pd.notna(last_row["VolumeAvg20Prior"])) else "N/A"
 
+    mode_tag = f"MODE: {settings.mode}"
+    if settings.kill_switch_active:
+        mode_tag += " | ⚠️ KILL SWITCH ACTIVE"
     print("\n" + "=" * 70)
-    print("XAUTUSD (TETHER GOLD) ORB + EMA20 + VOLUME | PAPER / ALERT-ONLY")
+    print(f"XAUTUSD (TETHER GOLD) ORB + EMA20 + VOLUME | {mode_tag}")
     print("=" * 70)
     print(f"Symbol: {settings.symbol} | Timezone: {settings.timezone}")
     print(f"Last Completed Candle: {sig.timestamp or 'N/A'}")
@@ -66,13 +98,16 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
     print(f"Engine Decision: {sig.reason}")
 
     if sig.direction in {"LONG", "SHORT"} and risk_result:
-        print("\nPaper Sizing & Risk Parameters:")
+        print("\nSizing & Risk Parameters:")
         print(f"  Entry: {sig.entry:.2f} | Stop Loss: {sig.sl:.2f} | Take Profit: {sig.tp:.2f}")
         print(f"  Reward-to-Risk: {sig.r_multiple:.2f}R (net of fees, spread and slippage)")
         print(f"  Approved Lots: {risk_result.lots} (Contract Size: {settings.contract_size_xaut} XAUT/lot)")
         print(f"  Estimated SL Loss: ${risk_result.estimated_loss_at_sl:.2f} (Risk Budget: ${risk_result.max_risk_cash:.2f})")
         print(f"  Estimated Margin Required: ${risk_result.estimated_margin:.2f}")
-        print("  NOTICE: This is an alert/paper plan only. No order was sent to the exchange.")
+        if settings.mode == "LIVE":
+            print("  NOTICE: LIVE MODE ACTIVE. Real order submission pathway enabled.")
+        else:
+            print("  NOTICE: This is an alert/paper plan only. No real order was sent to the exchange.")
 
     # Guard state summary
     can_trade_now, guard_msg, state_data = risk_state.can_trade(now)
@@ -127,7 +162,34 @@ def main():
     j_cmd = sub.add_parser("journal-export", help="Export SQLite journal records to CSV")
     j_cmd.add_argument("--out", default="data/orb_journal_export.csv", help="Output CSV path")
 
+    # 7. Account verification (read-only)
+    acc_cmd = sub.add_parser("account", help="Inspect verified real Delta Exchange equity and margin (read-only)")
+    acc_cmd.add_argument("--asset", default="USD", help="Target settling asset symbol (e.g. USD, USDT)")
+
     args = p.parse_args()
+
+    if args.command == "account":
+        svc = DeltaAccountService()
+        acc = svc.get_account_state(settling_asset=args.asset)
+        print("\n" + "=" * 70)
+        print("DELTA EXCHANGE REAL ACCOUNT TELEMETRY (READ-ONLY)")
+        print("=" * 70)
+        if not acc.is_valid:
+            print(f"FAILED TO RETRIEVE ACCOUNT TELEMETRY:\n  {acc.error}")
+        else:
+            print("Status:                AUTHENTICATED & VERIFIED")
+            print(f"Verified Total Equity: ${float(acc.equity):,.2f} {acc.currency}")
+            print(f"Free / Available Margin: ${float(acc.available_margin):,.2f} {acc.currency}")
+            print(f"Used Margin:           ${float(acc.used_margin):,.2f} {acc.currency}")
+            print(f"Unrealized P&L:        ${float(acc.unrealized_pnl):+,.2f} {acc.currency}")
+            print(f"Open Positions:        {len(acc.open_positions)}")
+            print(f"Pending Orders:        {len(acc.open_orders)}")
+            print(f"Last Synced:           {acc.last_synced_at.strftime('%Y-%m-%d %H:%M:%S UTC') if acc.last_synced_at else 'N/A'}")
+            if acc.wallets:
+                print("\nWallet Breakdown:")
+                for sym, w in acc.wallets.items():
+                    print(f"  [{sym}] Balance: {float(w.wallet_balance):,.4f} | Avail: {float(w.available_balance):,.4f} | Margin: {float(w.position_margin):,.4f}")
+        print("=" * 70)
 
     if args.command == "once":
         try:
