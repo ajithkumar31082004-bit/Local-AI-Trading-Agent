@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import json
 import sqlite3
+import tempfile
 import pandas as pd
 from config.orb_settings import settings
 
@@ -112,9 +113,18 @@ class ORBJournal:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def export_csv(self, output_path: str | Path) -> Path:
-        """Export all journal records to a CSV file."""
-        out = Path(output_path)
+    def export_csv(self, output_path: str | Path, _safe_root: Optional[Path] = None) -> Path:
+        """Export all journal records to a CSV file.
+
+        output_path is resolved and restricted to allowed directories (workspace or system temp directory)
+        to prevent path traversal when the argument originates from untrusted input.
+        """
+        out = Path(output_path).resolve()
+        safe_bases = [Path.cwd().resolve(), Path(tempfile.gettempdir()).resolve()]
+        if _safe_root:
+            safe_bases.append(Path(_safe_root).resolve())
+        if not any(out.is_relative_to(base) for base in safe_bases):
+            raise ValueError(f"export_csv path outside allowed directories: {out}")
         out.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as conn:
             df = pd.read_sql_query("SELECT * FROM orb_events ORDER BY id ASC", conn)

@@ -1,5 +1,6 @@
 """Chronological day-by-day replay of historical 5m candles with identical strategy and risk rules."""
 import logging
+import tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -31,8 +32,17 @@ class ORBBacktestResult:
 
 
 def save_equity_curve_html(equity_curve: List[Dict[str, Any]], output_path: str | Path = "data/orb_equity_curve.html") -> Optional[Path]:
-    """Generate and save an interactive Plotly HTML equity curve chart."""
+    """Generate and save an interactive Plotly HTML equity curve chart.
+
+    output_path is resolved and restricted to the workspace or system temp directory
+    to prevent path traversal when the argument originates from untrusted input.
+    """
     if not equity_curve:
+        return None
+    out = Path(output_path).resolve()
+    safe_bases = (Path.cwd().resolve(), Path(tempfile.gettempdir()).resolve())
+    if not any(out.is_relative_to(base) for base in safe_bases):
+        logger.warning("Rejected equity curve output path outside allowed directories: %s", out)
         return None
     try:
         import plotly.graph_objects as go
@@ -55,7 +65,6 @@ def save_equity_curve_html(equity_curve: List[Dict[str, Any]], output_path: str 
             template="plotly_white",
             hovermode="x unified",
         )
-        out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.write_html(out)
         return out

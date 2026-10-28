@@ -1,4 +1,6 @@
 """Deterministic lot sizing with official contract specifications, trading costs, leverage, and crash-persistent daily risk guard."""
+import logging
+import tempfile
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,6 +9,8 @@ import json
 from zoneinfo import ZoneInfo
 from filelock import FileLock
 from config.orb_settings import ORBSettings, settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -134,10 +138,14 @@ class DailyRiskState:
     """Crash-persistent and concurrency-safe daily risk limit and cooldown guard."""
 
     def __init__(self, path: Path = settings.state_path, cfg: ORBSettings = settings):
-        self.path = Path(path)
+        resolved = Path(path).resolve()
+        safe_bases = (Path.cwd().resolve(), Path(tempfile.gettempdir()).resolve())
+        if not any(resolved.is_relative_to(base) for base in safe_bases):
+            raise ValueError(f"Refusing to access path outside allowed directories: {resolved}")
+        self.path = resolved
         self.cfg = cfg
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        self.lock_path = self.path.parent / f"{self.path.name}.lock"
 
     def _today(self, now: Optional[datetime] = None) -> str:
         dt = now or datetime.now(timezone.utc)
@@ -160,8 +168,11 @@ class DailyRiskState:
             }
         return data
 
-    def _save_unlocked(self, state: Dict[str, Any]):
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+    def _save_unlocked(self, state: Dict[str, Any]) -> None:
+        """Write state atomically via a tmp file within the same directory."""
+        tmp = self.path.parent / f"{self.path.name}.tmp"
+        if not tmp.parent.samefile(self.path.parent):
+            raise ValueError(f"Refusing to write state file outside allowed directory: {tmp}")
         tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
         tmp.replace(self.path)
 

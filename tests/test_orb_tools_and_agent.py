@@ -83,7 +83,7 @@ def test_journal_logging_and_csv_export(tmp_path):
     assert recent[0]["orb_high"] == 2610.0
 
     csv_file = tmp_path / "export.csv"
-    exported = journal.export_csv(csv_file)
+    exported = journal.export_csv(csv_file, _safe_root=tmp_path)
     assert exported.exists()
     content = exported.read_text(encoding="utf-8")
     assert "LONG" in content

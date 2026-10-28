@@ -103,9 +103,9 @@ def render_assistant(supervisor: TradingSupervisor):
                         elif any(phrase in lowered for phrase in ("why no trade", "explain no trade")):
                             tool_data = explain_no_trade()
                         elif "risk" in lowered and all(label in lowered for label in ("entry", "stop", "equity")):
-                            entry_match = re.search(r"entry\s*[:=]?\s*\$?([0-9]+(?:\.[0-9]+)?)", user_input, re.I)
-                            stop_match = re.search(r"stop\s*[:=]?\s*\$?([0-9]+(?:\.[0-9]+)?)", user_input, re.I)
-                            equity_match = re.search(r"equity\s*[:=]?\s*\$?([0-9]+(?:\.[0-9]+)?)", user_input, re.I)
+                            entry_match = re.search(r"\bentry[=:\s]+\$?(\d+(?:\.\d+)?)", user_input, re.I)
+                            stop_match = re.search(r"\bstop[=:\s]+\$?(\d+(?:\.\d+)?)", user_input, re.I)
+                            equity_match = re.search(r"\bequity[=:\s]+\$?(\d+(?:\.\d+)?)", user_input, re.I)
                             if not (entry_match and stop_match and equity_match):
                                 raise ValueError("Specify numeric entry, stop, and equity values.")
                             tool_data = assess_orb_risk(float(entry_match.group(1)), float(stop_match.group(1)), float(equity_match.group(1)))

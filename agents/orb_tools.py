@@ -103,5 +103,4 @@ def run_orb_tool(name: str, **kwargs) -> Dict[str, Any]:
     """Allowlisted tool dispatcher for deterministic ORB/risk/backtest/journal functions."""
     if name not in ORB_TOOL_REGISTRY:
         raise ValueError(f"Unknown ORB tool: {name}")
-    result = ORB_TOOL_REGISTRY[name](**kwargs)
-    return result if isinstance(result, dict) else result
+    return ORB_TOOL_REGISTRY[name](**kwargs)
