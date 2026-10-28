@@ -250,9 +250,15 @@ Monitor new completed candles and alert only on a newly valid setup:
 python cli.py watch --symbol XAUTUSD --candles 500 --equity 10000 --poll-seconds 60
 ```
 Stop with Ctrl+C. The live watch reserves the daily trade slot when a risk-approved paper alert is emitted; use `record-result` to record its simulated outcome.
-\nFetch public 5m candles and evaluate once:
+
+Fetch public 5m candles and evaluate once:
 ```powershell
 python cli.py once --symbol XAUTUSD --candles 500 --equity 10000
+```
+
+Export strategy decision journal to CSV:
+```powershell
+python cli.py journal-export --out data/orb_journal_export.csv
 ```
 
 Evaluate the latest candle in a CSV:

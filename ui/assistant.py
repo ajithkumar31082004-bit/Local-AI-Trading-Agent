@@ -6,7 +6,14 @@ from typing import Optional
 from agents.trading_supervisor import TradingSupervisor
 from agents.ollama_client import OllamaClient
 from config.settings import settings
-from agents.orb_tools import orb_current_signal, explain_no_trade, backtest_orb_csv, assess_orb_risk, journal_summary
+from agents.orb_tools import (
+    orb_current_signal,
+    explain_no_trade,
+    show_today_orb,
+    backtest_orb_csv,
+    assess_orb_risk,
+    journal_summary,
+)
 
 
 def render_assistant(supervisor: TradingSupervisor):
@@ -84,22 +91,26 @@ def render_assistant(supervisor: TradingSupervisor):
                 if orb_intent:
                     try:
                         lowered = user_input.lower()
-                        if "journal summary" in lowered:
+                        if "journal summary" in lowered or "journal" in lowered:
                             tool_data = journal_summary()
                         elif "backtest" in lowered:
                             csv_paths = [token.strip(" '\"(),") for token in user_input.split() if token.lower().endswith(".csv")]
                             if not csv_paths:
                                 raise ValueError("For a deterministic backtest, include the local 5m CSV path, e.g. data/xautusd_5m.csv.")
                             tool_data = backtest_orb_csv(csv_paths[0])
+                        elif any(phrase in lowered for phrase in ("today's orb", "show today", "today's xaut")):
+                            tool_data = show_today_orb()
+                        elif any(phrase in lowered for phrase in ("why no trade", "explain no trade")):
+                            tool_data = explain_no_trade()
                         elif "risk" in lowered and all(label in lowered for label in ("entry", "stop", "equity")):
-                            entry_match = re.search(r"entry\\s*[:=]?\\s*\\$?([0-9]+(?:\\.[0-9]+)?)", user_input, re.I)
-                            stop_match = re.search(r"stop\\s*[:=]?\\s*\\$?([0-9]+(?:\\.[0-9]+)?)", user_input, re.I)
-                            equity_match = re.search(r"equity\\s*[:=]?\\s*\\$?([0-9]+(?:\\.[0-9]+)?)", user_input, re.I)
+                            entry_match = re.search(r"entry\s*[:=]?\s*\$?([0-9]+(?:\.[0-9]+)?)", user_input, re.I)
+                            stop_match = re.search(r"stop\s*[:=]?\s*\$?([0-9]+(?:\.[0-9]+)?)", user_input, re.I)
+                            equity_match = re.search(r"equity\s*[:=]?\s*\$?([0-9]+(?:\.[0-9]+)?)", user_input, re.I)
                             if not (entry_match and stop_match and equity_match):
                                 raise ValueError("Specify numeric entry, stop, and equity values.")
                             tool_data = assess_orb_risk(float(entry_match.group(1)), float(stop_match.group(1)), float(equity_match.group(1)))
                         else:
-                            tool_data = explain_no_trade() if "why no trade" in lowered else orb_current_signal()
+                            tool_data = orb_current_signal()
                         sys_prompt = (
                             "Explain the supplied deterministic strategy output in plain language. "
                             "Do not invent or change prices, signal direction, risk status, or checklist values. "

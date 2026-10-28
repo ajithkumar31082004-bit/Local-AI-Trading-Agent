@@ -35,6 +35,10 @@ Pipfile.lock
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+data/*.json
+data/*.lock
+data/*.html
+data/*.csv
 *.db
 *.sqlite
 
