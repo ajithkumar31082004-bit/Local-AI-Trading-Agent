@@ -58,13 +58,17 @@ def render_orb_setup():
 
     with tab_live:
         mode_color = "#D50000" if default_orb_settings.mode == "LIVE" else "#FF8F00" if default_orb_settings.mode == "ALERT_ONLY" else "#1E88E5"
+        kill_switch_tag = ""
+        if default_orb_settings.kill_switch_active:
+            kill_switch_tag = " &nbsp;<span style='background-color: #B71C1C; color: white; padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 0.85em;'>⚠️ KILL SWITCH ACTIVE</span>"
+
         col_m1, col_m2 = st.columns([3, 1])
         with col_m1:
             st.markdown(
                 f"<div style='margin-bottom: 8px;'>"
                 f"<span style='background-color: {mode_color}; color: white; padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 0.85em;'>"
                 f"MODE: {default_orb_settings.mode}</span>"
-                f"{' &nbsp;<span style=\"background-color: #B71C1C; color: white; padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 0.85em;\">⚠️ KILL SWITCH ACTIVE</span>' if default_orb_settings.kill_switch_active else ''}"
+                f"{kill_switch_tag}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
