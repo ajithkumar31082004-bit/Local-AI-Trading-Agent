@@ -77,6 +77,18 @@ def validate_settings(cfg: ORBSettings) -> None:
                 "Please configure real exchange credentials."
             )
 
+    if cfg.risk_pct <= 0 or cfg.risk_pct > 5.0:
+        raise ConfigurationError(f"risk_pct must be between 0.01% and 5.0%, got {cfg.risk_pct}%")
+
+    if cfg.daily_loss_limit_pct <= 0 or cfg.daily_loss_limit_pct > 20.0:
+        raise ConfigurationError(f"daily_loss_limit_pct must be between 0.1% and 20.0%, got {cfg.daily_loss_limit_pct}%")
+
+    if cfg.contract_size_xaut <= 0:
+        raise ConfigurationError(f"contract_size_xaut must be positive, got {cfg.contract_size_xaut}")
+
+    if cfg.orb_minutes != 15:
+        raise ConfigurationError(f"orb_minutes must be exactly 15 for 3x5m ORB strategy, got {cfg.orb_minutes}")
+
 
 settings = ORBSettings()
 validate_settings(settings)

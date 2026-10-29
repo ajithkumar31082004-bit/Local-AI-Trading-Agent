@@ -8,6 +8,7 @@ import pandas as pd
 from data.delta_candles import fetch_5m_candles, DeltaCandleError
 from data.csv_loader import load_candles_csv
 from strategy.orb_ema_volume import evaluate_orb
+from indicators.orb_indicators import add_orb_indicators
 from risk.position_sizing import size_position, DailyRiskState
 from journal.orb_journal import ORBJournal
 from backtest.orb_backtest import run_backtest
@@ -71,7 +72,19 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
                         sig.reason = f"NO TRADE: {exc}"
                         sig.checklist["risk_ok"] = False
 
-    last_row = frame.iloc[-1] if not frame.empty else None
+    enriched_frame = frame
+    if not frame.empty:
+        try:
+            enriched_frame = add_orb_indicators(
+                frame.copy(),
+                ema_period=settings.ema_period,
+                volume_period=settings.volume_period,
+                atr_period=settings.atr_period,
+            )
+        except Exception:
+            enriched_frame = frame
+
+    last_row = enriched_frame.iloc[-1] if not enriched_frame.empty else None
     ema_val = f"{last_row['EMA20']:.2f}" if (last_row is not None and "EMA20" in last_row and pd.notna(last_row["EMA20"])) else "N/A"
     ema_slope_val = f"{last_row['EMA20_Slope']:+.4f}" if (last_row is not None and "EMA20_Slope" in last_row and pd.notna(last_row["EMA20_Slope"])) else "N/A"
     vol_val = f"{last_row['Volume']:,.0f}" if (last_row is not None and "Volume" in last_row) else "N/A"
@@ -166,9 +179,45 @@ def main():
     acc_cmd = sub.add_parser("account", help="Inspect verified real Delta Exchange equity and margin (read-only)")
     acc_cmd.add_argument("--asset", default="USD", help="Target settling asset symbol (e.g. USD, USDT)")
 
+    # 8. Order reconciliation
+    rec_cmd = sub.add_parser("reconcile", help="Reconcile local order states with Delta Exchange")
+    rec_cmd.add_argument("--order-id", default=None, help="Specific client_order_id to reconcile")
+
+    # 9. Emergency kill switch cancellation
+    ks_cmd = sub.add_parser("emergency-cancel", help="Emergency kill-switch: cancel all open orders on Delta Exchange")
+    ks_cmd.add_argument("--confirm", action="store_true", help="Explicit confirmation to dispatch emergency cancellation")
+
     args = p.parse_args()
 
-    if args.command == "account":
+    if args.command == "reconcile":
+        from services.delta_reconciliation_service import DeltaReconciliationService
+        from market_data.delta_exchange import DeltaExchangeClient
+        rec_svc = DeltaReconciliationService()
+        client = DeltaExchangeClient()
+        if args.order_id:
+            res = rec_svc.reconcile_with_exchange(args.order_id, client)
+            print(f"Reconciliation result for {args.order_id}:")
+            print(json.dumps(res.to_dict() if res else {}, indent=2))
+        else:
+            updated = rec_svc.reconcile_all_pending(client)
+            active = rec_svc.get_active_orders()
+            print(f"\nReconciled {len(updated)} pending order(s). Active orders in local store: {len(active)}")
+            for o in active:
+                print(f"  [{o.status}] {o.client_order_id} | {o.side.upper()} {o.size} @ {o.limit_price} | Exch ID: {o.exchange_order_id or 'Pending'}")
+
+    elif args.command == "emergency-cancel":
+        if not args.confirm:
+            print("Action aborted. Pass --confirm to dispatch emergency cancellation of all orders.")
+        else:
+            executor = DeltaLiveExecutor()
+            res = executor.cancel_all_product_orders()
+            print("\n" + "#" * 70)
+            print("EMERGENCY KILL-SWITCH DISPATCHED")
+            print(f"Exchange response: {res.get('exchange_response')}")
+            print(f"Local orders marked cancelled: {res.get('orders_marked_cancelled')}")
+            print("#" * 70)
+
+    elif args.command == "account":
         svc = DeltaAccountService()
         acc = svc.get_account_state(settling_asset=args.asset)
         print("\n" + "=" * 70)
@@ -204,19 +253,42 @@ def main():
         print(f"Starting continuous alert polling for {args.symbol} (interval: {args.poll_seconds}s). Press Ctrl+C to stop.\n{DISCLAIMER}")
         last_timestamp = None
         last_direction = None
+        executor = DeltaLiveExecutor() if settings.mode == "LIVE" else None
         try:
             while True:
+                now_dt = datetime.now()
+                sec_to_next_bar = (5 - (now_dt.minute % 5) - 1) * 60 + (60 - now_dt.second)
+                mins_left = sec_to_next_bar // 60
+                secs_left = sec_to_next_bar % 60
+
                 try:
                     frame = fetch_5m_candles(args.symbol, args.candles)
-                    cur_ts = str(frame.index[-1])
-                    if cur_ts != last_timestamp:
+                    cur_ts = str(frame.index[-1]) if not frame.empty else None
+                    cur_price = float(frame["Close"].iloc[-1]) if not frame.empty else 0.0
+
+                    if cur_ts and cur_ts != last_timestamp:
                         last_timestamp = cur_ts
+                        print("\n" + "-" * 70)
+                        print(f"[{now_dt.strftime('%H:%M:%S')}] New completed 5m candle detected: {cur_ts}")
                         sig = show_signal(frame, args.equity, reserve_alert=True)
                         if sig.direction in {"LONG", "SHORT"} and sig.direction != last_direction:
                             last_direction = sig.direction
-                            print(f"\n*** ALERT: New {sig.direction} signal confirmed at {cur_ts}! (Paper Alert Only) ***\n")
+                            alert_mode = "LIVE ORDER SUBMITTED" if settings.mode == "LIVE" else "Paper Alert Only"
+                            print(f"\n*** ALERT: New {sig.direction} signal confirmed at {cur_ts}! ({alert_mode}) ***\n")
+                    else:
+                        ts_str = now_dt.strftime("%H:%M:%S")
+                        print(f"[{ts_str}] 💓 Heartbeat: Price ${cur_price:.2f} | Next 5m bar in ~{mins_left:02d}m {secs_left:02d}s | Watching {args.symbol} ({settings.mode})   ", end="\r", flush=True)
+
+                    if executor and settings.mode == "LIVE":
+                        stale = executor.cancel_stale_orders(max_age_minutes=15)
+                        if stale:
+                            print(f"\n[{now_dt.strftime('%H:%M:%S')}] Auto-cancelled {len(stale)} stale unfilled limit order(s).")
+
                 except DeltaCandleError as exc:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Market data temporarily unavailable: {exc}")
+                    print(f"\n[{now_dt.strftime('%H:%M:%S')}] Market data temporarily unavailable: {exc}")
+                except Exception as exc:
+                    print(f"\n[{now_dt.strftime('%H:%M:%S')}] Polling glitch: {exc}. Reconnecting in {args.poll_seconds}s...")
+
                 time.sleep(args.poll_seconds)
         except KeyboardInterrupt:
             print("\nContinuous polling stopped by user.")

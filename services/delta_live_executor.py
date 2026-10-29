@@ -6,7 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 import requests
 
 from config.orb_settings import ORBSettings, settings as default_orb_settings
@@ -15,6 +15,7 @@ from risk.position_sizing import size_position, DailyRiskState, RiskDecision
 from services.delta_account_service import DeltaAccountService, DeltaAccountState
 from services.delta_instrument_service import DeltaInstrumentService
 from services.delta_reconciliation_service import DeltaReconciliationService, LiveOrderRecord
+from journal.orb_journal import send_telegram_alert
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
             "bracket_stop_loss_limit_price": f"{aligned_sl_limit:.2f}",
             "bracket_take_profit_price": f"{aligned_tp:.2f}",
             "bracket_take_profit_limit_price": f"{aligned_tp:.2f}",
+            "client_order_id": client_order_id,
         }
 
         compact_payload = json.dumps(payload, separators=(",", ":"))
@@ -253,6 +255,23 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                     self.risk_state.reserve_trade(datetime.now(timezone.utc))
                 except Exception as exc:
                     logger.warning("Daily trade reservation noted: %s", exc)
+
+                # Send Telegram notification if configured
+                try:
+                    alert_text = (
+                        f"🟢 <b>DELTA LIVE ORDER SUBMITTED</b>\n\n"
+                        f"• <b>Symbol:</b> {symbol}\n"
+                        f"• <b>Side:</b> {side.upper()}\n"
+                        f"• <b>Lots:</b> {risk_dec.lots} (0.001 XAUT/lot)\n"
+                        f"• <b>Entry:</b> ${aligned_entry:.2f}\n"
+                        f"• <b>Stop Loss:</b> ${aligned_sl:.2f}\n"
+                        f"• <b>Take Profit:</b> ${aligned_tp:.2f}\n"
+                        f"• <b>Order ID:</b> <code>{client_order_id}</code>\n"
+                        f"• <b>Exchange ID:</b> <code>{exchange_id}</code>"
+                    )
+                    send_telegram_alert(alert_text)
+                except Exception as tg_err:
+                    logger.warning("Telegram notification failed: %s", tg_err)
 
                 return {
                     "success": True,
@@ -294,3 +313,78 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                 error_message=err,
             )
             return {"success": False, "error": err, "status": "ERROR"}
+
+    def cancel_all_product_orders(self) -> Dict[str, Any]:
+        """Emergency kill-switch: cancel all open orders on Delta Exchange and reconcile local state."""
+        logger.warning("Executing emergency kill-switch cancel all orders for product %s.", self.cfg.product_id)
+        res = self.client.cancel_all_orders(product_id=self.cfg.product_id)
+        
+        # Mark all local active orders as cancelled
+        active_orders = self.reconciliation_service.get_active_orders()
+        for ord_rec in active_orders:
+            self.reconciliation_service.update_result(
+                client_order_id=ord_rec.client_order_id,
+                status="CANCELLED_BY_KILL_SWITCH",
+                error_message="Order cancelled during emergency kill-switch activation.",
+            )
+
+        try:
+            send_telegram_alert(
+                f"🚨 <b>EMERGENCY KILL-SWITCH ACTIVATED</b>\n\n"
+                f"• All open orders on Delta Exchange cancelled.\n"
+                f"• Local active orders marked cancelled: {len(active_orders)}"
+            )
+        except Exception as tg_err:
+            logger.warning("Telegram kill-switch notification failed: %s", tg_err)
+
+        return {
+            "success": res.get("success", False),
+            "exchange_response": res,
+            "orders_marked_cancelled": len(active_orders),
+        }
+
+    def cancel_stale_orders(self, max_age_minutes: int = 15) -> List[Dict[str, Any]]:
+        """Cancel unfilled limit orders older than max_age_minutes to avoid stale entries."""
+        now = datetime.now(timezone.utc)
+        cancelled = []
+        active_orders = self.reconciliation_service.get_active_orders()
+        for ord_rec in active_orders:
+            if ord_rec.status in ("PENDING", "ACCEPTED") and ord_rec.created_at:
+                try:
+                    created_dt = datetime.fromisoformat(ord_rec.created_at)
+                    age_seconds = (now - created_dt).total_seconds()
+                    if age_seconds >= (max_age_minutes * 60):
+                        logger.warning(
+                            "Order %s is stale (age: %.1f mins >= %d mins). Auto-cancelling.",
+                            ord_rec.client_order_id, age_seconds / 60.0, max_age_minutes
+                        )
+                        if ord_rec.exchange_order_id:
+                            self.client.cancel_order(ord_rec.exchange_order_id, self.cfg.product_id)
+
+                        self.reconciliation_service.update_result(
+                            client_order_id=ord_rec.client_order_id,
+                            status="EXPIRED_UNFILLED",
+                            error_message=f"Auto-cancelled: order remained unfilled for >{max_age_minutes} minutes.",
+                        )
+                        cancelled.append({"client_order_id": ord_rec.client_order_id, "age_minutes": age_seconds / 60.0})
+                        try:
+                            send_telegram_alert(
+                                f"⚠️ <b>STALE ORDER AUTO-CANCELLED</b>\n\n"
+                                f"• Order <code>{ord_rec.client_order_id}</code> cancelled.\n"
+                                f"• Unfilled after {int(age_seconds / 60)} minutes."
+                            )
+                        except Exception as tg_err:
+                            logger.warning("Telegram stale notification failed: %s", tg_err)
+                except Exception as exc:
+                    logger.warning("Could not assess age for order %s: %s", ord_rec.client_order_id, exc)
+        return cancelled
+
+
+    def reconcile_order(self, client_order_id: str) -> Optional[LiveOrderRecord]:
+        """Reconcile a specific order with the exchange."""
+        return self.reconciliation_service.reconcile_with_exchange(client_order_id, self.client)
+
+    def reconcile_all_pending(self) -> List[LiveOrderRecord]:
+        """Reconcile all unconfirmed or pending orders with the exchange."""
+        return self.reconciliation_service.reconcile_all_pending(self.client)
+

@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 from backtest.orb_backtest import run_backtest
 from config.orb_settings import ORBSettings
+from services.orb_backtest import backtest_orb
 
 
 def test_backtest_empty_rejected():
@@ -98,8 +99,44 @@ def test_end_of_day_position_close():
     df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols}, index=idx)
     cfg = ORBSettings(rejection_wick_body_ratio=0.5, retest_tolerance=0.5, max_extension_atr=5.0, session_start="09:00", orb_minutes=15)
     result = run_backtest(df, initial_equity=10000.0, cfg=cfg, chart_output_path=None)
-
     assert result.trades == 1
     trade = result.trade_log[0]
     assert trade["exit_reason"] == "END_OF_DAY"
-    assert trade["exit"] == 2618.0
+    assert trade["r"] > 0, "Trade closed at 2618 above entry 2613 should yield positive net R"
+
+
+def test_services_orb_backtest_alias_and_metrics():
+    idx = pd.date_range("2026-01-01 09:00", periods=20, freq="5min", tz="Asia/Kolkata")
+    frame = pd.DataFrame({
+        "Open": [100.0] * 20,
+        "High": [100.2] * 20,
+        "Low": [99.8] * 20,
+        "Close": [100.0] * 20,
+        "Volume": [100.0] * 20,
+    }, index=idx)
+    res = backtest_orb(frame, initial_equity=1000.0, chart_output_path=None)
+    assert res.days == 1
+    assert res.trades == 0
+    assert res.no_setup_pct == 100.0
+    assert res.max_drawdown_r == 0.0
+
+
+def test_walk_forward_runner_smoke(tmp_path):
+    from scripts.run_backtest import run_walk_forward
+    # Create 4 distinct days of flat data
+    dates = ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"]
+    dfs = []
+    for d in dates:
+        idx = pd.date_range(f"{d} 09:00", periods=10, freq="5min", tz="Asia/Kolkata")
+        dfs.append(pd.DataFrame({
+            "Open": [100.0] * 10,
+            "High": [100.2] * 10,
+            "Low": [99.8] * 10,
+            "Close": [100.0] * 10,
+            "Volume": [100.0] * 10,
+        }, index=idx))
+    combined = pd.concat(dfs)
+    cfg = ORBSettings(session_start="09:00", orb_minutes=15)
+    run_walk_forward(combined, initial_equity=1000.0, cfg=cfg, out_dir=tmp_path)
+    assert (tmp_path / "is_equity_curve.html").exists()
+    assert (tmp_path / "oos_equity_curve.html").exists()

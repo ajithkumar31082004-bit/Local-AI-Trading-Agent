@@ -1,14 +1,54 @@
-"""Append-only SQLite journal for signals, skipped setups, and paper results with CSV export."""
+"""Append-only SQLite journal for signals, skipped setups, and paper results with CSV export and Telegram alerts."""
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import json
+import logging
+import os
 import sqlite3
 import tempfile
 import pandas as pd
+import requests
 from config.orb_settings import settings
 
+logger = logging.getLogger(__name__)
+
 CONFIG_VERSION = "1.0.0-orb-ema20-vol"
+
+
+def send_telegram_alert(
+    message: str,
+    bot_token: Optional[str] = None,
+    chat_id: Optional[str] = None,
+    timeout: int = 5,
+) -> bool:
+    """Send alert to Telegram chat if credentials are configured in .env.
+    
+    Off by default if TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not provided.
+    Token is never logged.
+    """
+    token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    target_chat = chat_id or os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+    if not token or not target_chat:
+        return False  # Disabled by default
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": target_chat,
+        "text": message,
+        "parse_mode": "HTML",
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=timeout)
+        if res.status_code == 200:
+            logger.info("Telegram alert delivered successfully.")
+            return True
+        logger.warning("Telegram alert failed with HTTP %d: %s", res.status_code, res.text[:100])
+        return False
+    except Exception as exc:
+        logger.warning("Could not send Telegram alert: %s", exc)
+        return False
 
 
 class ORBJournal:
@@ -50,8 +90,9 @@ class ORBJournal:
         signal: Any,
         symbol: str = settings.symbol,
         extra: Optional[Dict[str, Any]] = None,
+        send_telegram: bool = True,
     ):
-        """Record an event, signal, skipped setup, or paper-trade outcome."""
+        """Record an event, signal, skipped setup, or paper-trade outcome and optionally send alert."""
         payload = signal.to_dict() if hasattr(signal, "to_dict") else dict(signal)
         if extra:
             payload.update(extra)
@@ -102,6 +143,18 @@ class ORBJournal:
                     payload_json,
                 ),
             )
+
+        # Trigger optional Telegram notification on valid completed signal
+        if send_telegram and direction in {"LONG", "SHORT"}:
+            msg = (
+                f"🔔 <b>ORB Signal Alert: {symbol} {direction}</b>\n"
+                f"<b>Entry:</b> ${entry}\n"
+                f"<b>Stop-Loss:</b> ${sl}\n"
+                f"<b>Take-Profit:</b> ${tp}\n"
+                f"<b>Reason:</b> {reason}\n"
+                f"<i>Educational tool, not financial advice. Alert-only.</i>"
+            )
+            send_telegram_alert(msg)
 
     def recent(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Retrieve recent events sorted by id descending."""

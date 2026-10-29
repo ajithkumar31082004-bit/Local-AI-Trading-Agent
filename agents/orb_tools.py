@@ -89,10 +89,72 @@ def journal_summary(limit: int = 20) -> Dict[str, Any]:
     return {"count": len(rows), "events": rows}
 
 
+def explain_last_signal(lookback_candles: int = 500) -> Dict[str, Any]:
+    """Tool: retrieve and explain the most recent strategy signal or evaluation."""
+    recent_events = ORBJournal().recent(10)
+    for ev in recent_events:
+        if ev.get("direction") in {"LONG", "SHORT"}:
+            return {
+                "direction": ev.get("direction"),
+                "entry": ev.get("entry"),
+                "sl": ev.get("stop_loss"),
+                "tp": ev.get("take_profit"),
+                "reason": ev.get("reason"),
+                "timestamp": ev.get("timestamp"),
+                "checklist": ev.get("checklist_json"),
+                "source": "journal",
+            }
+    # If no past signal in journal, evaluate current state
+    curr = orb_current_signal(lookback_candles)
+    return {
+        "direction": curr.get("direction"),
+        "entry": curr.get("entry"),
+        "sl": curr.get("sl"),
+        "tp": curr.get("tp"),
+        "reason": curr.get("reason"),
+        "timestamp": curr.get("timestamp"),
+        "checklist": curr.get("checklist"),
+        "source": "current_market",
+    }
+
+
+def generate_orb_explanation(tool_data: Dict[str, Any], query_type: str, ollama_client: Optional[Any] = None) -> str:
+    """Generate concise, factual explanation using llama3.2:1b (temp=0.2).
+    
+    The model is strictly restricted to explaining structured numbers and cannot override logic.
+    """
+    sys_prompt = (
+        "You are an AI Quantitative Trading Assistant explaining deterministic Python strategy outputs. "
+        "Strict rules: "
+        "1. Never invent prices, levels, or indicators not in the data. "
+        "2. If an attribute is missing or unknown, say 'not in the data'. "
+        "3. Never decide trades or perform mental math. Explain only the provided data. "
+        "4. Keep explanations concise, clear, and factual under 3 sentences. "
+        "5. State that this is an educational alert-only tool."
+    )
+    user_prompt = f"Topic: {query_type}\nDeterministic Data:\n{tool_data}\nSynthesize an explanation for the user."
+
+    if ollama_client:
+        reply = ollama_client.generate_response(sys_prompt, user_prompt, max_tokens=150, temperature=0.2)
+        if reply:
+            return reply
+
+    # Deterministic fallback when Ollama is offline
+    direction = tool_data.get("direction", "NO TRADE")
+    reason = tool_data.get("reason", "No reason provided.")
+    return (
+        f"**{direction}** — {reason} "
+        f"(ORB High: {tool_data.get('orb_high', 'not in the data')}, "
+        f"ORB Low: {tool_data.get('orb_low', 'not in the data')}). "
+        "Educational alert-only tool, not financial advice."
+    )
+
+
 ORB_TOOL_REGISTRY = {
     "orb_current_signal": orb_current_signal,
     "explain_no_trade": explain_no_trade,
     "show_today_orb": show_today_orb,
+    "explain_last_signal": explain_last_signal,
     "backtest_orb_csv": backtest_orb_csv,
     "assess_orb_risk": assess_orb_risk,
     "journal_summary": journal_summary,

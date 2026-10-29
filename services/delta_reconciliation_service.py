@@ -169,3 +169,71 @@ class DeltaReconciliationService:
                 "SELECT * FROM live_orders WHERE status IN ('PENDING', 'ACCEPTED', 'PARTIALLY_FILLED') ORDER BY created_at DESC;"
             ).fetchall()
             return [LiveOrderRecord(**dict(r)) for r in rows]
+
+    def reconcile_with_exchange(self, client_order_id: str, client: Any) -> Optional[LiveOrderRecord]:
+        """Reconcile a specific order against Delta Exchange via client_order_id lookup."""
+        rec = self.get_order(client_order_id)
+        if not rec:
+            logger.warning("Reconciliation target %s not found in local database.", client_order_id)
+            return None
+
+        res = client.get_order_by_client_id(client_order_id)
+        if res.get("success") and res.get("result"):
+            order_data = res["result"]
+            exchange_id = str(order_data.get("id", ""))
+            delta_state = str(order_data.get("state", "UNKNOWN")).upper()
+            total_size = int(order_data.get("size", rec.size))
+            unfilled = int(order_data.get("unfilled_size", 0))
+            filled = max(0, total_size - unfilled)
+            avg_fill = float(order_data["avg_fill_price"]) if order_data.get("avg_fill_price") else None
+
+            # Normalize Delta order state
+            status_map = {
+                "OPEN": "ACCEPTED",
+                "FILLED": "FILLED",
+                "CANCELLED": "CANCELLED",
+                "REJECTED": "REJECTED",
+                "PARTIALLY_FILLED": "PARTIALLY_FILLED",
+            }
+            norm_status = status_map.get(delta_state, delta_state)
+
+            self.update_result(
+                client_order_id=client_order_id,
+                status=norm_status,
+                exchange_order_id=exchange_id,
+                filled_size=filled,
+                avg_fill_price=avg_fill,
+                raw_response=order_data,
+            )
+            logger.info("Order %s reconciled to %s (Exchange ID: %s)", client_order_id, norm_status, exchange_id)
+            return self.get_order(client_order_id)
+
+        if res.get("status_code") == 404:
+            # Order never existed on exchange
+            err = f"Exchange 404: Order {client_order_id} not found on Delta Exchange."
+            logger.warning(err)
+            self.update_result(
+                client_order_id=client_order_id,
+                status="NOT_FOUND_ON_EXCHANGE",
+                error_message=err,
+            )
+            return self.get_order(client_order_id)
+
+        logger.warning("Reconciliation lookup failed for %s: %s", client_order_id, res.get("error"))
+        return rec
+
+    def reconcile_all_pending(self, client: Any) -> List[LiveOrderRecord]:
+        """Query and reconcile all orders in PENDING, PENDING_RECONCILIATION, or TIMEOUT_HOLD states."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT client_order_id FROM live_orders WHERE status IN ('PENDING', 'PENDING_RECONCILIATION', 'TIMEOUT_HOLD');"
+            ).fetchall()
+
+        results = []
+        for r in rows:
+            cid = r["client_order_id"]
+            updated = self.reconcile_with_exchange(cid, client)
+            if updated:
+                results.append(updated)
+        return results
+

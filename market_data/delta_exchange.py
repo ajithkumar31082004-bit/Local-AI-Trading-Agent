@@ -134,3 +134,71 @@ class DeltaExchangeClient:
         except Exception as e:
             logger.warning("Error fetching Delta ticker for %s: %s", symbol, e)
             return None
+
+    def get_order_by_client_id(self, client_order_id: str) -> Dict[str, Any]:
+        """Look up order on Delta Exchange by client order ID."""
+        if not self.api_key or not self.api_secret:
+            return {"success": False, "error": "API credentials missing."}
+        path = f"/v2/orders/client_order_id/{client_order_id}"
+        headers = self._get_headers("GET", path)
+        try:
+            res = requests.get(f"{self.base_url}{path}", headers=headers, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                return {"success": True, "result": data.get("result"), "status_code": res.status_code}
+            return {
+                "success": False,
+                "error": f"Order lookup failed with HTTP {res.status_code}: {res.text[:120]}",
+                "status_code": res.status_code,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "status_code": 0}
+
+    def cancel_order(self, order_id: str, product_id: int) -> Dict[str, Any]:
+        """Cancel a single open order on Delta Exchange by order ID."""
+        if not self.api_key or not self.api_secret:
+            return {"success": False, "error": "API credentials missing."}
+        import json
+        path = "/v2/orders"
+        try:
+            oid_val = int(order_id)
+        except (ValueError, TypeError):
+            oid_val = order_id
+        payload_dict = {"id": oid_val, "product_id": int(product_id)}
+        compact_payload = json.dumps(payload_dict, separators=(",", ":"))
+        headers = self._get_headers("DELETE", path, payload=compact_payload)
+        try:
+            res = requests.delete(f"{self.base_url}{path}", data=compact_payload, headers=headers, timeout=5)
+            if res.status_code in (200, 204):
+                data = res.json() if res.text else {}
+                return {"success": True, "result": data.get("result"), "status_code": res.status_code}
+            return {
+                "success": False,
+                "error": f"Cancel order failed with HTTP {res.status_code}: {res.text[:120]}",
+                "status_code": res.status_code,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "status_code": 0}
+
+    def cancel_all_orders(self, product_id: Optional[int] = None) -> Dict[str, Any]:
+        """Emergency cancellation of open orders on Delta Exchange."""
+        if not self.api_key or not self.api_secret:
+            return {"success": False, "error": "API credentials missing."}
+        import json
+        path = "/v2/orders/all"
+        payload_dict = {"product_id": product_id} if product_id else {}
+        compact_payload = json.dumps(payload_dict, separators=(",", ":"))
+        headers = self._get_headers("DELETE", path, payload=compact_payload)
+        try:
+            res = requests.delete(f"{self.base_url}{path}", data=compact_payload, headers=headers, timeout=5)
+            if res.status_code in (200, 204):
+                data = res.json() if res.text else {}
+                return {"success": True, "result": data.get("result"), "status_code": res.status_code}
+            return {
+                "success": False,
+                "error": f"Cancel all orders failed with HTTP {res.status_code}: {res.text[:120]}",
+                "status_code": res.status_code,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "status_code": 0}
+

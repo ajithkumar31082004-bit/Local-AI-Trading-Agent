@@ -7,6 +7,7 @@ from market_data.yfinance_provider import YFinanceProvider
 from agents.trading_supervisor import TradingSupervisor
 from agents.ollama_client import OllamaClient
 from ui.dashboard import render_dashboard
+from ui.orb_setup import render_orb_setup
 from ui.market_watch import render_market_watch
 from ui.signals import render_signals
 from ui.paper_trading import render_paper_trading
@@ -57,6 +58,7 @@ def main():
     # Navigation Selection
     menu_options = [
         "Dashboard",
+        "ORB Setup",
         "Market Watch",
         "AI Assistant",
         "Trading Signals",
@@ -97,6 +99,8 @@ def main():
     # Render selected view
     if choice == "Dashboard":
         render_dashboard(repo, data_provider)
+    elif choice == "ORB Setup":
+        render_orb_setup()
     elif choice == "Market Watch":
         render_market_watch(data_provider)
     elif choice == "AI Assistant":

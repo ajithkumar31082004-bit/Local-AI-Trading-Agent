@@ -36,7 +36,7 @@ class OllamaClient:
         except Exception as e:
             return {"available": False, "model_present": False, "models": [], "error": str(e)}
 
-    def generate_response(self, system_prompt: str, user_prompt: str, max_tokens: int = 500) -> str:
+    def generate_response(self, system_prompt: str, user_prompt: str, max_tokens: int = 500, temperature: float = 0.2) -> str:
         """Generate response from local llama3.2:1b."""
         payload = {
             "model": self.model,
@@ -44,7 +44,7 @@ class OllamaClient:
             "prompt": user_prompt,
             "stream": False,
             "options": {
-                "temperature": 0.3,  # Lower temperature for more grounded financial explanations
+                "temperature": temperature,  # 0.2 for deterministic, grounded explanations
                 "num_predict": max_tokens,
             },
             "keep_alive": "30m",

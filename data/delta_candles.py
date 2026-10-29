@@ -1,10 +1,14 @@
-"""Public, unauthenticated Delta Exchange India OHLCV client with bounded retries and gap detection."""
+"""Public, unauthenticated Delta Exchange India OHLCV client with bounded retries, gap detection, and validation."""
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Tuple
+import logging
 import time
+import warnings
 import requests
 import pandas as pd
 from config.orb_settings import settings
+
+logger = logging.getLogger(__name__)
 
 CANDLE_URL_PATH = "/v2/history/candles"
 RESOLUTION_SECONDS = 300  # 5 minutes in seconds
@@ -48,6 +52,7 @@ def fetch_5m_candles(
     - Removes duplicate and out-of-order bars.
     - Stores index as UTC Timestamp.
     - Bounded retries on transient connection failure or HTTP 429 rate limits.
+    - Warns if all volumes are zero and reports any candle sequence gaps.
     """
     if lookback_candles < 1:
         raise ValueError("lookback_candles must be positive")
@@ -90,15 +95,20 @@ def fetch_5m_candles(
                 response.raise_for_status()
                 payload = response.json()
 
-                if payload.get("success") is False:
-                    err_msg = payload.get("error", payload)
-                    raise DeltaCandleError(f"Delta API rejected candle request: {err_msg}")
+                if isinstance(payload, list):
+                    rows = payload
+                elif isinstance(payload, dict):
+                    if payload.get("success") is False:
+                        err_msg = payload.get("error", payload)
+                        raise DeltaCandleError(f"Delta API rejected candle request: {err_msg}")
+                    rows = payload.get("result", [])
+                else:
+                    rows = []
 
-                rows = payload.get("result", [])
                 if rows:
                     chunks.extend(rows)
                     remaining -= len(rows)
-                    oldest = min(int(row["time"]) for row in rows if "time" in row)
+                    oldest = min(int(row["time"]) for row in rows if isinstance(row, dict) and "time" in row)
                     if oldest <= start_ts or len(rows) < count:
                         remaining = 0  # Reached earliest available data
                     end_ts = oldest
@@ -140,5 +150,23 @@ def fetch_5m_candles(
 
     if frame.empty:
         raise DeltaCandleError("No completed 5-minute candles are available yet.")
+
+    # Data validation: sorted ascending
+    if not frame.index.is_monotonic_increasing:
+        frame = frame.sort_index()
+
+    # Data validation: volume > 0 check with warning
+    if (frame["Volume"] <= 0).all():
+        msg = f"Warning: All {len(frame)} fetched candles have zero volume for {symbol.upper()}."
+        logger.warning(msg)
+        warnings.warn(msg, UserWarning, stacklevel=2)
+
+    # Data validation: gap reporting
+    gaps = detect_missing_candles(frame, expected_seconds=RESOLUTION_SECONDS)
+    if gaps:
+        gap_desc = ", ".join(f"{g[0]} to {g[1]}" for g in gaps[:3])
+        if len(gaps) > 3:
+            gap_desc += f" (and {len(gaps) - 3} more)"
+        logger.warning("Detected %d missing 5m candle gap(s) for %s: %s", len(gaps), symbol.upper(), gap_desc)
 
     return frame

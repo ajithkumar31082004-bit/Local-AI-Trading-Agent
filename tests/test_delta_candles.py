@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 import pytest
 from data.delta_candles import fetch_5m_candles, detect_missing_candles, DeltaCandleError
+import market_data.delta_candles as md_delta_candles
 
 
 class MockResponse:
@@ -92,3 +93,48 @@ def test_incomplete_candle_excluded(monkeypatch):
     monkeypatch.setattr("data.delta_candles.requests.get", fake_get)
     with pytest.raises(DeltaCandleError, match="No completed 5-minute candles"):
         fetch_5m_candles("XAUTUSD", 1, end_time=now_dt)
+
+
+def test_delta_candles_raw_list_response(monkeypatch):
+    stamp = int(datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+
+    def fake_get(url, **kwargs):
+        return MockResponse([
+            {"time": stamp, "open": "2600", "high": "2605", "low": "2595", "close": "2602", "volume": "15"}
+        ])
+
+    monkeypatch.setattr("data.delta_candles.requests.get", fake_get)
+    frame = fetch_5m_candles("XAUTUSD", 1, datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc))
+    assert len(frame) == 1
+    assert frame.iloc[0]["Close"] == 2602.0
+
+
+def test_delta_candles_warns_on_all_zero_volume(monkeypatch):
+    stamp = int(datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+
+    def fake_get(url, **kwargs):
+        return MockResponse({
+            "success": True,
+            "result": [
+                {"time": stamp, "open": "2600", "high": "2605", "low": "2595", "close": "2602", "volume": "0"}
+            ]
+        })
+
+    monkeypatch.setattr("data.delta_candles.requests.get", fake_get)
+    with pytest.warns(UserWarning, match="zero volume"):
+        frame = fetch_5m_candles("XAUTUSD", 1, datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc))
+    assert frame.iloc[0]["Volume"] == 0.0
+
+
+def test_delta_candles_empty_api_response_raises_clear_error(monkeypatch):
+    def fake_get(url, **kwargs):
+        return MockResponse({"success": True, "result": []})
+
+    monkeypatch.setattr("data.delta_candles.requests.get", fake_get)
+    with pytest.raises(DeltaCandleError, match="No candles returned for XAUTUSD"):
+        fetch_5m_candles("XAUTUSD", 10, datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc))
+
+
+def test_market_data_reexport():
+    assert md_delta_candles.fetch_5m_candles is fetch_5m_candles
+    assert md_delta_candles.DeltaCandleError is DeltaCandleError

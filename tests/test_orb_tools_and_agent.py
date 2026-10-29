@@ -117,3 +117,43 @@ def test_llm_cannot_override_deterministic_signal():
     assert final_output["authoritative_direction"] == "NO TRADE"
     assert final_output["authoritative_entry"] is None
     assert "NO TRADE" in final_output["explanation"]
+
+
+def test_explain_last_signal_tool(tmp_path, monkeypatch):
+    from agents.orb_tools import explain_last_signal
+    from journal.orb_journal import ORBJournal
+
+    # Mock fetch_5m_candles to return deterministic frame
+    idx = pd.date_range("2026-01-02 07:15", periods=25, freq="5min", tz="UTC")
+    fake_df = pd.DataFrame({
+        "Open": [2600.0] * 25,
+        "High": [2605.0] * 25,
+        "Low": [2595.0] * 25,
+        "Close": [2602.0] * 25,
+        "Volume": [100.0] * 25,
+    }, index=idx)
+    monkeypatch.setattr("agents.orb_tools.fetch_5m_candles", lambda *args, **kwargs: fake_df)
+
+    res = explain_last_signal()
+    assert "direction" in res
+    assert "reason" in res
+    assert "checklist" in res
+
+
+def test_generate_orb_explanation_grounding(monkeypatch):
+    from agents.orb_tools import generate_orb_explanation
+
+    captured = {}
+    class FakeOllama:
+        def generate_response(self, sys_prompt, user_prompt, max_tokens=150, temperature=0.2):
+            captured["temp"] = temperature
+            captured["sys"] = sys_prompt
+            captured["prompt"] = user_prompt
+            return "Mock explanation: no trade because price inside ORB."
+
+    data = {"direction": "NO TRADE", "reason": "price inside ORB", "orb_high": 2610.0, "orb_low": 2600.0}
+    exp = generate_orb_explanation(data, query_type="Why No Trade Explanation", ollama_client=FakeOllama())
+    assert captured["temp"] == 0.2
+    assert "Never invent prices" in captured["sys"]
+    assert "not in the data" in captured["sys"]
+    assert "price inside ORB" in exp

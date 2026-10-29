@@ -26,6 +26,8 @@ class ORBBacktestResult:
     net_pnl: float
     equity_curve: List[Dict[str, Any]]
     trade_log: List[Dict[str, Any]]
+    max_drawdown_r: float = 0.0
+    no_setup_pct: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -249,6 +251,20 @@ def run_backtest(
     profit_factor = (sum_wins / sum_losses) if sum_losses > 0 else (float("inf") if sum_wins > 0 else 0.0)
     net_pnl = round(equity - float(initial_equity), 2)
 
+    # Compute max drawdown in R terms
+    cum_r = 0.0
+    peak_r = 0.0
+    max_dd_r = 0.0
+    for t in trades:
+        cum_r += t["r"]
+        if cum_r > peak_r:
+            peak_r = cum_r
+        dd_r = peak_r - cum_r
+        if dd_r > max_dd_r:
+            max_dd_r = dd_r
+
+    no_setup_pct = round((skipped_days / len(days) * 100.0) if days else 0.0, 2)
+
     if chart_output_path:
         save_equity_curve_html(curve, chart_output_path)
 
@@ -265,4 +281,6 @@ def run_backtest(
         net_pnl=net_pnl,
         equity_curve=curve,
         trade_log=trades,
+        max_drawdown_r=round(max_dd_r, 4),
+        no_setup_pct=no_setup_pct,
     )

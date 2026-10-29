@@ -1,8 +1,8 @@
 """AI Trading Assistant UI: Local Ollama conversational reasoning grounded in deterministic tools."""
 
 import re
-import streamlit as st
 from typing import Optional
+import streamlit as st
 from agents.trading_supervisor import TradingSupervisor
 from agents.ollama_client import OllamaClient
 from config.settings import settings
@@ -10,9 +10,11 @@ from agents.orb_tools import (
     orb_current_signal,
     explain_no_trade,
     show_today_orb,
+    explain_last_signal,
     backtest_orb_csv,
     assess_orb_risk,
     journal_summary,
+    generate_orb_explanation,
 )
 
 
@@ -33,22 +35,16 @@ def render_assistant(supervisor: TradingSupervisor):
 
     # Preset Quick Prompts
     st.markdown("**Quick Prompts:**")
-    q_cols = st.columns(7)
+    q_cols = st.columns(4)
     preset_prompt = None
-    if q_cols[0].button("Analyze AAPL"):
-        preset_prompt = "Analyze AAPL with Moving Average Crossover"
-    if q_cols[1].button("Analyze TCS.NS"):
-        preset_prompt = "Analyze TCS.NS with Trend Following"
-    if q_cols[2].button("Explain RSI"):
-        preset_prompt = "Explain how the RSI indicator works and how to avoid false oversold signals."
-    if q_cols[3].button("Portfolio Risk"):
-        preset_prompt = "What are the core risk limits in place to protect my paper capital?"
-    if q_cols[4].button("Golden Cross?"):
-        preset_prompt = "What is a Golden Cross in technical analysis?"
-    if q_cols[5].button("Today's XAUT ORB"):
-        preset_prompt = "Show today's XAUTUSD ORB signal"
-    if q_cols[6].button("Why no trade?"):
-        preset_prompt = "Why no trade now for XAUTUSD ORB?"
+    if q_cols[0].button("Why no trade now?"):
+        preset_prompt = "Why no trade now?"
+    if q_cols[1].button("What is today's ORB?"):
+        preset_prompt = "What is today's ORB?"
+    if q_cols[2].button("Explain the last signal"):
+        preset_prompt = "Explain the last signal"
+    if q_cols[3].button("Summarize my journal"):
+        preset_prompt = "Summarize my journal"
 
     # Chat history session state
     if "agent_chat_messages" not in st.session_state:
@@ -57,9 +53,13 @@ def render_assistant(supervisor: TradingSupervisor):
                 "role": "assistant",
                 "content": (
                     "Hello! I am your Local AI Trading Assistant. "
-                    "You can ask me to analyze any symbol (e.g., 'Analyze AAPL' or 'Analyze TCS.NS'), "
-                    "explain technical indicators, or review risk constraints. "
-                    "All numbers and signals are grounded in deterministic Python calculations."
+                    "You can ask me questions like: \n"
+                    "- *'Why no trade now?'*\n"
+                    "- *'What is today's ORB?'*\n"
+                    "- *'Explain the last signal'*\n"
+                    "- *'Summarize my journal'*\n"
+                    "All numbers and signals are grounded in deterministic Python calculations. "
+                    "Educational tool, not financial advice. Alert-only."
                 ),
             }
         ]
@@ -80,8 +80,11 @@ def render_assistant(supervisor: TradingSupervisor):
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        # Deterministic ORB tools run before generic symbol analysis.
-        orb_intent = any(term in user_input.lower() for term in ("orb", "xautusd", "why no trade", "opening range", "journal summary", "backtest"))
+        lowered = user_input.lower().strip()
+        orb_intent = any(term in lowered for term in (
+            "why no trade", "today's orb", "today orb", "last signal", "summarize my journal",
+            "journal", "orb", "xautusd", "opening range", "backtest"
+        ))
         symbol_match = re.search(r"\banalyze\s+([A-Za-z0-9\.\-\_\^]+)", user_input, re.IGNORECASE)
         tool_data = None
         assistant_reply = ""
@@ -90,19 +93,27 @@ def render_assistant(supervisor: TradingSupervisor):
             with st.spinner("Analyzing with local agents..."):
                 if orb_intent:
                     try:
-                        lowered = user_input.lower()
-                        if "journal summary" in lowered or "journal" in lowered:
+                        query_type = "ORB Status"
+                        if "why no trade" in lowered or "no trade" in lowered:
+                            query_type = "Why No Trade Explanation"
+                            tool_data = explain_no_trade()
+                        elif "today" in lowered and "orb" in lowered:
+                            query_type = "Today's ORB Range"
+                            tool_data = show_today_orb()
+                        elif "last signal" in lowered or "explain the signal" in lowered:
+                            query_type = "Last Signal Rationale"
+                            tool_data = explain_last_signal()
+                        elif "journal" in lowered:
+                            query_type = "Journal Summary"
                             tool_data = journal_summary()
                         elif "backtest" in lowered:
+                            query_type = "Backtest Results"
                             csv_paths = [token.strip(" '\"(),") for token in user_input.split() if token.lower().endswith(".csv")]
                             if not csv_paths:
                                 raise ValueError("For a deterministic backtest, include the local 5m CSV path, e.g. data/xautusd_5m.csv.")
                             tool_data = backtest_orb_csv(csv_paths[0])
-                        elif any(phrase in lowered for phrase in ("today's orb", "show today", "today's xaut")):
-                            tool_data = show_today_orb()
-                        elif any(phrase in lowered for phrase in ("why no trade", "explain no trade")):
-                            tool_data = explain_no_trade()
                         elif "risk" in lowered and all(label in lowered for label in ("entry", "stop", "equity")):
+                            query_type = "Risk Assessment"
                             entry_match = re.search(r"\bentry[=:\s]+\$?(\d+(?:\.\d+)?)", user_input, re.I)
                             stop_match = re.search(r"\bstop[=:\s]+\$?(\d+(?:\.\d+)?)", user_input, re.I)
                             equity_match = re.search(r"\bequity[=:\s]+\$?(\d+(?:\.\d+)?)", user_input, re.I)
@@ -110,39 +121,21 @@ def render_assistant(supervisor: TradingSupervisor):
                                 raise ValueError("Specify numeric entry, stop, and equity values.")
                             tool_data = assess_orb_risk(float(entry_match.group(1)), float(stop_match.group(1)), float(equity_match.group(1)))
                         else:
+                            query_type = "Current ORB Signal"
                             tool_data = orb_current_signal()
-                        sys_prompt = (
-                            "Explain the supplied deterministic strategy output in plain language. "
-                            "Do not invent or change prices, signal direction, risk status, or checklist values. "
-                            "If direction is NO TRADE, explain the exact reason and preserve NO TRADE. "
-                            "This is paper/alert-only educational information, not financial advice."
-                        )
-                        u_prompt = "Deterministic XAUTUSD ORB tool output (authoritative; do not override):\n" + str(tool_data)
-                        assistant_reply = ollama.generate_response(sys_prompt, u_prompt)
-                        if not assistant_reply:
-                            if "direction" in tool_data:
-                                assistant_reply = (
-                                    f"**{tool_data.get('direction', 'NO TRADE')}** — {tool_data.get('reason', 'No reason returned.')}\n\n"
-                                    f"ORB High: {tool_data.get('orb_high')} | ORB Low: {tool_data.get('orb_low')}\n\n"
-                                    "The Python rule engine is authoritative; the language model cannot override its signal. "
-                                    "Paper/alert-only. Educational tool, not financial advice."
-                                )
-                            else:
-                                assistant_reply = (
-                                    "Deterministic tool result (source values unchanged):\n\n"
-                                    + str(tool_data)
-                                    + "\n\nEducational tool, not financial advice. Paper/alert-only."
-                                )
+
+                        assistant_reply = generate_orb_explanation(tool_data, query_type=query_type, ollama_client=ollama)
+
                     except Exception as exc:
-                        assistant_reply = f"XAUTUSD ORB data/strategy tool unavailable: {exc}. No signal is assumed."
+                        assistant_reply = f"ORB strategy tool error: {exc}. No signal is assumed. Educational alert-only tool."
                         tool_data = {"direction": "NO TRADE", "reason": str(exc)}
+
                 elif symbol_match:
                     target_symbol = symbol_match.group(1).upper()
-                    # Determine strategy if mentioned
                     strat = "Moving Average Crossover"
-                    if "trend" in user_input.lower():
+                    if "trend" in lowered:
                         strat = "Multi-Factor Trend Following"
-                    elif "rsi" in user_input.lower():
+                    elif "rsi" in lowered:
                         strat = "RSI Confirmation"
 
                     analysis = supervisor.run_full_analysis(target_symbol, strategy_name=strat)
@@ -165,7 +158,6 @@ def render_assistant(supervisor: TradingSupervisor):
                             "Max Allowed Shares": risk.get("suggested_quantity"),
                         }
 
-                        # Construct prompt for local llama3.2:1b
                         sys_prompt = (
                             "You are an AI Trading Assistant. Synthesize the provided quantitative facts "
                             "into a clear, grounded 3-sentence summary for the user. "
@@ -182,7 +174,7 @@ def render_assistant(supervisor: TradingSupervisor):
                             "Synthesize for the trader."
                         )
 
-                        llm_out = ollama.generate_response(sys_prompt, u_prompt)
+                        llm_out = ollama.generate_response(sys_prompt, u_prompt, temperature=0.2)
                         if not llm_out:
                             llm_out = (
                                 f"**{target_symbol}** is currently priced at **${mkt.get('latest_price'):,.2f}**.\n\n"
@@ -197,13 +189,12 @@ def render_assistant(supervisor: TradingSupervisor):
                         assistant_reply = f"Could not complete analysis for {target_symbol}: {analysis.get('error')}"
 
                 else:
-                    # General financial or indicator query
                     sys_prompt = (
                         "You are a helpful, professional AI Quantitative Trading Assistant. "
-                        "Explain financial concepts clearly, concisely, and factually. "
-                        "Remind users that past performance does not guarantee future results."
+                        "Explain financial concepts clearly, concisely, and factually under 3 sentences. "
+                        "Never invent price levels or guarantee returns. Educational alert-only tool."
                     )
-                    llm_out = ollama.generate_response(sys_prompt, user_input)
+                    llm_out = ollama.generate_response(sys_prompt, user_input, temperature=0.2)
                     if not llm_out:
                         assistant_reply = (
                             "I am currently operating in offline deterministic mode. "

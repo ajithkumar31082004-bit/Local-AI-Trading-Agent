@@ -383,5 +383,183 @@ def test_executor_mocked_order_submission_payload(tmp_path, monkeypatch):
     assert payload["limit_price"] == "4050.00"
     assert payload["bracket_stop_loss_price"] == "4040.00"
     assert payload["bracket_take_profit_price"] == "4070.00"
+    assert "client_order_id" in payload
+    assert payload["client_order_id"].startswith("ORB_")
     assert "api-key" in req["headers"]
     assert "signature" in req["headers"]
+
+
+def test_reconciliation_service_lookup_and_status_mapping(tmp_path):
+    db_file = tmp_path / "test_reconcile.sqlite3"
+    reconcile_svc = DeltaReconciliationService(db_path=db_file)
+    client_mock = MagicMock()
+
+    # Case 1: Record intent
+    reconcile_svc.record_intent(
+        client_order_id="ORB_1234_TEST",
+        candle_timestamp="2026-10-28 21:15:00",
+        symbol="XAUTUSD",
+        side="buy",
+        size=1,
+        limit_price=4000.0,
+    )
+    rec = reconcile_svc.get_order("ORB_1234_TEST")
+    assert rec.status == "PENDING"
+
+    # Case 2: Exchange returns open state
+    client_mock.get_order_by_client_id.return_value = {
+        "success": True,
+        "result": {
+            "id": "EXCH_9988",
+            "state": "open",
+            "size": 1,
+            "unfilled_size": 1,
+            "avg_fill_price": None,
+        },
+    }
+    updated = reconcile_svc.reconcile_with_exchange("ORB_1234_TEST", client_mock)
+    assert updated.status == "ACCEPTED"
+    assert updated.exchange_order_id == "EXCH_9988"
+
+    # Case 3: Exchange returns filled state with fill price
+    client_mock.get_order_by_client_id.return_value = {
+        "success": True,
+        "result": {
+            "id": "EXCH_9988",
+            "state": "filled",
+            "size": 1,
+            "unfilled_size": 0,
+            "avg_fill_price": "4000.10",
+        },
+    }
+    updated = reconcile_svc.reconcile_with_exchange("ORB_1234_TEST", client_mock)
+    assert updated.status == "FILLED"
+    assert updated.filled_size == 1
+    assert updated.avg_fill_price == 4000.10
+
+    # Case 4: Exchange returns 404 (order never reached exchange)
+    client_mock.get_order_by_client_id.return_value = {
+        "success": False,
+        "status_code": 404,
+        "error": "Not Found",
+    }
+    updated = reconcile_svc.reconcile_with_exchange("ORB_1234_TEST", client_mock)
+    assert updated.status == "NOT_FOUND_ON_EXCHANGE"
+
+
+def test_emergency_kill_switch_order_cancellation(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_kill_switch.sqlite3"
+    reconcile_svc = DeltaReconciliationService(db_path=db_file)
+
+    # Insert active order
+    reconcile_svc.record_intent(
+        client_order_id="ORB_KILL_TEST",
+        candle_timestamp="2026-10-28 22:00:00",
+        symbol="XAUTUSD",
+        side="buy",
+        size=1,
+        limit_price=4050.0,
+    )
+    reconcile_svc.update_result("ORB_KILL_TEST", status="ACCEPTED", exchange_order_id="EXCH_1111")
+    assert len(reconcile_svc.get_active_orders()) == 1
+
+    cfg = ORBSettings(
+        mode="LIVE",
+        live_trading_acknowledged="YES",
+        api_key="real_key",
+        api_secret="real_secret",
+    )
+    client = DeltaExchangeClient(api_key="real_key", api_secret="real_secret")
+
+    # Mock DELETE request
+    intercepted_delete = []
+
+    def mock_delete(url, data=None, headers=None, timeout=None):
+        intercepted_delete.append({"url": url, "data": json.loads(data) if data else None})
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.text = json.dumps({"success": True, "result": "cancelled"})
+        resp.json.return_value = {"success": True, "result": "cancelled"}
+        return resp
+
+    monkeypatch.setattr(requests, "delete", mock_delete)
+
+    executor = DeltaLiveExecutor(cfg=cfg, client=client, reconciliation_service=reconcile_svc)
+    res = executor.cancel_all_product_orders()
+
+    assert res["success"] is True
+    assert res["orders_marked_cancelled"] == 1
+    assert len(intercepted_delete) == 1
+    assert "/v2/orders/all" in intercepted_delete[0]["url"]
+    assert intercepted_delete[0]["data"] == {"product_id": 131253}
+
+    # Verify local record is now marked CANCELLED_BY_KILL_SWITCH
+    rec = reconcile_svc.get_order("ORB_KILL_TEST")
+    assert rec.status == "CANCELLED_BY_KILL_SWITCH"
+    assert len(reconcile_svc.get_active_orders()) == 0
+
+
+def test_stale_order_auto_cancellation(tmp_path, monkeypatch):
+    from datetime import timedelta, datetime, timezone
+    db_file = tmp_path / "test_stale.sqlite3"
+    reconcile_svc = DeltaReconciliationService(db_path=db_file)
+
+    now = datetime.now(timezone.utc)
+    old_time = (now - timedelta(minutes=25)).isoformat()
+    recent_time = (now - timedelta(minutes=2)).isoformat()
+
+    # Old order (25 minutes old -> should be cancelled)
+    reconcile_svc.record_intent(
+        client_order_id="ORB_STALE_1",
+        candle_timestamp="2026-10-28 20:00:00",
+        symbol="XAUTUSD",
+        side="buy",
+        size=1,
+        limit_price=4050.0,
+    )
+    # Manually backdate created_at
+    with reconcile_svc._get_connection() as conn:
+        conn.execute("UPDATE live_orders SET status = 'ACCEPTED', exchange_order_id = 'EXCH_STALE', created_at = ? WHERE client_order_id = 'ORB_STALE_1';", (old_time,))
+        conn.commit()
+
+    # Recent order (2 minutes old -> should NOT be cancelled)
+    reconcile_svc.record_intent(
+        client_order_id="ORB_FRESH_1",
+        candle_timestamp="2026-10-28 20:25:00",
+        symbol="XAUTUSD",
+        side="buy",
+        size=1,
+        limit_price=4050.0,
+    )
+    with reconcile_svc._get_connection() as conn:
+        conn.execute("UPDATE live_orders SET status = 'ACCEPTED', exchange_order_id = 'EXCH_FRESH', created_at = ? WHERE client_order_id = 'ORB_FRESH_1';", (recent_time,))
+        conn.commit()
+
+    cfg = ORBSettings(
+        mode="LIVE",
+        live_trading_acknowledged="YES",
+        api_key="real_key",
+        api_secret="real_secret",
+    )
+    client = DeltaExchangeClient(api_key="real_key", api_secret="real_secret")
+
+    # Mock cancel_order on client
+    cancelled_ids = []
+    monkeypatch.setattr(client, "cancel_order", lambda oid, pid: cancelled_ids.append(oid) or {"success": True})
+
+    executor = DeltaLiveExecutor(cfg=cfg, client=client, reconciliation_service=reconcile_svc)
+    stale_cancelled = executor.cancel_stale_orders(max_age_minutes=15)
+
+    assert len(stale_cancelled) == 1
+    assert stale_cancelled[0]["client_order_id"] == "ORB_STALE_1"
+    assert "EXCH_STALE" in cancelled_ids
+    assert "EXCH_FRESH" not in cancelled_ids
+
+    # Check updated database record
+    stale_rec = reconcile_svc.get_order("ORB_STALE_1")
+    assert stale_rec.status == "EXPIRED_UNFILLED"
+
+    fresh_rec = reconcile_svc.get_order("ORB_FRESH_1")
+    assert fresh_rec.status == "ACCEPTED"
+
+
