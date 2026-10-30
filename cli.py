@@ -12,11 +12,24 @@ from indicators.orb_indicators import add_orb_indicators
 from risk.position_sizing import size_position, DailyRiskState
 from journal.orb_journal import ORBJournal
 from backtest.orb_backtest import run_backtest
+from zoneinfo import ZoneInfo
+from datetime import time as time_of_day
 from config.orb_settings import settings
 from services.delta_account_service import DeltaAccountService
 from services.delta_live_executor import DeltaLiveExecutor
 
-DISCLAIMER = "Educational research tool, not financial advice. PAPER / ALERT-ONLY; no live orders are placed unless TRADING_MODE=LIVE and confirmed."
+DISCLAIMER = "Educational research tool, not financial advice. Mode determines execution pathway (PAPER / ALERT_ONLY / LIVE)."
+
+
+def get_mode_banner(mode: str, kill_switch: bool = False) -> str:
+    """Return explicit, unambiguous operational mode and disclaimer banner."""
+    ks_str = " | ⚠️ EMERGENCY KILL SWITCH ACTIVE (All order entry blocked)" if kill_switch else ""
+    if mode == "LIVE":
+        return f"⚠️  LIVE TRADING MODE ACTIVE: Real capital at risk. Live orders are sent to Delta Exchange India upon confirmed signal.{ks_str}"
+    elif mode == "ALERT_ONLY":
+        return f"ℹ️  ALERT-ONLY MODE: Real market data & signals evaluated. No orders are sent to the exchange.{ks_str}"
+    return f"🛡️  PAPER TRADING MODE: Educational simulation. All orders, balances, and P&L tracking are virtual.{ks_str}"
+
 
 
 def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: bool = False):
@@ -103,11 +116,16 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
     print(f"Candle Volume: {vol_val} | Prior 20-Bar Avg Volume: {vol_avg_val}")
     print("-" * 70)
     print("Strategy Checklist:")
+    checklist_reasons = getattr(sig, "checklist_reasons", {}) or {}
     for key, val in sig.checklist.items():
         mark = "?" if val is None else ("PASS" if val else "FAIL")
-        print(f"  [{mark:4s}] {key.replace('_', ' ').title()}")
+        reason_note = f" ({checklist_reasons.get(key)})" if key in checklist_reasons and checklist_reasons.get(key) != "PASSED" else ""
+        print(f"  [{mark:4s}] {key.replace('_', ' ').title()}{reason_note}")
     print("-" * 70)
     print(f"Status: {sig.direction}")
+    diag_code = getattr(sig, "diagnostic_code", None)
+    if diag_code:
+        print(f"Diagnostic Code: {diag_code}")
     print(f"Engine Decision: {sig.reason}")
 
     if sig.direction in {"LONG", "SHORT"} and risk_result:
@@ -133,7 +151,7 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
         extra={"risk": risk_result.to_dict() if risk_result else None},
     )
 
-    print("\n" + DISCLAIMER)
+    print("\n" + get_mode_banner(settings.mode, settings.kill_switch_active))
     print("=" * 70)
     return sig
 
@@ -250,7 +268,7 @@ def main():
     elif args.command == "watch":
         if args.poll_seconds < 10:
             raise SystemExit("--poll-seconds must be at least 10 to avoid excessive API requests.")
-        print(f"Starting continuous alert polling for {args.symbol} (interval: {args.poll_seconds}s). Press Ctrl+C to stop.\n{DISCLAIMER}")
+        print(f"Starting continuous alert polling for {args.symbol} (interval: {args.poll_seconds}s). Press Ctrl+C to stop.\n{get_mode_banner(settings.mode, settings.kill_switch_active)}")
         last_timestamp = None
         last_direction = None
         executor = DeltaLiveExecutor() if settings.mode == "LIVE" else None
@@ -269,12 +287,15 @@ def main():
                     if cur_ts and cur_ts != last_timestamp:
                         last_timestamp = cur_ts
                         print("\n" + "-" * 70)
-                        print(f"[{now_dt.strftime('%H:%M:%S')}] New completed 5m candle detected: {cur_ts}")
+                        print(f"[{now_dt.strftime('%H:%M:%S')}] New completed 5m candle detected: {cur_ts} (Total completed bars: {len(frame)})")
                         sig = show_signal(frame, args.equity, reserve_alert=True)
-                        if sig.direction in {"LONG", "SHORT"} and sig.direction != last_direction:
-                            last_direction = sig.direction
-                            alert_mode = "LIVE ORDER SUBMITTED" if settings.mode == "LIVE" else "Paper Alert Only"
-                            print(f"\n*** ALERT: New {sig.direction} signal confirmed at {cur_ts}! ({alert_mode}) ***\n")
+                        if sig.direction in {"LONG", "SHORT"}:
+                            if sig.direction != last_direction:
+                                last_direction = sig.direction
+                                alert_mode = "LIVE ORDER SUBMITTED" if settings.mode == "LIVE" else "Paper Alert Only"
+                                print(f"\n*** ALERT: New {sig.direction} signal confirmed at {cur_ts}! ({alert_mode}) ***\n")
+                            else:
+                                print(f"\n[INFO] {sig.direction} signal active at {cur_ts} (already alerted for this sequence).\n")
                     else:
                         ts_str = now_dt.strftime("%H:%M:%S")
                         print(f"[{ts_str}] 💓 Heartbeat: Price ${cur_price:.2f} | Next 5m bar in ~{mins_left:02d}m {secs_left:02d}s | Watching {args.symbol} ({settings.mode})   ", end="\r", flush=True)

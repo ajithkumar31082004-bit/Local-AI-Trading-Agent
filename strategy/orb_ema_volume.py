@@ -20,12 +20,22 @@ class Signal:
     timestamp: Optional[str] = None
     orb_high: Optional[float] = None
     orb_low: Optional[float] = None
+    diagnostic_code: Optional[str] = None
+    checklist_reasons: Optional[Dict[str, str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
-def _no_trade(reason: str, checklist: Dict[str, Any], timestamp=None, high=None, low=None) -> Signal:
+def _no_trade(
+    reason: str,
+    checklist: Dict[str, Any],
+    timestamp=None,
+    high=None,
+    low=None,
+    diagnostic_code: Optional[str] = None,
+    checklist_reasons: Optional[Dict[str, str]] = None,
+) -> Signal:
     return Signal(
         direction="NO TRADE",
         entry=None,
@@ -37,6 +47,8 @@ def _no_trade(reason: str, checklist: Dict[str, Any], timestamp=None, high=None,
         timestamp=str(timestamp) if timestamp is not None else None,
         orb_high=high,
         orb_low=low,
+        diagnostic_code=diagnostic_code,
+        checklist_reasons=checklist_reasons or {},
     )
 
 
@@ -107,20 +119,54 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
         "risk_ok": None,
     }
 
+    checklist = dict(base_check)
+
+    def _make_reasons(code: str, custom_reasons: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        r = {
+            "orb_set": "PASSED" if checklist.get("orb_set") else code,
+            "breakout_close": "PASSED" if checklist.get("breakout_close") else ("WAITING_FOR_ORB" if not checklist.get("orb_set") else "NO_BREAKOUT_CLOSE"),
+            "ema_ok": "PASSED" if checklist.get("ema_ok") else ("WAITING_FOR_BREAKOUT" if not checklist.get("breakout_close") else "EMA_FILTER_FAILED"),
+            "volume_ok": "PASSED" if checklist.get("volume_ok") else ("WAITING_FOR_BREAKOUT" if not checklist.get("breakout_close") else "VOLUME_BELOW_THRESHOLD"),
+            "retest": "PASSED" if checklist.get("retest") else ("WAITING_FOR_BREAKOUT" if not checklist.get("breakout_close") else "RETEST_NOT_CONFIRMED"),
+            "rejection": "PASSED" if checklist.get("rejection") else ("WAITING_FOR_RETEST" if not checklist.get("retest") else "REJECTION_CANDLE_NOT_CONFIRMED"),
+            "rr_ok": "PASSED" if checklist.get("rr_ok") else ("WAITING_FOR_REJECTION" if not checklist.get("rejection") else "RISK_REWARD_BELOW_MINIMUM"),
+            "risk_ok": "PENDING",
+        }
+        if custom_reasons:
+            r.update(custom_reasons)
+        return r
+
     if cfg.target_r < 2.0:
-        return _no_trade("NO TRADE: configured target offers less than the required 1:2 reward-to-risk ratio.", base_check)
+        return _no_trade(
+            "NO TRADE: configured target offers less than the required 1:2 reward-to-risk ratio.",
+            checklist,
+            diagnostic_code="TARGET_R_BELOW_MINIMUM",
+            checklist_reasons=_make_reasons("TARGET_R_BELOW_MINIMUM", {"rr_ok": "TARGET_R_BELOW_MINIMUM"}),
+        )
     if cfg.orb_minutes != 15:
-        return _no_trade("NO TRADE: strategy requires a 15-minute opening range (three 5m candles).", base_check)
+        return _no_trade(
+            "NO TRADE: strategy requires a 15-minute opening range (three 5m candles).",
+            checklist,
+            diagnostic_code="INVALID_ORB_MINUTES",
+            checklist_reasons=_make_reasons("INVALID_ORB_MINUTES", {"orb_set": "INVALID_ORB_MINUTES"}),
+        )
     if frame.empty:
-        return _no_trade("NO TRADE: no candle data available.", base_check)
+        return _no_trade(
+            "NO TRADE: no candle data available.",
+            checklist,
+            diagnostic_code="NO_CANDLE_DATA",
+            checklist_reasons=_make_reasons("NO_CANDLE_DATA", {"orb_set": "NO_CANDLE_DATA"}),
+        )
 
     df = _prepare(frame, cfg)
     min_required_history = max(cfg.ema_period + 1, cfg.volume_period + 1)
     if len(df) < min_required_history:
         return _no_trade(
             f"NO TRADE: insufficient candle history for EMA{cfg.ema_period} and {cfg.volume_period}-candle average volume (need at least {min_required_history} candles).",
-            base_check,
+            checklist,
             df.index[-1] if not df.empty else None,
+            diagnostic_code="INSUFFICIENT_CANDLES",
+            checklist_reasons=_make_reasons("INSUFFICIENT_CANDLES", {"orb_set": "INSUFFICIENT_CANDLES"}),
         )
 
     now = df.index[-1]
@@ -131,8 +177,18 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
     if now < session_start:
         return _no_trade(
             f"NO TRADE: trading session has not started yet (session start is {cfg.session_start} {cfg.timezone}).",
-            base_check,
+            checklist,
             now,
+            diagnostic_code="SESSION_NOT_STARTED",
+            checklist_reasons=_make_reasons("SESSION_NOT_STARTED", {
+                "orb_set": "SESSION_NOT_STARTED",
+                "breakout_close": "WAITING_FOR_SESSION",
+                "ema_ok": "WAITING_FOR_SESSION",
+                "volume_ok": "WAITING_FOR_SESSION",
+                "retest": "WAITING_FOR_SESSION",
+                "rejection": "WAITING_FOR_SESSION",
+                "rr_ok": "WAITING_FOR_SESSION",
+            }),
         )
 
     session_end = session_start + pd.Timedelta(minutes=cfg.orb_minutes)
@@ -148,27 +204,54 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
         return _no_trade(
             f"NO TRADE: opening range incomplete or missing candles: requires completed 5m bars at {session_start.strftime('%H:%M')}, "
             f"{(session_start + pd.Timedelta(minutes=5)).strftime('%H:%M')}, and {(session_start + pd.Timedelta(minutes=10)).strftime('%H:%M')} ({cfg.timezone}).",
-            base_check,
+            checklist,
             now,
+            diagnostic_code="ORB_WINDOW_INCOMPLETE",
+            checklist_reasons=_make_reasons("ORB_WINDOW_INCOMPLETE", {
+                "orb_set": "ORB_WINDOW_INCOMPLETE",
+                "breakout_close": "WAITING_FOR_ORB",
+                "ema_ok": "WAITING_FOR_ORB",
+                "volume_ok": "WAITING_FOR_ORB",
+                "retest": "WAITING_FOR_ORB",
+                "rejection": "WAITING_FOR_ORB",
+                "rr_ok": "WAITING_FOR_ORB",
+            }),
         )
 
     opening = opening.reindex(expected_index)
     if opening[["Open", "High", "Low", "Close", "Volume"]].isna().any().any():
-        return _no_trade("NO TRADE: one or more opening-range candles contain missing or invalid data.", base_check, now)
+        return _no_trade(
+            "NO TRADE: one or more opening-range candles contain missing or invalid data.",
+            checklist,
+            now,
+            diagnostic_code="ORB_WINDOW_INCOMPLETE",
+            checklist_reasons=_make_reasons("ORB_WINDOW_INCOMPLETE", {"orb_set": "ORB_DATA_INVALID"}),
+        )
 
     orb_high = float(opening["High"].max())
     orb_low = float(opening["Low"].min())
 
-    checklist = dict(base_check)
     checklist["orb_set"] = True
 
     post_orb = session[session.index >= session_end]
     if post_orb.empty:
-        return _no_trade("NO TRADE: opening range is established; waiting for a confirmed breakout close.", checklist, now, orb_high, orb_low)
+        return _no_trade(
+            "NO TRADE: opening range is established; waiting for a confirmed breakout close.",
+            checklist,
+            now,
+            orb_high,
+            orb_low,
+            diagnostic_code="NO_BREAKOUT_CLOSE",
+            checklist_reasons=_make_reasons("NO_BREAKOUT_CLOSE", {
+                "orb_set": "PASSED",
+                "breakout_close": "NO_BREAKOUT_CLOSE",
+            }),
+        )
 
     breakout_dir = None
     breakout_i = None
     failed_reason = None
+    failed_code = None
     latest_signal = None
     session_positions = {ts: i for i, ts in enumerate(df.index)}
 
@@ -209,17 +292,21 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
             # Check chop filter
             if crosses >= cfg.max_ema_crosses:
                 failed_reason = f"NO TRADE: price chopped around EMA20 ({crosses} crosses in the last 10 candles; max allowed {cfg.max_ema_crosses - 1})."
+                failed_code = "EMA_CHOP_DETECTED"
                 break
             if not ema_aligned:
                 failed_reason = "NO TRADE: breakout candle lacks EMA20 alignment or positive/negative slope."
+                failed_code = "EMA_FILTER_FAILED"
                 break
             if not vol_aligned:
                 failed_reason = "NO TRADE: breakout candle volume did not exceed previous 20-candle average."
+                failed_code = "VOLUME_BELOW_THRESHOLD"
                 break
 
             extension = (close - orb_high) if direction == "LONG" else (orb_low - close)
             if pd.notna(atr_now) and extension > cfg.max_extension_atr * float(atr_now):
                 failed_reason = "NO TRADE: breakout candle is too extended from the opening range; avoid chasing."
+                failed_code = "PRICE_EXTENDED"
                 break
 
             breakout_dir = direction
@@ -229,11 +316,13 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
         # Invalidation: A breakout that closes back inside the ORB range invalidates the setup
         if orb_low <= close <= orb_high:
             failed_reason = "NO TRADE: price closed back inside the opening range, invalidating the breakout."
+            failed_code = "BREAKOUT_INVALIDATED_RETURNED_INSIDE"
             break
 
         # Invalidation: Too many bars passed without a retest
         if (i - breakout_i) > cfg.max_bars_after_breakout:
             failed_reason = f"NO TRADE: retest did not occur within {cfg.max_bars_after_breakout} bars of breakout."
+            failed_code = "RETEST_TIMEOUT"
             break
 
         if i <= breakout_i:
@@ -269,12 +358,15 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
 
             if crosses >= cfg.max_ema_crosses:
                 failed_reason = f"NO TRADE: price chopped around EMA20 ({crosses} crosses in the last 10 candles)."
+                failed_code = "EMA_CHOP_DETECTED"
                 break
             if not ema_trend_ok:
                 failed_reason = "NO TRADE: EMA20 trend alignment or slope failed on rejection candle."
+                failed_code = "EMA_FILTER_FAILED"
                 break
             if too_extended:
                 failed_reason = "NO TRADE: rejection candle closed too extended from the breakout level."
+                failed_code = "PRICE_EXTENDED"
                 break
 
             # Calculate Stop Loss: beyond retest extreme or invalidation level + buffer
@@ -294,6 +386,7 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
 
             if net_r < 2.0:
                 failed_reason = f"NO TRADE: net reward-to-risk ratio ({net_r:.2f}R) after fees and slippage is below 1:2."
+                failed_code = "RISK_REWARD_BELOW_MINIMUM"
                 break
 
             checklist["rr_ok"] = True
@@ -308,6 +401,8 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
                 timestamp=str(ts),
                 orb_high=orb_high,
                 orb_low=orb_low,
+                diagnostic_code="SIGNAL_CONFIRMED",
+                checklist_reasons={k: "PASSED" for k in checklist.keys() if k != "risk_ok"},
             )
             break
 
@@ -316,7 +411,15 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
         return latest_signal
 
     if failed_reason:
-        return _no_trade(failed_reason, checklist, now, orb_high, orb_low)
+        return _no_trade(
+            failed_reason,
+            checklist,
+            now,
+            orb_high,
+            orb_low,
+            diagnostic_code=failed_code,
+            checklist_reasons=_make_reasons(failed_code or "FILTER_REJECTED"),
+        )
 
     last_row = df.iloc[-1]
     last_close = float(last_row["Close"])
@@ -326,11 +429,23 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
     if breakout_dir is None:
         if orb_low <= last_close <= orb_high:
             reason = "NO TRADE: price remains inside the opening range."
+            dcode = "NO_BREAKOUT_CLOSE"
         elif last_vol <= last_vol_avg:
             reason = "NO TRADE: breakout candle volume did not exceed previous 20-candle average."
+            dcode = "VOLUME_BELOW_THRESHOLD"
         else:
             reason = "NO TRADE: waiting for a valid completed candle breakout close."
+            dcode = "NO_BREAKOUT_CLOSE"
     else:
         reason = f"NO TRADE: {breakout_dir.lower()} breakout confirmed; waiting for a completed retest and rejection candle."
+        dcode = "RETEST_NOT_CONFIRMED"
 
-    return _no_trade(reason, checklist, now, orb_high, orb_low)
+    return _no_trade(
+        reason,
+        checklist,
+        now,
+        orb_high,
+        orb_low,
+        diagnostic_code=dcode,
+        checklist_reasons=_make_reasons(dcode),
+    )
