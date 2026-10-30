@@ -1,6 +1,6 @@
 # ORB (Opening Range Breakout) + EMA20 + Volume Strategy Configuration
-session_start: "09:30"
-timezone: "America/New_York"
+session_start: "09:00"
+timezone: "Asia/Kolkata"
 session_length_minutes: 390
 orb_minutes: 15
 ema_period: 20

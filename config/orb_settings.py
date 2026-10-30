@@ -22,14 +22,18 @@ class ConfigurationError(ValueError):
 
 @dataclass(frozen=True)
 class ORBSettings:
+    strategy_type: str = os.getenv("STRATEGY_TYPE", "ORB").upper()  # "ORB", "TREND_FOLLOWING", "DUAL"
     symbol: str = os.getenv("ORB_SYMBOL", "XAUTUSD")
     mode: str = os.getenv("TRADING_MODE", os.getenv("ORB_MODE", "PAPER")).upper()
     live_trading_acknowledged: str = os.getenv("LIVE_TRADING_ACKNOWLEDGED", os.getenv("ORB_LIVE_TRADING_ACKNOWLEDGED", "NO")).upper()
     kill_switch_active: bool = os.getenv("EMERGENCY_KILL_SWITCH", "false").lower() == "true"
     timezone: str = os.getenv("ORB_TIMEZONE", "Asia/Kolkata")
     session_start: str = os.getenv("ORB_SESSION_START", "09:00")
+    session_end: str = os.getenv("ORB_SESSION_END", "23:30")
     orb_minutes: int = _int("ORB_MINUTES", 15)
     ema_period: int = _int("ORB_EMA_PERIOD", 20)
+    ema_fast_period: int = _int("ORB_EMA_FAST_PERIOD", 20)
+    ema_slow_period: int = _int("ORB_EMA_SLOW_PERIOD", 50)
     volume_period: int = _int("ORB_VOLUME_PERIOD", 20)
     max_ema_crosses: int = _int("ORB_MAX_EMA_CROSSES", 2)
     max_extension_atr: float = _float("ORB_MAX_EXTENSION_ATR", 1.0)

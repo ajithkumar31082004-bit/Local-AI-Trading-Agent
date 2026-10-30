@@ -9,6 +9,7 @@ import pandas as pd
 from config.orb_settings import ORBSettings, settings as default_orb_settings
 from data.delta_candles import fetch_5m_candles, DeltaCandleError
 from strategy.orb_ema_volume import evaluate_orb
+from strategy.trend_following import evaluate_trend_following
 from services.delta_risk import evaluate_delta_trade, DeltaDailyRiskStore
 from services.orb_backtest import backtest_orb
 from services.delta_live_executor import DeltaLiveExecutor
@@ -18,19 +19,24 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def render_orb_setup():
-    """Render the ORB Setup page with live checklist, chart overlays, risk guard, and backtesting."""
-    st.title("🥇 XAUUSD ORB Setup (Delta Exchange India)")
-    st.caption("Deterministic 5m Opening Range Breakout (ORB) + EMA20 + Volume Strategy Monitor & Backtester.")
+    """Render the XAUUSD Strategy page with live checklist, chart overlays, risk guard, and backtesting."""
+    st.title("🥇 XAUUSD Trading System (Delta Exchange India)")
+    st.caption("Multi-Strategy Monitor & Backtester: ORB (Opening Range Breakout) + Multi-Timeframe Trend-Following.")
 
     # Sidebar parameters
-    st.sidebar.markdown("### ⚙️ ORB Parameters")
+    st.sidebar.markdown("### ⚙️ Strategy & Parameters")
+    strategy_choice = st.sidebar.selectbox(
+        "Active Strategy",
+        options=["ORB (Opening Range Breakout)", "Trend-Following (15m + 5m)"],
+        index=0 if getattr(default_orb_settings, "strategy_type", "ORB") == "ORB" else 1,
+    )
     symbol = st.sidebar.text_input("Symbol", value="XAUTUSD").strip().upper()
     timezone_choice = st.sidebar.selectbox(
         "Timezone",
-        options=["America/New_York", "Asia/Kolkata", "UTC"],
+        options=["Asia/Kolkata", "America/New_York", "UTC"],
         index=0,
     )
-    session_start = st.sidebar.text_input("Session Start (HH:MM)", value="09:30" if timezone_choice == "America/New_York" else "09:00")
+    session_start = st.sidebar.text_input("Session Start (HH:MM)", value="09:00" if timezone_choice == "Asia/Kolkata" else "09:30")
     
     st.sidebar.markdown("### 🛡️ Risk Controls (Tiny Account)")
     account_equity_inr = st.sidebar.number_input("Account Balance (₹ INR)", min_value=10.0, value=100.0, step=10.0)
@@ -52,6 +58,7 @@ def render_orb_setup():
         ema_period=20,
         volume_period=20,
         leverage=leverage,
+        strategy_type="TREND_FOLLOWING" if "Trend" in strategy_choice else "ORB",
     )
 
     tab_live, tab_backtest = st.tabs(["📊 Live Strategy Monitor", "🧪 Backtesting"])
@@ -97,9 +104,10 @@ def render_orb_setup():
         candles_df = None
         data_error = None
 
+        lookback_req = 300 if "Trend" in strategy_choice else 100
         with st.spinner(f"Loading latest 5m candles for {symbol}..."):
             try:
-                candles_df = fetch_5m_candles(symbol=symbol, lookback_candles=100)
+                candles_df = fetch_5m_candles(symbol=symbol, lookback_candles=lookback_req)
             except Exception as e:
                 data_error = str(e)
 
@@ -111,7 +119,10 @@ def render_orb_setup():
             return
 
         # Deterministic strategy evaluation
-        signal = evaluate_orb(candles_df, cfg=cfg)
+        if "Trend" in strategy_choice:
+            signal = evaluate_trend_following(candles_df, cfg=cfg)
+        else:
+            signal = evaluate_orb(candles_df, cfg=cfg)
         chk = signal.checklist or {}
 
         # Evaluate risk for tiny account if signal or price available
@@ -141,34 +152,52 @@ def render_orb_setup():
         # Top Metric Cards
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Current Price", f"${current_price:,.2f}")
-        m2.metric("ORB High (15m)", f"${signal.orb_high:,.2f}" if signal.orb_high else "Pending")
-        m3.metric("ORB Low (15m)", f"${signal.orb_low:,.2f}" if signal.orb_low else "Pending")
+        if "Trend" in strategy_choice:
+            m2.metric("Strategy", "Trend-Following")
+            m3.metric("Macro Trend", "15m Aligned" if chk.get("trend_15m_aligned") else "Neutral/Wait")
+        else:
+            m2.metric("ORB High (15m)", f"${signal.orb_high:,.2f}" if signal.orb_high else "Pending")
+            m3.metric("ORB Low (15m)", f"${signal.orb_low:,.2f}" if signal.orb_low else "Pending")
         last_ema = float(candles_df["Close"].ewm(span=20, adjust=False).mean().iloc[-1])
         m4.metric("EMA 20", f"${last_ema:,.2f}")
         m5.metric("Risk Check", "Approved" if risk_decision.approved else "Blocked", delta="Safe" if risk_decision.approved else "Risk Limit")
 
-        # 8-Point Live Checklist
-        st.subheader("📋 8-Point ORB Verification Checklist")
-        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
-
+        # Verification Checklist
         def badge(ok: bool, text: str):
             if ok:
                 st.markdown(f"✅ **{text}**")
             else:
                 st.markdown(f"❌ <span style='color: #ef5350;'>{text}</span>", unsafe_allow_html=True)
 
-        with col_c1:
-            badge(chk.get("orb_set", False), "1. ORB Established (15m)")
-            badge(chk.get("breakout_close", False), "2. Breakout Close (No Wick)")
-        with col_c2:
-            badge(chk.get("ema_ok", False), "3. EMA20 Side & Slope")
-            badge(chk.get("volume_ok", False), "4. Volume > 20-Avg")
-        with col_c3:
-            badge(chk.get("retest", False), "5. Retest Holds")
-            badge(chk.get("rejection", False), "6. Rejection Candle")
-        with col_c4:
-            badge(chk.get("rr_ok", False), "7. 1:2 R:R Net of Costs")
-            badge(risk_decision.approved, f"8. Tiny Risk (≤ ₹{max_risk_inr:.1f})")
+        if "Trend" in strategy_choice:
+            st.subheader("📋 7-Point Trend-Following Verification Checklist")
+            col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+            with col_c1:
+                badge(chk.get("trend_15m_aligned", False), "1. 15m Trend (EMA20 vs 50)")
+                badge(chk.get("pullback_confirmed", False), "2. 5m EMA Pullback")
+            with col_c2:
+                badge(chk.get("continuation_candle", False), "3. Rejection / Continuation")
+                badge(chk.get("volume_confirmed", False), "4. Volume Confirmed")
+            with col_c3:
+                badge(chk.get("not_overextended", False), "5. Not Overextended (<2.5 ATR)")
+                badge(chk.get("rr_ok", False), "6. 1:2 R:R Net of Costs")
+            with col_c4:
+                badge(risk_decision.approved, f"7. Risk Approved (≤ ₹{max_risk_inr:.1f})")
+        else:
+            st.subheader("📋 8-Point ORB Verification Checklist")
+            col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+            with col_c1:
+                badge(chk.get("orb_set", False), "1. ORB Established (15m)")
+                badge(chk.get("breakout_close", False), "2. Breakout Close (No Wick)")
+            with col_c2:
+                badge(chk.get("ema_ok", False), "3. EMA20 Side & Slope")
+                badge(chk.get("volume_ok", False), "4. Volume > 20-Avg")
+            with col_c3:
+                badge(chk.get("retest", False), "5. Retest Holds")
+                badge(chk.get("rejection", False), "6. Rejection Candle")
+            with col_c4:
+                badge(chk.get("rr_ok", False), "7. 1:2 R:R Net of Costs")
+                badge(risk_decision.approved, f"8. Tiny Risk (≤ ₹{max_risk_inr:.1f})")
 
         # Candlestick Chart with Overlays
         st.subheader("📈 5m Interactive Session Chart")
@@ -191,9 +220,15 @@ def render_orb_setup():
         # EMA20 Overlay
         ema20_series = candles_df["Close"].ewm(span=20, adjust=False).mean()
         fig.add_trace(
-            go.Scatter(x=candles_df.index, y=ema20_series, mode="lines", name="EMA 20", line=dict(color="#FFB300", width=1.5)),
+            go.Scatter(x=candles_df.index, y=ema20_series, mode="lines", name="5m EMA 20", line=dict(color="#FFB300", width=1.5)),
             row=1, col=1,
         )
+        if "Trend" in strategy_choice:
+            ema50_series = candles_df["Close"].ewm(span=50, adjust=False).mean()
+            fig.add_trace(
+                go.Scatter(x=candles_df.index, y=ema50_series, mode="lines", name="5m EMA 50", line=dict(color="#29B6F6", width=1.5)),
+                row=1, col=1,
+            )
 
         # ORB Lines
         if signal.orb_high:
@@ -234,10 +269,12 @@ def render_orb_setup():
 
     # Tab 2: Backtesting
     with tab_backtest:
-        st.subheader("🧪 Deterministic ORB Backtester")
+        st.subheader("🧪 Deterministic Strategy Backtester")
         st.caption("Chronological historical simulation with strict next-bar execution, fees, spread, and conservative collision resolution.")
 
-        bc1, bc2, bc3 = st.columns(3)
+        bc0, bc1, bc2, bc3 = st.columns(4)
+        with bc0:
+            bt_strat_choice = st.selectbox("Strategy", ["ORB", "Trend-Following (15m+5m)"], index=0)
         with bc1:
             backtest_days = st.number_input("Lookback Days", min_value=1, max_value=60, value=7)
         with bc2:
@@ -245,13 +282,14 @@ def render_orb_setup():
         with bc3:
             st.write("")
             st.write("")
-            run_bt_btn = st.button("🚀 Run ORB Backtest", use_container_width=True)
+            run_bt_btn = st.button("🚀 Run Backtest", use_container_width=True)
 
         if run_bt_btn:
-            with st.spinner("Executing chronological backtest replay..."):
+            with st.spinner(f"Executing chronological {bt_strat_choice} backtest replay..."):
                 try:
                     bt_candles = fetch_5m_candles(symbol=symbol, lookback_candles=int(backtest_days * 24 * 12))
-                    res = backtest_orb(bt_candles, initial_equity=initial_backtest_equity, cfg=cfg, chart_output_path=None)
+                    strat_fn = evaluate_trend_following if "Trend" in bt_strat_choice else evaluate_orb
+                    res = backtest_orb(bt_candles, initial_equity=initial_backtest_equity, cfg=cfg, chart_output_path=None, strategy_fn=strat_fn)
 
                     st.markdown("### Backtest Performance Summary")
                     b1, b2, b3, b4 = st.columns(4)

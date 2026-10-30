@@ -80,6 +80,7 @@ def run_backtest(
     initial_equity: float = 10000.0,
     cfg: ORBSettings = settings,
     chart_output_path: Optional[str | Path] = "data/orb_equity_curve.html",
+    strategy_fn: Optional[Any] = None,
 ) -> ORBBacktestResult:
     """Execute realistic chronological backtest replay across historical 5m bars.
     
@@ -92,6 +93,15 @@ def run_backtest(
     """
     if candles.empty:
         raise ValueError("No candles supplied for backtest replay.")
+
+    if strategy_fn is None:
+        if getattr(cfg, "strategy_type", "ORB") in {"TREND", "TREND_FOLLOWING"}:
+            from strategy.trend_following import evaluate_trend_following
+            strategy_eval_fn = evaluate_trend_following
+        else:
+            strategy_eval_fn = evaluate_orb
+    else:
+        strategy_eval_fn = strategy_fn
 
     df = candles.copy()
     idx = pd.DatetimeIndex(pd.to_datetime(df.index))
@@ -174,7 +184,7 @@ def run_backtest(
                     break  # Strategy restricts to at most one trade per day
 
             # Evaluate strategy on current completed candle prefix
-            sig = evaluate_orb(prefix, cfg)
+            sig = strategy_eval_fn(prefix, cfg)
             if sig.direction in {"LONG", "SHORT"} and sig.timestamp == str(ts) and not day_traded:
                 # Size trade with risk engine
                 decision = size_position(sig.entry, sig.sl, equity, cfg)

@@ -4,10 +4,12 @@ import json
 import time
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List
 import pandas as pd
 from data.delta_candles import fetch_5m_candles, DeltaCandleError
 from data.csv_loader import load_candles_csv
 from strategy.orb_ema_volume import evaluate_orb
+from strategy.trend_following import evaluate_trend_following
 from indicators.orb_indicators import add_orb_indicators
 from risk.position_sizing import size_position, DailyRiskState
 from journal.orb_journal import ORBJournal
@@ -32,8 +34,12 @@ def get_mode_banner(mode: str, kill_switch: bool = False) -> str:
 
 
 
-def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: bool = False):
-    sig = evaluate_orb(frame)
+def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: bool = False, strategy: Optional[str] = None):
+    chosen_strat = (strategy or getattr(settings, "strategy_type", "ORB")).upper()
+    if chosen_strat in ("TREND", "TREND_FOLLOWING"):
+        sig = evaluate_trend_following(frame, settings)
+    else:
+        sig = evaluate_orb(frame, settings)
     now = frame.index[-1].to_pydatetime() if len(frame) else datetime.now(timezone.utc)
     risk_state = DailyRiskState()
     risk_result = None
@@ -106,10 +112,11 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
     mode_tag = f"MODE: {settings.mode}"
     if settings.kill_switch_active:
         mode_tag += " | ⚠️ KILL SWITCH ACTIVE"
+    strat_title = "TREND-FOLLOWING (15m Trend + 5m Pullback)" if chosen_strat in ("TREND", "TREND_FOLLOWING") else "ORB + EMA20 + VOLUME"
     print("\n" + "=" * 70)
-    print(f"XAUTUSD (TETHER GOLD) ORB + EMA20 + VOLUME | {mode_tag}")
+    print(f"XAUTUSD (TETHER GOLD) {strat_title} | {mode_tag}")
     print("=" * 70)
-    print(f"Symbol: {settings.symbol} | Timezone: {settings.timezone}")
+    print(f"Symbol: {settings.symbol} | Strategy: {chosen_strat} | Timezone: {settings.timezone}")
     print(f"Last Completed Candle: {sig.timestamp or 'N/A'}")
     print(f"ORB High: {sig.orb_high if sig.orb_high is not None else 'Pending'} | ORB Low: {sig.orb_low if sig.orb_low is not None else 'Pending'}")
     print(f"EMA20: {ema_val} | EMA Slope: {ema_slope_val}")
@@ -165,6 +172,7 @@ def main():
     live.add_argument("--candles", type=int, default=500, help="Number of lookback candles to fetch")
     live.add_argument("--symbol", default=settings.symbol, help="Exchange product symbol")
     live.add_argument("--equity", type=float, default=10000.0, help="Paper account equity in USD")
+    live.add_argument("--strategy", default=getattr(settings, "strategy_type", "ORB"), choices=["ORB", "TREND", "TREND_FOLLOWING"], help="Strategy model to evaluate")
 
     # 2. Continuous watch mode
     watch = sub.add_parser("watch", help="Poll completed 5m candles and alert on each new completed bar")
@@ -172,6 +180,7 @@ def main():
     watch.add_argument("--symbol", default=settings.symbol)
     watch.add_argument("--equity", type=float, default=10000.0)
     watch.add_argument("--poll-seconds", type=int, default=60, help="Polling interval in seconds (minimum 10s)")
+    watch.add_argument("--strategy", default=getattr(settings, "strategy_type", "ORB"), choices=["ORB", "TREND", "TREND_FOLLOWING"], help="Strategy model to watch")
 
     # 3. CSV evaluation
     csv = sub.add_parser("csv", help="Evaluate the latest completed candle from a local CSV")
@@ -182,6 +191,7 @@ def main():
     bt = sub.add_parser("backtest", help="Replay a CSV of historical 5m candles with cost and risk rules")
     bt.add_argument("path", help="Path to local OHLCV CSV")
     bt.add_argument("--equity", type=float, default=10000.0)
+    bt.add_argument("--strategy", default=getattr(settings, "strategy_type", "ORB"), choices=["ORB", "TREND", "TREND_FOLLOWING"], help="Strategy model to backtest")
     bt.add_argument("--chart", default="data/orb_equity_curve.html", help="Path to save Plotly equity curve HTML")
 
     # 5. Record result
@@ -263,12 +273,12 @@ def main():
             frame = fetch_5m_candles(args.symbol, args.candles)
         except DeltaCandleError as exc:
             raise SystemExit(f"Market Data Error: {exc}")
-        show_signal(frame, args.equity, reserve_alert=True)
+        show_signal(frame, args.equity, reserve_alert=True, strategy=args.strategy)
 
     elif args.command == "watch":
         if args.poll_seconds < 10:
             raise SystemExit("--poll-seconds must be at least 10 to avoid excessive API requests.")
-        print(f"Starting continuous alert polling for {args.symbol} (interval: {args.poll_seconds}s). Press Ctrl+C to stop.\n{get_mode_banner(settings.mode, settings.kill_switch_active)}")
+        print(f"Starting continuous alert polling for {args.symbol} [Strategy: {args.strategy}] (interval: {args.poll_seconds}s). Press Ctrl+C to stop.\n{get_mode_banner(settings.mode, settings.kill_switch_active)}")
         last_timestamp = None
         last_direction = None
         executor = DeltaLiveExecutor() if settings.mode == "LIVE" else None
@@ -288,7 +298,7 @@ def main():
                         last_timestamp = cur_ts
                         print("\n" + "-" * 70)
                         print(f"[{now_dt.strftime('%H:%M:%S')}] New completed 5m candle detected: {cur_ts} (Total completed bars: {len(frame)})")
-                        sig = show_signal(frame, args.equity, reserve_alert=True)
+                        sig = show_signal(frame, args.equity, reserve_alert=True, strategy=args.strategy)
                         if sig.direction in {"LONG", "SHORT"}:
                             if sig.direction != last_direction:
                                 last_direction = sig.direction
@@ -336,9 +346,17 @@ def main():
 
     elif args.command == "backtest":
         frame = load_candles_csv(args.path, settings.timezone)
-        result = run_backtest(frame, args.equity, chart_output_path=args.chart)
+        strat = getattr(args, "strategy", "ORB").upper()
+        if strat in ("TREND", "TREND_FOLLOWING"):
+            from strategy.trend_following import evaluate_trend_following
+            strat_fn = evaluate_trend_following
+            title = "XAUTUSD TREND-FOLLOWING (15m Trend + 5m Pullback) BACKTEST RESULTS"
+        else:
+            strat_fn = evaluate_orb
+            title = "XAUTUSD ORB STRATEGY BACKTEST RESULTS"
+        result = run_backtest(frame, args.equity, chart_output_path=args.chart, strategy_fn=strat_fn)
         print("\n" + "=" * 60)
-        print("XAUTUSD ORB STRATEGY BACKTEST RESULTS")
+        print(title)
         print("=" * 60)
         print(f"Total Days Replayed:       {result.days}")
         print(f"Days Traded:               {result.trades}")
