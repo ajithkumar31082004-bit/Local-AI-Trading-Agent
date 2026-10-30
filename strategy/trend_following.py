@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 
 
 def resample_to_15m(df_5m: pd.DataFrame) -> pd.DataFrame:
-    """Resample completed 5m OHLCV bars into 15m OHLCV bars."""
+    """Resample completed 5m OHLCV bars into strictly completed 15m OHLCV bars.
+    
+    Excludes any incomplete current 15m bucket with fewer than 3 completed 5m bars
+    to strictly eliminate look-ahead and partial-bar bias.
+    """
     if df_5m.empty:
         return pd.DataFrame()
     ohlc = {
@@ -39,7 +43,11 @@ def resample_to_15m(df_5m: pd.DataFrame) -> pd.DataFrame:
         "Close": "last",
         "Volume": "sum",
     }
-    df_15m = df_5m.resample("15min", closed="left", label="left").agg(ohlc).dropna()
+    grouped = df_5m.resample("15min", closed="left", label="left")
+    counts = grouped["Close"].count()
+    df_15m = grouped.agg(ohlc).dropna()
+    # Retain strictly closed 15m buckets containing all 3 completed 5m bars
+    df_15m = df_15m[counts == 3]
     return df_15m
 
 
@@ -168,14 +176,21 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
             return _no_trade("NO TRADE: waiting for bearish rally pullback toward 5m EMA20.", "NO_PULLBACK_DETECTED")
         checklist["pullback_confirmed"] = True
 
-        # Continuation Rejection Candle: Current or previous bar is bearish rejection or close below open
+        # Continuation Rejection Candle: Multi-factor rejection check
+        # Must have:
+        # 1. Bearish close: close < open and close < EMA20
+        # 2. Upper rejection wick: upper wick >= 25% of total candle range or >= 50% of candle body
+        # 3. Directional close: close must settle in the lower 45% of the candle's total high-low range
+        total_range = max(curr_high - curr_low, 1e-6)
+        close_position = (curr_close - curr_low) / total_range
         is_bearish_rejection = (curr_close < curr_open) and (curr_close < curr_ema20)
         upper_wick = curr_high - max(curr_open, curr_close)
         body = max(abs(curr_close - curr_open), 1e-6)
-        has_rejection_wick = upper_wick >= (0.3 * body)
+        has_rejection_wick = (upper_wick >= 0.25 * total_range) or (upper_wick >= 0.5 * body)
+        closes_in_lower_portion = close_position <= 0.45
 
-        if not (is_bearish_rejection and has_rejection_wick):
-            return _no_trade("NO TRADE: waiting for confirmed bearish rejection candle close below 5m EMA20.", "REJECTION_NOT_CONFIRMED")
+        if not (is_bearish_rejection and has_rejection_wick and closes_in_lower_portion):
+            return _no_trade("NO TRADE: waiting for confirmed bearish rejection candle closing in lower 45% of range below 5m EMA20.", "REJECTION_NOT_CONFIRMED")
         checklist["continuation_candle"] = True
 
         # Volume Confirmation: Current bar volume >= 0.8 * 20-bar average
@@ -193,13 +208,20 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
             return _no_trade("NO TRADE: waiting for bullish dip pullback toward 5m EMA20.", "NO_PULLBACK_DETECTED")
         checklist["pullback_confirmed"] = True
 
+        # Bullish Rejection Candle:
+        # 1. Bullish close: close > open and close > EMA20
+        # 2. Lower rejection wick: lower wick >= 25% of total candle range or >= 50% of candle body
+        # 3. Directional close: close must settle in the upper 45% of the candle's total high-low range
+        total_range = max(curr_high - curr_low, 1e-6)
+        close_position = (curr_high - curr_close) / total_range
         is_bullish_rejection = (curr_close > curr_open) and (curr_close > curr_ema20)
         lower_wick = min(curr_open, curr_close) - curr_low
         body = max(abs(curr_close - curr_open), 1e-6)
-        has_rejection_wick = lower_wick >= (0.3 * body)
+        has_rejection_wick = (lower_wick >= 0.25 * total_range) or (lower_wick >= 0.5 * body)
+        closes_in_upper_portion = close_position <= 0.45
 
-        if not (is_bullish_rejection and has_rejection_wick):
-            return _no_trade("NO TRADE: waiting for confirmed bullish rejection candle close above 5m EMA20.", "REJECTION_NOT_CONFIRMED")
+        if not (is_bullish_rejection and has_rejection_wick and closes_in_upper_portion):
+            return _no_trade("NO TRADE: waiting for confirmed bullish rejection candle closing in upper 45% of range above 5m EMA20.", "REJECTION_NOT_CONFIRMED")
         checklist["continuation_candle"] = True
 
         if curr_vol < (0.8 * vol_avg):
@@ -234,3 +256,4 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         diagnostic_code="SIGNAL_CONFIRMED",
         checklist_reasons={k: "PASSED" for k in checklist.keys() if k != "risk_ok"},
     )
+
