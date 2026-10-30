@@ -2,6 +2,7 @@
 import logging
 import tempfile
 from dataclasses import dataclass, asdict
+from datetime import time as time_of_day
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import pandas as pd
@@ -113,6 +114,7 @@ def run_backtest(
     if not df.index.is_monotonic_increasing:
         df = df.sort_index()
 
+    ts_to_iloc = {t: idx for idx, t in enumerate(df.index)}
     days = list(dict.fromkeys(df.index.date))
     equity = float(initial_equity)
     peak_equity = equity
@@ -126,27 +128,40 @@ def run_backtest(
 
     for day in days:
         day_frame = df[[ts.date() == day for ts in df.index]]
-        day_traded = False
         pending_trade = None
         day_r = 0.0
+        trades_today = 0
+        last_loss_exit_i: Optional[int] = None
+        session_end_t = time_of_day.fromisoformat(getattr(cfg, "session_end", "23:30"))
 
         for i in range(1, len(day_frame) + 1):
             ts = day_frame.index[i - 1]
-            prefix = df.loc[df.index <= ts]
+            loc = ts_to_iloc[ts]
+            prefix = df.iloc[:loc + 1]
+            candle = prefix.iloc[-1]
 
-            # If in an active position, check if current bar hits Stop Loss or Take Profit
+            # If in an active position, check if current bar hits Stop Loss or Take Profit or Session End
             if pending_trade and (i - 1) > pending_trade["entry_i"]:
-                candle = prefix.iloc[-1]
                 side = pending_trade["direction"]
                 sl = pending_trade["sl"]
                 tp = pending_trade["tp"]
 
                 hit_sl = float(candle["Low"]) <= sl if side == "LONG" else float(candle["High"]) >= sl
                 hit_tp = float(candle["High"]) >= tp if side == "LONG" else float(candle["Low"]) <= tp
+                hit_session_end = ts.time() >= session_end_t
 
-                if hit_sl or hit_tp:
+                if hit_sl or hit_tp or hit_session_end:
                     # Conservative rule: if both SL and TP are touched in the same 5m bar, SL wins
-                    exit_price = sl if hit_sl else tp
+                    if hit_sl:
+                        exit_price = sl
+                        exit_reason = "SL"
+                    elif hit_tp:
+                        exit_price = tp
+                        exit_reason = "TP"
+                    else:
+                        exit_price = float(candle["Close"])
+                        exit_reason = "SESSION_END"
+
                     raw_risk = abs(pending_trade["entry"] - sl)
                     gross_r = ((exit_price - pending_trade["entry"]) / raw_risk) if side == "LONG" else ((pending_trade["entry"] - exit_price) / raw_risk)
 
@@ -159,6 +174,7 @@ def run_backtest(
                     pnl_cash = equity * (cfg.risk_pct / 100.0) * net_r
                     equity += pnl_cash
                     day_r += net_r
+                    trades_today += 1
 
                     trades.append({
                         "date": str(day),
@@ -171,34 +187,52 @@ def run_backtest(
                         "exit": exit_price,
                         "r": round(net_r, 4),
                         "pnl_cash": round(pnl_cash, 2),
-                        "exit_reason": "SL" if hit_sl else "TP",
+                        "exit_reason": exit_reason,
                     })
 
                     if net_r < 0:
                         current_losing_streak += 1
                         longest_losing_streak = max(longest_losing_streak, current_losing_streak)
+                        last_loss_exit_i = i - 1
                     else:
                         current_losing_streak = 0
 
                     pending_trade = None
-                    break  # Strategy restricts to at most one trade per day
 
-            # Evaluate strategy on current completed candle prefix
-            sig = strategy_eval_fn(prefix, cfg)
-            if sig.direction in {"LONG", "SHORT"} and sig.timestamp == str(ts) and not day_traded:
-                # Size trade with risk engine
-                decision = size_position(sig.entry, sig.sl, equity, cfg)
-                if decision.approved:
-                    pending_trade = {
-                        "direction": sig.direction,
-                        "entry": float(sig.entry),
-                        "sl": float(sig.sl),
-                        "tp": float(sig.tp),
-                        "lots": decision.lots,
-                        "entry_i": i - 1,
-                        "time": ts,
-                    }
-                    day_traded = True
+                    # If hit max trades or daily loss limit, stop trading for the day
+                    max_trades = getattr(cfg, "max_trades_per_day", 1)
+                    daily_loss_limit = getattr(cfg, "daily_loss_limit_r", 2.0)
+                    if trades_today >= max_trades or day_r <= -daily_loss_limit:
+                        break
+
+            # Evaluate strategy on current completed candle prefix if no active trade and guards pass
+            max_trades = getattr(cfg, "max_trades_per_day", 1)
+            daily_loss_limit = getattr(cfg, "daily_loss_limit_r", 2.0)
+            cooldown_bars = getattr(cfg, "cooldown_bars_after_loss", 6)
+            cooldown_active = (last_loss_exit_i is not None) and ((i - 1) < last_loss_exit_i + cooldown_bars)
+
+            can_evaluate = (
+                pending_trade is None
+                and trades_today < max_trades
+                and day_r > -daily_loss_limit
+                and not cooldown_active
+            )
+
+            if can_evaluate:
+                sig = strategy_eval_fn(prefix, cfg)
+                if sig.direction in {"LONG", "SHORT"} and sig.timestamp == str(ts):
+                    # Size trade with risk engine
+                    decision = size_position(sig.entry, sig.sl, equity, cfg)
+                    if decision.approved:
+                        pending_trade = {
+                            "direction": sig.direction,
+                            "entry": float(sig.entry),
+                            "sl": float(sig.sl),
+                            "tp": float(sig.tp),
+                            "lots": decision.lots,
+                            "entry_i": i - 1,
+                            "time": ts,
+                        }
 
         # Close any position still open at the end of the day at the day's final close price
         if pending_trade is not None:
@@ -216,6 +250,7 @@ def run_backtest(
             pnl_cash = equity * (cfg.risk_pct / 100.0) * net_r
             equity += pnl_cash
             day_r += net_r
+            trades_today += 1
 
             trades.append({
                 "date": str(day),
@@ -237,7 +272,7 @@ def run_backtest(
             else:
                 current_losing_streak = 0
 
-        if not day_traded:
+        if trades_today == 0:
             skipped_days += 1
 
         peak_equity = max(peak_equity, equity)

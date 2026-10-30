@@ -109,9 +109,9 @@ def fetch_5m_candles(
                     chunks.extend(rows)
                     remaining -= len(rows)
                     oldest = min(int(row["time"]) for row in rows if isinstance(row, dict) and "time" in row)
-                    if oldest <= start_ts or len(rows) < count:
-                        remaining = 0  # Reached earliest available data
-                    end_ts = oldest
+                    if oldest >= end_ts or len(rows) == 0:
+                        remaining = 0  # No older candles available
+                    end_ts = oldest - 1
                 else:
                     remaining = 0
 

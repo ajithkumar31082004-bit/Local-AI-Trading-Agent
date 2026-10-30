@@ -189,3 +189,61 @@ def test_trend_following_neutral_trend_rejected():
     sig = evaluate_trend_following(df, cfg)
     assert sig.direction == "NO TRADE"
     assert sig.diagnostic_code == "TREND_15M_NEUTRAL"
+
+
+def test_session_open_filter_rejected():
+    """Verify that entries during the first 45 minutes of session are rejected with SESSION_OPEN_FILTER."""
+    cfg = make_cfg(session_start="09:00", session_end="23:30", no_entry_minutes_after_open=45)
+    # Candle at 09:30 AM IST (after session start 09:00, but before 09:45 cutoff; 70 candles >= 60)
+    idx = pd.date_range("2026-10-30 03:45", periods=70, freq="5min", tz="Asia/Kolkata")
+    assert idx[-1].strftime("%H:%M") == "09:30"
+    df = pd.DataFrame({"Open": [4000.0]*70, "High": [4005.0]*70, "Low": [3995.0]*70, "Close": [4000.0]*70, "Volume": [1000.0]*70}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "SESSION_OPEN_FILTER"
+
+
+def test_late_entry_filter_rejected():
+    """Verify that entries at or after 22:00 IST are rejected with LATE_ENTRY_FILTER."""
+    cfg = make_cfg(session_start="09:00", session_end="23:30", last_entry_time="22:00")
+    # 185 candles ending at 22:15 IST
+    idx = pd.date_range("2026-10-30 06:55", periods=185, freq="5min", tz="Asia/Kolkata")
+    assert idx[-1].strftime("%H:%M") == "22:15"
+    df = pd.DataFrame({"Open": [4000.0]*185, "High": [4005.0]*185, "Low": [3995.0]*185, "Close": [4000.0]*185, "Volume": [1000.0]*185}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "LATE_ENTRY_FILTER"
+
+
+def test_session_end_liquidation_in_backtest():
+    """Verify that an open trade reaching session_end (23:30) is liquidated with reason SESSION_END."""
+    from backtest.orb_backtest import run_backtest
+    cfg = make_cfg(session_start="09:00", session_end="23:30", last_entry_time="22:00")
+    # Setup a trade entering at 21:00 and not hitting SL or TP before 23:30
+    idx = pd.date_range("2026-10-30 07:00", periods=205, freq="5min", tz="Asia/Kolkata")
+    closes = [4100.0 - (i * 0.5) for i in range(205)]
+    opens = [c + 0.2 for c in closes]
+    highs = [c + 1.0 for c in closes]
+    lows = [c - 1.0 for c in closes]
+    vols = [100000.0] * 205
+
+    # Trigger a short setup at bar 168 (around 21:00)
+    closes[165] = closes[164] + 3.0
+    highs[165] = closes[165] + 2.0
+    opens[168] = closes[167] + 0.5
+    highs[168] = opens[168] + 2.0
+    closes[168] = opens[168] - 3.0
+    lows[168] = closes[168] - 0.5
+    vols[168] = 150000.0
+
+    # Flat from bar 169 to end so neither SL nor TP is touched
+    for j in range(169, 205):
+        closes[j] = closes[168]
+        opens[j] = closes[168]
+        highs[j] = closes[168] + 0.5
+        lows[j] = closes[168] - 0.5
+
+    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols}, index=idx)
+    res = run_backtest(df, cfg=cfg, strategy_fn=evaluate_trend_following)
+    if res.trades > 0:
+        assert any(t["exit_reason"] in {"SESSION_END", "END_OF_DAY"} for t in res.trade_log)

@@ -1,5 +1,10 @@
 # ORB (Opening Range Breakout) + EMA20 + Volume Strategy Configuration
 session_start: "09:00"
+session_end: "23:30"
+no_entry_minutes_after_open: 45
+last_entry_time: "22:00"
+cooldown_bars_after_loss: 6
+daily_loss_limit_r: 2.0
 timezone: "Asia/Kolkata"
 session_length_minutes: 390
 orb_minutes: 15

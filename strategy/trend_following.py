@@ -16,7 +16,7 @@ Rules:
 """
 import logging
 from dataclasses import dataclass, asdict
-from datetime import time as time_of_day
+from datetime import datetime, timedelta, time as time_of_day
 from typing import Dict, Any, Optional, Tuple
 import numpy as np
 import pandas as pd
@@ -114,8 +114,33 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
             {"trend_15m_aligned": "OUTSIDE_SESSION_HOURS"}
         )
 
+    # 2a. Session-open filter (block entries during first N minutes after open)
+    no_entry_mins = getattr(cfg, "no_entry_minutes_after_open", 45)
+    if no_entry_mins > 0:
+        start_dt = datetime.combine(now.date(), start_t)
+        open_cutoff_t = (start_dt + timedelta(minutes=no_entry_mins)).time()
+        if now_t <= open_cutoff_t:
+            return _no_trade(
+                f"NO TRADE: within session-open filter ({no_entry_mins}m buffer after open; cutoff {open_cutoff_t.strftime('%H:%M')} {cfg.timezone}).",
+                "SESSION_OPEN_FILTER",
+                {"trend_15m_aligned": "SESSION_OPEN_FILTER"}
+            )
+
+    # 2b. Late-entry cutoff (no new positions at or after last_entry_time)
+    last_entry_str = getattr(cfg, "last_entry_time", "22:00")
+    if last_entry_str:
+        last_entry_t = time_of_day.fromisoformat(last_entry_str)
+        if now_t >= last_entry_t:
+            return _no_trade(
+                f"NO TRADE: at or after late-entry cutoff ({last_entry_str} {cfg.timezone}; session closes at {getattr(cfg, 'session_end', '23:30')}).",
+                "LATE_ENTRY_FILTER",
+                {"trend_15m_aligned": "LATE_ENTRY_FILTER"}
+            )
+
     # 3. Compute 15m Multi-Timeframe Trend (EMA20 vs EMA50)
-    df_15m = resample_to_15m(df_5m)
+    # Use trailing lookback window (up to 300 5m bars = 100 15m bars) for indicator warm-up & performance
+    calc_window = df_5m.iloc[-300:].copy() if len(df_5m) > 300 else df_5m.copy()
+    df_15m = resample_to_15m(calc_window)
     if len(df_15m) < 50:
         return _no_trade("NO TRADE: insufficient 15m resampled candles for EMA50 baseline.", "INSUFFICIENT_15M_BARS")
 
@@ -141,9 +166,9 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
     checklist["trend_15m_aligned"] = True
 
     # 4. Compute 5m Indicators (EMA20, 20-bar Volume Avg, ATR14)
-    df_5m = add_orb_indicators(df_5m, ema_period=20, volume_period=20, atr_period=14)
-    curr_bar = df_5m.iloc[-1]
-    prev_bar = df_5m.iloc[-2]
+    df_5m_ind = add_orb_indicators(calc_window, ema_period=20, volume_period=20, atr_period=14)
+    curr_bar = df_5m_ind.iloc[-1]
+    prev_bar = df_5m_ind.iloc[-2]
 
     curr_close = float(curr_bar["Close"])
     curr_open = float(curr_bar["Open"])
@@ -166,7 +191,7 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
     checklist["not_overextended"] = True
 
     # 6. Pullback and Continuation Confirmation
-    recent_bars = df_5m.iloc[-5:-1]
+    recent_bars = df_5m_ind.iloc[-5:-1]
     tolerance = 0.5 * curr_atr
 
     if macro_trend == "SHORT":
@@ -199,7 +224,7 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         checklist["volume_confirmed"] = True
 
         # Stop loss: Swing high of recent 5 bars + buffer
-        recent_high = float(df_5m["High"].iloc[-5:].max())
+        recent_high = float(df_5m_ind["High"].iloc[-5:].max())
         stop_loss = recent_high + (0.5 * curr_atr)
 
     else:  # LONG
@@ -228,7 +253,7 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
             return _no_trade(f"NO TRADE: continuation volume ({curr_vol:,.0f}) below 80% of average ({vol_avg:,.0f}).", "VOLUME_BELOW_THRESHOLD")
         checklist["volume_confirmed"] = True
 
-        recent_low = float(df_5m["Low"].iloc[-5:].min())
+        recent_low = float(df_5m_ind["Low"].iloc[-5:].min())
         stop_loss = recent_low - (0.5 * curr_atr)
 
     # 7. Reward-to-Risk Calculation (Cost-Adjusted 2R)
