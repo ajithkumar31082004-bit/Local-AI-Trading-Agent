@@ -1,0 +1,40 @@
+# ORB (Opening Range Breakout) + EMA20 + Volume Strategy Configuration
+session_start: "09:30"
+timezone: "America/New_York"
+session_length_minutes: 390
+orb_minutes: 15
+ema_period: 20
+volume_period: 20
+atr_period: 14
+max_ema_crosses: 2
+max_extension_atr: 1.0
+retest_tolerance: 0.15
+rejection_wick_body_ratio: 1.0
+max_bars_after_breakout: 12
+stop_buffer: 0.05
+target_r: 2.0
+
+# Execution and Cost Parameters
+sl_mode: "retest_candle"        # Options: "retest_candle", "orb_boundary"
+cost_points: 0.05               # Total fee + spread cost points
+fee_pct_per_side: 0.01          # 0.01% Delta Exchange maker/taker
+spread_pct_round_trip: 0.02     # 0.02% estimated round-trip spread
+slippage_pct_round_trip: 0.02   # 0.02% estimated execution slippage
+
+# Risk Parameters
+risk_pct: 0.5                   # 0.5% risk per trade
+daily_loss_limit_inr: 15.0      # Fixed daily loss limit in INR (e.g. ₹15 on ₹100 account)
+daily_loss_limit_pct: 1.5       # Or % of equity
+max_trades_per_day: 1
+cooldown_after_loss_minutes: 60
+usd_inr_rate: 86.5              # Current USD/INR conversion rate
+contract_size_xaut: 0.001       # 1 Lot = 0.001 XAUT
+lot_increment: 1
+leverage: 100.0                 # Up to 100x leverage on Delta
+max_margin_pct_equity: 50.0
+
+# High Impact Macro Event Blackouts (ISO timestamps in UTC or +/- 30m manual windows)
+# Example: ["2026-03-12T12:30:00+00:00", "2026-03-19T18:00:00+00:00"]
+news_blackout_windows: []
+news_blackout_buffer_minutes: 30
+

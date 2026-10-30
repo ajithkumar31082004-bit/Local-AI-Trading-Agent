@@ -53,9 +53,12 @@ class Settings(BaseModel):
 
     # Delta Exchange Configuration
     delta_exchange_enabled: bool = os.getenv("DELTA_EXCHANGE_ENABLED", "false").lower() == "true"
-    delta_exchange_base_url: str = os.getenv("DELTA_EXCHANGE_BASE_URL", "https://india.delta.exchange")
+    delta_exchange_base_url: str = os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange").rstrip("/")
     delta_exchange_api_key: str = os.getenv("DELTA_EXCHANGE_API_KEY", "")
     delta_exchange_api_secret: str = os.getenv("DELTA_EXCHANGE_API_SECRET", "")
+    trading_mode: str = os.getenv("TRADING_MODE", os.getenv("ORB_MODE", "PAPER")).upper()
+    live_trading_acknowledged: str = os.getenv("LIVE_TRADING_ACKNOWLEDGED", "NO").upper()
+    emergency_kill_switch: bool = os.getenv("EMERGENCY_KILL_SWITCH", "false").lower() == "true"
 
     # NewsAPI Configuration
     newsapi_key: str = os.getenv("NEWSAPI_KEY", "")

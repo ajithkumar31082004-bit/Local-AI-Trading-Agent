@@ -14,9 +14,12 @@ Local_AI_Agent/
 ├── app.py                      # Streamlit Multi-Page Trading Dashboard
 ├── config/
 │   ├── settings.py             # Pydantic configuration & .env loader
+│   ├── orb_settings.py         # ORB & Delta parameters dataclass
+│   ├── orb.yaml                # YAML backtest & session configuration
 │   └── __init__.py
 ├── agents/                     # Specialized AI Agents
 │   ├── ollama_client.py        # Local Ollama HTTP interface for llama3.2:1b
+│   ├── orb_tools.py            # 6+ Deterministic ORB tools for LLM agent
 │   ├── market_research.py      # Agent 1: Market Research (Price action, OHLCV facts)
 │   ├── technical_analysis.py   # Agent 2: Technical Analysis (SMA, EMA, RSI, MACD, BB)
 │   ├── strategy_agent.py       # Agent 3: Strategy (Evaluates deterministic rules)
@@ -25,25 +28,27 @@ Local_AI_Agent/
 │   └── trading_supervisor.py   # Agent 6: Supervisor (Workflow orchestration & trade gate)
 ├── market_data/                # Market Data Providers
 │   ├── base.py                 # Abstract BaseMarketDataProvider interface
+│   ├── delta_candles.py        # Public Delta Exchange India OHLCV client
+│   ├── news_provider.py        # Gold macro headlines & event blackout filter (Header auth)
 │   ├── yfinance_provider.py    # Yahoo Finance feed with caching & validation
 │   └── mock_provider.py        # Offline synthetic generator for reproducible testing
 ├── services/                   # Deterministic Core Financial Services
+│   ├── delta_risk.py           # Tiny-account INR risk guard, 1 lot = 0.001 XAUT, 1 trade/day
+│   ├── orb_backtest.py         # Chronological backtest replay with walk-forward analysis
 │   ├── indicators.py           # Pure Python indicator calculations (Wilder's RSI, MACD, ATR)
 │   ├── signal_engine.py        # Strategy signal coordinator
 │   ├── risk_manager.py         # Position sizing and hard risk limit enforcement
 │   ├── paper_broker.py         # Simulated order execution with slippage & transaction fees
-│   ├── portfolio_service.py    # Mark-to-market valuations and trade statistics
-│   └── backtester.py           # Strict candle-by-candle backtesting engine
-├── strategies/                 # Trading Strategies
-│   ├── base.py                 # BaseStrategy contract
-│   ├── moving_average.py       # EMA Crossover Strategy
-│   ├── rsi_strategy.py         # RSI Mean-Reversion with Confirmation
-│   ├── trend_following.py      # Multi-Factor Trend Following (Trend + RSI + Volume)
-│   └── custom_strategy.py      # Flexible user-configurable indicator rules
-├── database/                   # SQLite Persistence
-│   ├── models.py               # Domain dataclasses (Trade, Position, Signal, Snapshot)
-│   └── repository.py           # Thread-safe SQLite repository with WAL mode & transactions
+│   └── portfolio_service.py    # Mark-to-market valuations and trade statistics
+├── strategy/                   # ORB Strategy
+│   └── orb_ema_volume.py       # Deterministic 15m ORB + EMA20 + Volume + Retest rules
+├── journal/
+│   └── orb_journal.py          # Append-only SQLite journal + CSV export + Telegram alerts
+├── scripts/
+│   ├── fetch_candles.py        # CLI to download N days of 5m candles from Delta India
+│   └── run_backtest.py         # CLI backtest runner with walk-forward & equity curve export
 ├── ui/                         # Streamlit Dashboard Views
+│   ├── orb_setup.py            # ORB Setup monitor, 8-point checklist & backtesting tab
 │   ├── dashboard.py            # Portfolio equity, cash, open positions, P&L
 │   ├── market_watch.py         # Candlestick charts, overlays & indicator subplots
 │   ├── assistant.py            # Conversational AI assistant grounded in tool data
@@ -51,60 +56,11 @@ Local_AI_Agent/
 │   ├── paper_trading.py        # Order desk with pre-trade risk audit & user confirmation
 │   ├── backtesting.py          # Backtest runner, equity curves & trade logs
 │   └── risk_settings.py        # Configurable risk thresholds & account reset
-├── tests/                      # Automated Test Suite (23 automated unit tests)
-│   ├── test_indicators.py
-│   ├── test_strategies.py
-│   ├── test_risk_manager.py
-│   ├── test_paper_broker.py
-│   ├── test_backtester.py
-│   ├── test_ollama_resilience.py
-│   └── test_app_import.py
-├── single_agent/               # Preserved original single-agent chat app
-├── multi_agent/                # Preserved original dual-agent chat app
+├── tests/                      # Automated Test Suite (96 automated unit & integration tests)
 ├── requirements.txt            # Project dependencies
 ├── .env.example                # Sample environment variables
 └── README.md                   # This documentation
 ```
-
----
-
-## Core Features
-
-### 1. Multi-Agent AI System
-- **Agent 1: Market Research Agent**: Analyzes OHLCV price action, trends, and volume; strictly distinguishes observed market facts from AI interpretation.
-- **Agent 2: Technical Analysis Agent**: Calculates technical indicators in pure Python without LLM hallucination:
-  - SMA (20, 50)
-  - EMA (12, 26)
-  - Wilder's RSI (14)
-  - MACD (12, 26, 9)
-  - Bollinger Bands (20, 2)
-  - ATR (14)
-  - 20-period Volume SMA & surge ratio
-  - Support and resistance levels
-- **Agent 3: Strategy Agent**: Generates deterministic `BUY`, `SELL`, `HOLD`, or `NO_SIGNAL` outputs with clear entry conditions and invalidation criteria.
-- **Agent 4: Risk Management Agent**: Audits every proposed order against portfolio risk rules:
-  - Risk per trade (% of equity)
-  - Position sizing based on distance to stop-loss: $\text{Size} = \frac{\text{Equity} \times \text{Risk\%}}{\text{Price} - \text{SL}}$
-  - Maximum position allocation limit (% of portfolio)
-  - Maximum daily realized loss circuit breaker
-  - Maximum open positions ceiling
-  - Transaction fee and slippage modeling
-- **Agent 5: Portfolio Agent**: Tracks starting capital, liquid cash, unrealized/realized P&L, drawdown from peak, win rate, and profit factor.
-- **Agent 6: Trading Supervisor**: Orchestrates the multi-agent pipeline and enforces mandatory user confirmation before any simulated trade execution.
-
-### 2. Local-First & Privacy-Preserving
-- **Local LLM**: Powered by Ollama running `llama3.2:1b` at `http://localhost:11434`.
-- **Zero Cloud Leakage**: No private trading data, account balances, or prompts leave your machine.
-- **Deterministic Math**: LLM models explain and synthesize, but all indicator values, position sizing, and signals are computed in deterministic Python.
-
-### 3. Comprehensive Streamlit UI
-- **Dashboard**: High-level portfolio equity, cash, unrealized & realized P&L, open positions table, and recent trades.
-- **Market Watch**: Interactive Plotly candlestick charts, overlays (SMA, EMA, Bollinger Bands), volume bars, RSI subplots, and support/resistance zones. Supports US equities (e.g., `AAPL`, `MSFT`, `NVDA`) and Indian NSE symbols (e.g., `RELIANCE.NS`, `TCS.NS`, `INFY.NS`).
-- **AI Trading Assistant**: Conversational reasoning directly with `llama3.2:1b`, grounded in tool telemetry. Try asking: *"Analyze AAPL"* or *"Explain RSI"*.
-- **Trading Signals**: Visual evaluation of all strategies with color-coded status badges, rationales, and stop-loss/take-profit targets.
-- **Paper Trading**: Virtual order desk with real-time pre-trade risk checks (dollar risk, max allowed size, effective slippage, fees) and explicit user execution confirmation.
-- **Strategy Backtesting**: Event-driven candle-by-candle historical simulation with look-ahead bias protection, next-bar execution, fees, slippage, and interactive equity vs. benchmark charts.
-- **Risk Settings**: Sliders to adjust risk limits and an account reset utility.
 
 ---
 
@@ -121,95 +77,140 @@ Open PowerShell and pull `llama3.2:1b`:
 ollama pull llama3.2:1b
 ollama list
 ```
-Confirm `llama3.2:1b` appears in the list.
 
 ### Step 2: Set Up Virtual Environment & Dependencies
-In PowerShell, navigate to the project directory:
 ```powershell
 cd c:\Users\ajith\Downloads\Local_AI_Agent
-
-# Create and activate virtual environment
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-
-# Install requirements
 pip install -r requirements.txt
 ```
 
-### Step 3: Configure Environment Variables (Optional)
-Copy `.env.example` to `.env`:
-```powershell
-Copy-Item .env.example .env
-```
-Default settings will work out of the box (`http://localhost:11434` with `llama3.2:1b`).
-
-### Step 4: Run Automated Tests
-Verify all 23 unit tests pass:
+### Step 3: Run Automated Tests
+Verify all 96 unit & integration tests pass (includes hard mock safety guard):
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/ -v
 ```
 
-### Step 5: Launch the Streamlit Dashboard
+### Step 4: Launch the Streamlit Dashboard
 ```powershell
 .\.venv\Scripts\streamlit.exe run app.py
 ```
-Open your browser at `http://localhost:8501`.
+Open your browser at `http://localhost:8501`. Select **"ORB Setup"** in the sidebar to view the XAUUSD strategy monitor.
 
 ---
 
-## Strategy Details
+## Mode Isolation & Delta Exchange Live Trading Architecture
 
-1. **Moving Average Crossover**:
-   - Golden Cross: Short EMA (12) crosses above Long EMA (26) $\rightarrow$ `BUY` signal with ATR-based trailing stop.
-   - Death Cross: Short EMA (12) crosses below Long EMA (26) $\rightarrow$ `SELL` signal.
-   - Prevents whipsaws by requiring previous candle state confirmation.
+The platform strictly isolates paper trading, alert monitoring, and live order execution across three explicit operational modes:
 
-2. **RSI Reversal with Confirmation**:
-   - Reversal: Triggers `BUY` only when 14-period RSI dips into oversold ($\le 30$) and crosses back upward with volume confirmation.
-   - Prevents catching falling knives in strong downtrends.
+| Mode | Description | Real API Calls | Order Placement |
+|---|---|---|---|
+| `PAPER` *(default)* | Simulated virtual equity & virtual trade fills in SQLite. | Read-only public market data | **None** |
+| `ALERT_ONLY` | Evaluates real live market data and signals without order placement. | Read-only public market data & balances | **None** |
+| `LIVE` | Real account equity, real margin, and protective bracket order execution. | Authenticated REST endpoints | **Live bracket orders (SL/TP)** |
 
-3. **Multi-Factor Trend Following**:
-   - Requires confluence of Price > 50-day SMA, 12-EMA > 26-EMA, positive MACD histogram, healthy RSI (45-75), and volume expansion.
-
-4. **Custom Flexible Strategy**:
-   - Allows traders to toggle and tune moving average filters, RSI thresholds, and Bollinger Band boundary touches directly in the UI.
-
----
-
-## Backtesting Methodology & Look-Ahead Protection
-
-- **Event-Driven Next-Bar Execution**: If a signal is triggered at candle $t$ close, execution occurs strictly at candle $t+1$ Open.
-- **Realistic Friction**: Every backtested trade accounts for user-configurable broker commissions (default 0.1%) and execution slippage (default 0.05%).
-- **Conservative Intra-Bar Assumptions**: If both Stop-Loss and Take-Profit price levels are touched within the same candle's High-Low range, the simulator conservatively assumes the Stop-Loss was triggered first.
-- **Performance Reporting**:
-  - Total Return % vs. Benchmark Buy & Hold %
-  - Annualized Return %
-  - Maximum Drawdown %
-  - Sharpe Ratio (annualized using daily return volatility)
-  - Win Rate % & Profit Factor
-  - Complete trade-by-trade log
-
----
-
-## Preserved Legacy Apps
-
-The original general-purpose single-agent and multi-agent chat apps are preserved in their respective subdirectories:
-- `single_agent/app.py`: CrewAI single-agent chat.
-- `multi_agent/app.py`: CrewAI dual-agent pipeline (Assistant + Editor).
-
-To run them individually:
-```powershell
-cd single_agent
-streamlit run app.py
-
-cd multi_agent
-streamlit run app.py
+### Safety Controls & Dual Confirmation
+To activate live trading, you must explicitly set **both** environment variables in your private `.env` file:
+```env
+TRADING_MODE=LIVE
+LIVE_TRADING_ACKNOWLEDGED=YES
+DELTA_EXCHANGE_ENABLED=true
+DELTA_EXCHANGE_BASE_URL=https://api.india.delta.exchange
+DELTA_EXCHANGE_API_KEY=your_live_trading_api_key
+DELTA_EXCHANGE_API_SECRET=your_live_trading_api_secret
 ```
+If `LIVE_TRADING_ACKNOWLEDGED` is not `YES`, or if credentials are placeholders, the system safely halts and refuses to execute orders.
+
+### 10-Point Pre-Flight Safety Audit
+Before any live order is dispatched, the `DeltaLiveExecutor` verifies:
+1. Operational mode is strictly `LIVE`.
+2. Secondary acknowledgment `LIVE_TRADING_ACKNOWLEDGED=YES`.
+3. Emergency kill switch is inactive.
+4. Non-placeholder API credentials configured.
+5. Tradable product verified (XAUTUSD, Product ID 131253).
+6. Authenticated account state & positive equity retrieved.
+7. Zero conflicting open positions or pending orders.
+8. Signal freshness & idempotency (prevents duplicate orders for the same 5m candle).
+9. Daily risk guard check (1 trade/day limit & daily loss cooldown).
+10. Sized lots $\ge 1$ and required margin $\le$ free available collateral.
+
+---
+
+## CLI Management & Telemetry Commands
+
+### 1. Inspect Verified Real Account Equity (Read-Only)
+Inspect authenticated wallet balance, equity, available free margin, used margin, and open positions:
+```powershell
+.\.venv\Scripts\python cli.py account --asset USD
+```
+
+### 2. Evaluate Current Market Signal Once
+Fetch completed 5m candles and audit strategy rules and risk:
+```powershell
+.\.venv\Scripts\python cli.py once --candles 500
+```
+
+### 3. Reconcile Live Orders with Delta Exchange
+Reconcile local transactional SQLite order records with exchange states (`GET /v2/orders/client_order_id/{id}`):
+```powershell
+# Reconcile all pending / unconfirmed orders
+.\.venv\Scripts\python cli.py reconcile
+
+# Reconcile a specific custom client order ID
+.\.venv\Scripts\python cli.py reconcile --order-id ORB_1730218800_abc123
+```
+
+### 4. Emergency Kill Switch Order Cancellation
+Immediately cancel all active open orders on Delta Exchange via `DELETE /v2/orders/all` and update local state:
+```powershell
+.\.venv\Scripts\python cli.py emergency-cancel --confirm
+```
+You can also set `EMERGENCY_KILL_SWITCH=true` in `.env` to permanently block any new entries.
+
+
+---
+
+## CLI Tools & Workflows
+
+### 1. Fetch 5m Historical Candles from Delta Exchange India
+Downloads completed 5-minute candles directly from the public REST API (`GET /v2/history/candles`) with bounded retries, gap detection, zero-volume warning, and saves to CSV:
+```powershell
+.\.venv\Scripts\python scripts/fetch_candles.py --symbol XAUTUSD --days 7 --out data/xautusd_5m.csv
+```
+
+### 2. Run ORB Strategy Backtests
+Run chronological historical backtests with fees, spread, slippage, and conservative SL-first collision handling:
+```powershell
+# Standard backtest replay
+.\.venv\Scripts\python scripts/run_backtest.py data/xautusd_5m.csv --config config/orb.yaml --equity 1000
+
+# 70/30 Walk-Forward analysis (in-sample vs out-of-sample) to check overfitting
+.\.venv\Scripts\python scripts/run_backtest.py data/xautusd_5m.csv --walk-forward
+```
+
+### 3. Telegram Alerts Configuration (Optional)
+In your `.env`:
+```env
+TELEGRAM_BOT_TOKEN="your_bot_token"
+TELEGRAM_CHAT_ID="your_chat_id"
+```
+When configured, completed valid ORB signals automatically trigger instant alerts. Off by default.
+
+### 4. Macro Event News Blackout Window
+In `config/orb.yaml`:
+```yaml
+news_blackout_windows:
+  - "2026-03-12T12:30:00+00:00"  # US CPI Release
+  - "2026-03-19T18:00:00+00:00"  # FOMC Decision
+news_blackout_buffer_minutes: 30
+```
+Trades are strictly blocked within ±30 minutes of scheduled high-impact events.
 
 ---
 
 ## Known Limitations & Disclaimers
 
-1. **Public Market Data Delay**: Free market data feeds from Yahoo Finance are delayed by 15-20 minutes. Do not use for high-frequency or tick-level execution.
-2. **Local Model Capacity**: `llama3.2:1b` is an ultra-compact 1.3 GB local model. System prompts are optimized for concise, factual explanations. If you have a dedicated GPU, you can switch to `llama3.2:3b` or `qwen2.5:7b` in `.env`.
-3. **No Financial Advice**: This software is intended purely for research, backtesting, and educational paper trading. It is not financial or investment advice.
+1. **Tiny Account Leverage Risk**: Trading derivatives with leverage up to 100x carries substantial risk of liquidation. Always adhere to the strict INR risk budget.
+2. **Market Data Latency**: Public candle feeds may experience occasional network latency or rate limiting (HTTP 429).
+3. **No Financial Advice**: This software is intended strictly for quantitative research, backtesting, and educational paper trading. It is not financial or investment advice.

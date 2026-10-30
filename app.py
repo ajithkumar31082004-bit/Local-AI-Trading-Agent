@@ -7,6 +7,7 @@ from market_data.yfinance_provider import YFinanceProvider
 from agents.trading_supervisor import TradingSupervisor
 from agents.ollama_client import OllamaClient
 from ui.dashboard import render_dashboard
+from ui.orb_setup import render_orb_setup
 from ui.market_watch import render_market_watch
 from ui.signals import render_signals
 from ui.paper_trading import render_paper_trading
@@ -45,15 +46,19 @@ def main():
 
     # Sidebar Navigation
     st.sidebar.title("📈 AI Trading Agent")
+    current_mode = getattr(settings, "trading_mode", "PAPER")
+    mode_color = "#D50000" if current_mode == "LIVE" else "#FF8F00" if current_mode == "ALERT_ONLY" else "#1E3A8A"
+    badge_label = "⚡ LIVE TRADING ACTIVE" if current_mode == "LIVE" else "🔔 ALERT ONLY MODE" if current_mode == "ALERT_ONLY" else "🛡️ PAPER TRADING ONLY"
     st.sidebar.markdown(
-        "<div style='background-color: #1E3A8A; color: white; padding: 6px 12px; border-radius: 6px; font-weight: bold; text-align: center; margin-bottom: 12px;'>"
-        "🛡️ PAPER TRADING ONLY</div>",
+        f"<div style='background-color: {mode_color}; color: white; padding: 6px 12px; border-radius: 6px; font-weight: bold; text-align: center; margin-bottom: 12px;'>"
+        f"{badge_label}</div>",
         unsafe_allow_html=True,
     )
 
     # Navigation Selection
     menu_options = [
         "Dashboard",
+        "ORB Setup",
         "Market Watch",
         "AI Assistant",
         "Trading Signals",
@@ -80,8 +85,9 @@ def main():
         st.sidebar.error("Ollama: Disconnected")
 
     # Supabase Cloud Status
-    if repo.supabase and repo.supabase.enabled:
-        sb_status = repo.supabase.check_connection()
+    supabase_client = getattr(repo, "supabase", None)
+    if supabase_client and getattr(supabase_client, "enabled", False):
+        sb_status = supabase_client.check_connection()
         if sb_status["available"]:
             st.sidebar.success("Supabase: Cloud Sync Active")
         else:
@@ -93,6 +99,8 @@ def main():
     # Render selected view
     if choice == "Dashboard":
         render_dashboard(repo, data_provider)
+    elif choice == "ORB Setup":
+        render_orb_setup()
     elif choice == "Market Watch":
         render_market_watch(data_provider)
     elif choice == "AI Assistant":
