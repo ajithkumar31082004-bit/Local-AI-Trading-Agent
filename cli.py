@@ -22,13 +22,13 @@ DISCLAIMER = "Educational research tool, not financial advice. Mode determines e
 
 
 def get_mode_banner(mode: str, kill_switch: bool = False) -> str:
-    """Return explicit, unambiguous operational mode and disclaimer banner."""
-    ks_str = " | ⚠️ EMERGENCY KILL SWITCH ACTIVE (All order entry blocked)" if kill_switch else ""
+    """Return explicit, unambiguous operational mode and disclaimer banner (ASCII safe for Windows console)."""
+    ks_str = " | [!] EMERGENCY KILL SWITCH ACTIVE (All order entry blocked)" if kill_switch else ""
     if mode == "LIVE":
-        return f"⚠️  LIVE TRADING MODE ACTIVE: Real capital at risk. Live orders are sent to Delta Exchange India upon confirmed signal.{ks_str}"
+        return f"[!] LIVE TRADING MODE ACTIVE: Real capital at risk. Live orders are sent to Delta Exchange India upon confirmed signal.{ks_str}"
     elif mode == "ALERT_ONLY":
-        return f"ℹ️  ALERT-ONLY MODE: Real market data & signals evaluated. No orders are sent to the exchange.{ks_str}"
-    return f"🛡️  PAPER TRADING MODE: Educational simulation. All orders, balances, and P&L tracking are virtual.{ks_str}"
+        return f"[i] ALERT-ONLY MODE: Real market data & signals evaluated. No orders are sent to the exchange.{ks_str}"
+    return f"[*] PAPER TRADING MODE: Educational simulation. All orders, balances, and P&L tracking are virtual.{ks_str}"
 
 
 
