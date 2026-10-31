@@ -247,3 +247,98 @@ def test_session_end_liquidation_in_backtest():
     res = run_backtest(df, cfg=cfg, strategy_fn=evaluate_trend_following)
     if res.trades > 0:
         assert any(t["exit_reason"] in {"SESSION_END", "END_OF_DAY"} for t in res.trade_log)
+
+
+def test_regime_filter_choppy_adx_rejected():
+    """Verify that when use_regime_filter is True, low 15m ADX (< min_15m_adx) rejects entry."""
+    cfg = make_cfg(use_regime_filter=True, min_15m_adx=99.0)  # Threshold above actual 97.85 ADX
+    idx = pd.date_range("2026-10-30 07:00", periods=160, freq="5min", tz="Asia/Kolkata")
+    closes = [4100.0 - (i * 0.8) for i in range(160)]
+    opens = [c + 0.5 for c in closes]
+    highs = [c + 2.0 for c in closes]
+    lows = [c - 2.0 for c in closes]
+    vols = [100000.0] * 160
+    closes[156] = closes[155] + 5.0
+    highs[156] = closes[156] + 4.0
+    opens[159] = closes[158] + 1.0
+    highs[159] = opens[159] + 3.0
+    closes[159] = opens[159] - 4.0
+    lows[159] = closes[159] - 0.5
+    vols[159] = 150000.0
+
+    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "REGIME_CHOPPY_LOW_ADX"
+
+
+def test_regime_filter_flat_ema_slope_rejected():
+    """Verify that when use_regime_filter is True and EMAs are too close, REGIME_FLAT_EMA_SLOPE triggers."""
+    cfg = make_cfg(use_regime_filter=True, min_15m_adx=5.0, min_ema_separation_atr=50.0)  # Unattainable EMA separation
+    idx = pd.date_range("2026-10-30 07:00", periods=160, freq="5min", tz="Asia/Kolkata")
+    closes = [4100.0 - (i * 0.8) for i in range(160)]
+    opens = [c + 0.5 for c in closes]
+    highs = [c + 2.0 for c in closes]
+    lows = [c - 2.0 for c in closes]
+    vols = [100000.0] * 160
+    closes[156] = closes[155] + 5.0
+    highs[156] = closes[156] + 4.0
+    opens[159] = closes[158] + 1.0
+    highs[159] = opens[159] + 3.0
+    closes[159] = opens[159] - 4.0
+    lows[159] = closes[159] - 0.5
+    vols[159] = 150000.0
+
+    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "REGIME_FLAT_EMA_SLOPE"
+
+
+def test_friction_exceeds_tolerance_rejected():
+    """Verify that when round-trip friction exceeds max_friction_to_risk_ratio, trade is rejected."""
+    cfg = make_cfg(max_friction_to_risk_ratio=0.01)  # Very tight friction tolerance (1%)
+    idx = pd.date_range("2026-10-30 07:00", periods=160, freq="5min", tz="Asia/Kolkata")
+    closes = [4100.0 - (i * 0.8) for i in range(160)]
+    opens = [c + 0.5 for c in closes]
+    highs = [c + 2.0 for c in closes]
+    lows = [c - 2.0 for c in closes]
+    vols = [100000.0] * 160
+    closes[156] = closes[155] + 5.0
+    highs[156] = closes[156] + 4.0
+    opens[159] = closes[158] + 1.0
+    highs[159] = opens[159] + 3.0
+    closes[159] = opens[159] - 4.0
+    lows[159] = closes[159] - 0.5
+    vols[159] = 150000.0
+
+    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "FRICTION_EXCEEDS_TOLERANCE"
+
+
+def test_minimum_stop_distance_enforced():
+    """Verify that stop-loss is placed at least min_stop_distance_atr * ATR away from entry."""
+    cfg = make_cfg(min_stop_distance_atr=2.5)  # Enforce 2.5x ATR min stop
+    idx = pd.date_range("2026-10-30 07:00", periods=160, freq="5min", tz="Asia/Kolkata")
+    closes = [4100.0 - (i * 0.8) for i in range(160)]
+    opens = [c + 0.5 for c in closes]
+    highs = [c + 2.0 for c in closes]
+    lows = [c - 2.0 for c in closes]
+    vols = [100000.0] * 160
+    closes[156] = closes[155] + 5.0
+    highs[156] = closes[156] + 4.0
+    opens[159] = closes[158] + 1.0
+    highs[159] = opens[159] + 3.0
+    closes[159] = opens[159] - 4.0
+    lows[159] = closes[159] - 0.5
+    vols[159] = 150000.0
+
+    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    if sig.direction == "SHORT":
+        stop_dist = abs(sig.sl - sig.entry)
+        # ATR on this synthetic series is ~4.0, so stop_dist should be >= 2.5 * ATR
+        assert stop_dist >= 10.0
+

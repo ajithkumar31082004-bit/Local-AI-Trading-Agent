@@ -162,16 +162,18 @@ def run_backtest(
                         exit_price = float(candle["Close"])
                         exit_reason = "SESSION_END"
 
-                    raw_risk = abs(pending_trade["entry"] - sl)
-                    gross_r = ((exit_price - pending_trade["entry"]) / raw_risk) if side == "LONG" else ((pending_trade["entry"] - exit_price) / raw_risk)
-
                     # Deduct trading friction (fees + spread + slippage)
-                    _, fee_cost, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], sl, cfg)
-                    per_lot_risk = max(abs(pending_trade["entry"] - sl) * cfg.contract_size_xaut, 1e-12)
-                    cost_r = (fee_cost + spread_slip_cost) / per_lot_risk
-                    net_r = gross_r - cost_r
+                    contract_qty = pending_trade["lots"] * cfg.contract_size_xaut
+                    price_delta = (exit_price - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - exit_price)
+                    gross_pnl_cash = contract_qty * price_delta
 
-                    pnl_cash = equity * (cfg.risk_pct / 100.0) * net_r
+                    _, fee_cost, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], sl, cfg)
+                    total_friction = (fee_cost + spread_slip_cost) * pending_trade["lots"]
+                    pnl_cash = gross_pnl_cash - total_friction
+
+                    risk_budget = equity * (cfg.risk_pct / 100.0)
+                    net_r = pnl_cash / risk_budget if risk_budget > 0 else 0.0
+
                     equity += pnl_cash
                     day_r += net_r
                     trades_today += 1
@@ -239,15 +241,17 @@ def run_backtest(
             last_ts = day_frame.index[-1]
             exit_price = float(day_frame["Close"].iloc[-1])
             side = pending_trade["direction"]
-            raw_risk = abs(pending_trade["entry"] - pending_trade["sl"])
-            gross_r = ((exit_price - pending_trade["entry"]) / raw_risk) if side == "LONG" else ((pending_trade["entry"] - exit_price) / raw_risk)
+            contract_qty = pending_trade["lots"] * cfg.contract_size_xaut
+            price_delta = (exit_price - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - exit_price)
+            gross_pnl_cash = contract_qty * price_delta
 
             _, fee_cost, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], pending_trade["sl"], cfg)
-            per_lot_risk = max(abs(pending_trade["entry"] - pending_trade["sl"]) * cfg.contract_size_xaut, 1e-12)
-            cost_r = (fee_cost + spread_slip_cost) / per_lot_risk
-            net_r = gross_r - cost_r
+            total_friction = (fee_cost + spread_slip_cost) * pending_trade["lots"]
+            pnl_cash = gross_pnl_cash - total_friction
 
-            pnl_cash = equity * (cfg.risk_pct / 100.0) * net_r
+            risk_budget = equity * (cfg.risk_pct / 100.0)
+            net_r = pnl_cash / risk_budget if risk_budget > 0 else 0.0
+
             equity += pnl_cash
             day_r += net_r
             trades_today += 1

@@ -34,6 +34,11 @@ class ORBSettings:
     last_entry_time: str = os.getenv("ORB_LAST_ENTRY_TIME", "22:00")
     cooldown_bars_after_loss: int = _int("ORB_COOLDOWN_BARS_AFTER_LOSS", 6)
     daily_loss_limit_r: float = _float("ORB_DAILY_LOSS_LIMIT_R", 2.0)
+    use_regime_filter: bool = os.getenv("USE_REGIME_FILTER", "false").lower() == "true"
+    min_15m_adx: float = _float("MIN_15M_ADX", 22.0)
+    min_ema_separation_atr: float = _float("MIN_EMA_SEPARATION_ATR", 0.3)
+    min_stop_distance_atr: float = _float("MIN_STOP_DISTANCE_ATR", 1.0)
+    max_friction_to_risk_ratio: float = _float("MAX_FRICTION_TO_RISK_RATIO", 0.25)
     orb_minutes: int = _int("ORB_MINUTES", 15)
     ema_period: int = _int("ORB_EMA_PERIOD", 20)
     ema_fast_period: int = _int("ORB_EMA_FAST_PERIOD", 20)

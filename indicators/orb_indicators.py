@@ -83,6 +83,41 @@ def ema_cross_count(close: pd.Series, ema_line: pd.Series, lookback: int = 10) -
     return int(np.count_nonzero(signs[1:] != signs[:-1]))
 
 
+def adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+    """Calculate Welles Wilder's Average Directional Index (ADX) without lookahead bias.
+    
+    Returns NaN for bars before min_periods is satisfied.
+    ADX >= 22-25 indicates trending market regime; ADX < 20 indicates ranging/choppy regime.
+    """
+    if period < 1:
+        raise ValueError("period must be >= 1")
+    if high.empty or low.empty or close.empty:
+        return pd.Series(dtype=float)
+    
+    prev_close = close.astype(float).shift(1)
+    tr1 = high.astype(float) - low.astype(float)
+    tr2 = (high.astype(float) - prev_close).abs()
+    tr3 = (low.astype(float) - prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    
+    up_move = high.astype(float) - high.astype(float).shift(1)
+    down_move = low.astype(float).shift(1) - low.astype(float)
+    
+    pos_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    neg_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    
+    alpha = 1.0 / period
+    tr_smooth = pd.Series(tr).ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+    pos_dm_smooth = pd.Series(pos_dm, index=close.index).ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+    neg_dm_smooth = pd.Series(neg_dm, index=close.index).ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+    
+    pos_di = 100.0 * (pos_dm_smooth / (tr_smooth + 1e-12))
+    neg_di = 100.0 * (neg_dm_smooth / (tr_smooth + 1e-12))
+    
+    dx = 100.0 * (pos_di - neg_di).abs() / (pos_di + neg_di + 1e-12)
+    return dx.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+
+
 def add_orb_indicators(frame: pd.DataFrame, ema_period: int = 20,
                        volume_period: int = 20, atr_period: int = 14) -> pd.DataFrame:
     """Enrich OHLCV DataFrame with deterministic ORB indicators without lookahead bias."""
