@@ -339,14 +339,17 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
         if i <= breakout_i:
             continue
 
-        # Step 2: Retest & Rejection candle verification
+        # Step 2: Retest & Rejection candle verification or confirmed continuation
         if breakout_dir == "LONG":
             touches_level = low <= (orb_high + cfg.retest_tolerance)
             holds_level = close > orb_high
             is_bullish_close = close > opn
             lower_wick = min(opn, close) - low
             body = max(abs(close - opn), 1e-9)
+            candle_range = max(high - low, 1e-9)
             rejection_formed = is_bullish_close and (lower_wick >= body * cfg.rejection_wick_body_ratio)
+            continuation_formed = is_bullish_close and (body / candle_range >= 0.50) and (vol >= float(vol_avg))
+            entry_confirmed = (touches_level and holds_level and rejection_formed) or continuation_formed
             ema_trend_ok = (close > float(ema_now)) and (float(ema_now) > float(ema_prev))
             too_extended = pd.notna(atr_now) and ((close - orb_high) > cfg.max_extension_atr * float(atr_now))
         else:
@@ -355,11 +358,14 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
             is_bearish_close = close < opn
             upper_wick = high - max(opn, close)
             body = max(abs(close - opn), 1e-9)
+            candle_range = max(high - low, 1e-9)
             rejection_formed = is_bearish_close and (upper_wick >= body * cfg.rejection_wick_body_ratio)
+            continuation_formed = is_bearish_close and (body / candle_range >= 0.50) and (vol >= float(vol_avg))
+            entry_confirmed = (touches_level and holds_level and rejection_formed) or continuation_formed
             ema_trend_ok = (close < float(ema_now)) and (float(ema_now) < float(ema_prev))
             too_extended = pd.notna(atr_now) and ((orb_low - close) > cfg.max_extension_atr * float(atr_now))
 
-        if touches_level and holds_level and rejection_formed:
+        if entry_confirmed:
             checklist.update({
                 "retest": True,
                 "rejection": True,

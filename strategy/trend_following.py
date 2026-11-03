@@ -151,13 +151,22 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
     macro_trend = "LONG" if is_bullish_15m else "SHORT"
     checklist["trend_15m_aligned"] = True
 
-    # 3a. Market-Regime Filter (ADX + EMA Slope/Separation)
+    # 3a. Trend strength & overextension filter
+    df_15m["ADX"] = adx(df_15m["High"], df_15m["Low"], df_15m["Close"], 14)
+    adx_15m = float(df_15m["ADX"].iloc[-1]) if pd.notna(df_15m["ADX"].iloc[-1]) else 0.0
+
+    # Empirical finding: Long setups in gold require confirmed macro trend strength (ADX >= 24)
+    if macro_trend == "LONG" and adx_15m < 24.0:
+        return _no_trade(
+            f"NO TRADE: bullish trend strength insufficient (15m ADX {adx_15m:.1f} < 24.0).",
+            "WEAK_BULLISH_TREND_ADX",
+            {"regime_trending": "WEAK_BULLISH_TREND_ADX"}
+        )
+
+    # 3b. Optional detailed regime filter (if explicitly enabled)
     if getattr(cfg, "use_regime_filter", False):
         df_15m["ATR"] = atr(df_15m["High"], df_15m["Low"], df_15m["Close"], 14)
-        df_15m["ADX"] = adx(df_15m["High"], df_15m["Low"], df_15m["Close"], 14)
-        last_15m = df_15m.iloc[-1]
-        atr_15m = float(last_15m["ATR"]) if pd.notna(last_15m["ATR"]) else 2.0
-        adx_15m = float(last_15m["ADX"]) if pd.notna(last_15m["ADX"]) else 0.0
+        atr_15m = float(df_15m["ATR"].iloc[-1]) if pd.notna(df_15m["ATR"].iloc[-1]) else 2.0
 
         if adx_15m < cfg.min_15m_adx:
             return _no_trade(

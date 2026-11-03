@@ -95,6 +95,9 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
         )
 
     # 2. Evaluate only strategies allowed by the identified regime
+    # Phase 3 mandate: BB_RSI_MEAN_REVERSION is kept disabled in the portfolio until positive expectancy is demonstrated
+    disabled_in_portfolio = {"BB_RSI_MEAN_REVERSION"}
+
     eval_dispatch = {
         "ORB": evaluate_orb,
         "TREND_FOLLOWING": evaluate_trend_following,
@@ -106,7 +109,21 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
 
     raw_signals: Dict[str, Signal] = {}
     for name, fn in eval_dispatch.items():
-        if name in regime_res.allowed_strategies:
+        if name in disabled_in_portfolio:
+            raw_signals[name] = Signal(
+                direction="NO TRADE",
+                entry=None,
+                sl=None,
+                tp=None,
+                r_multiple=0.0,
+                reason=f"NO TRADE: {name} disabled in portfolio pending out-of-sample positive expectancy.",
+                checklist={},
+                timestamp=str(frame.index[-1]) if not frame.empty else None,
+                diagnostic_code="STRATEGY_DISABLED_EXPERIMENTAL",
+                strategy_name=name,
+                quality_score=0.0,
+            )
+        elif name in regime_res.allowed_strategies:
             sig = fn(frame, cfg)
             if not sig.strategy_name:
                 sig.strategy_name = name

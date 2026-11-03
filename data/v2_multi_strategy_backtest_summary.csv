@@ -1,0 +1,14 @@
+Strategy,Trades,Win Rate (%),Net P&L ($),Profit Factor,Max DD (%),Expectancy (R),Total R,Avg Win ($),Avg Loss ($),Sharpe Ratio,Long Trades,Long Win Rate (%),Long P&L ($),Short Trades,Short Win Rate (%),Short P&L ($),Split
+1. ORB V2,6,33.33,0.57,1.07,0.08,0.0019,0.01,4.21,-1.96,0.48,4,25.0,-0.67,2,50.0,1.25,Full Period
+2. Trend-Following V2,45,37.78,17.19,1.09,0.53,0.0077,0.35,12.4,-6.91,0.59,13,15.38,-22.49,32,46.88,39.66,Full Period
+3. VWAP + EMA V2,53,35.85,7.42,1.03,0.73,0.0029,0.15,12.49,-6.76,0.23,22,18.18,-56.92,31,48.39,64.34,Full Period
+4. Bollinger + RSI (Disabled in Port),34,26.47,-99.49,0.39,0.99,-0.0588,-2.0,7.15,-6.55,-6.44,20,25.0,-75.91,14,28.57,-23.56,Full Period
+5. ATR Compression Breakout V2,33,30.3,-14.84,0.89,0.45,-0.0089,-0.29,12.54,-6.1,-0.79,10,30.0,-2.19,23,30.43,-12.63,Full Period
+6. Liquidity Sweep Reversal V2,22,31.82,-37.14,0.69,0.67,-0.0337,-0.74,11.84,-8.0,-2.72,13,23.08,-40.58,9,44.44,3.45,Full Period
+7. Strategy Intelligence V2 Portfolio,50,26.0,-92.15,0.63,1.49,-0.0369,-1.85,12.3,-6.81,-3.26,23,17.39,-67.78,27,33.33,-24.4,Full Period
+Original ORB Baseline,2,0.0,-4.16,0.0,0.04,-0.0416,-0.08,0.0,-2.08,-35.38,1,0.0,-1.42,1,0.0,-2.74,1. In-Sample / Dev (Aug 5 - Sep 15)
+Strategy Intelligence V2 Portfolio,28,25.0,-43.57,0.71,0.84,-0.0311,-0.87,15.07,-7.1,-2.46,15,26.67,-12.55,13,23.08,-31.04,1. In-Sample / Dev (Aug 5 - Sep 15)
+Original ORB Baseline,3,33.33,0.74,1.2,0.04,0.0049,0.01,4.42,-1.84,1.08,3,33.33,0.74,0,0.0,0.0,2. Validation (Sep 16 - Oct 15)
+Strategy Intelligence V2 Portfolio,16,25.0,-54.96,0.32,0.74,-0.0688,-1.1,6.41,-6.72,-8.68,7,0.0,-48.71,9,44.44,-6.26,2. Validation (Sep 16 - Oct 15)
+Original ORB Baseline,1,100.0,3.99,999.0,0.0,0.0797,0.08,3.99,0.0,0.0,0,0.0,0.0,1,100.0,3.99,3. Out-of-Sample / Test (Oct 16 - Oct 30)
+Strategy Intelligence V2 Portfolio,6,33.33,6.2,1.27,0.13,0.0208,0.12,14.61,-5.76,1.55,1,0.0,-6.8,5,40.0,12.99,3. Out-of-Sample / Test (Oct 16 - Oct 30)

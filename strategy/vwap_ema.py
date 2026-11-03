@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from config.orb_settings import ORBSettings, settings
-from indicators.orb_indicators import ema, atr, vwap, prior_volume_average, ema_slope
+from indicators.orb_indicators import ema, atr, adx, vwap, prior_volume_average, ema_slope
 from strategy.orb_ema_volume import Signal, calculate_cost_adjusted_target
 from risk.position_sizing import estimate_lot_risk
 from strategy.trend_following import resample_to_15m
@@ -112,15 +112,20 @@ def evaluate_vwap_ema(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signa
 
     df_15m["EMA20"] = ema(df_15m["Close"], 20)
     df_15m["EMA50"] = ema(df_15m["Close"], 50)
+    df_15m["ADX"] = adx(df_15m["High"], df_15m["Low"], df_15m["Close"], 14)
     last_15m = df_15m.iloc[-1]
     c_15m = float(last_15m["Close"])
     ema20_15m = float(last_15m["EMA20"])
     ema50_15m = float(last_15m["EMA50"])
+    adx_15m = float(last_15m["ADX"]) if pd.notna(last_15m["ADX"]) else 0.0
 
     is_bullish_15m = (c_15m > ema20_15m > ema50_15m)
     is_bearish_15m = (c_15m < ema20_15m < ema50_15m)
     if not is_bullish_15m and not is_bearish_15m:
         return _no_trade("NO TRADE: 15m trend not aligned.", "TREND_15M_NEUTRAL")
+
+    if is_bullish_15m and adx_15m < 22.0:
+        return _no_trade(f"NO TRADE: 15m ADX too weak for bullish VWAP setup ({adx_15m:.1f} < 22.0).", "WEAK_BULLISH_ADX")
 
     # 5m Indicators (VWAP, EMA20, EMA50, ATR14)
     df_5m["EMA20"] = ema(df_5m["Close"], 20)
