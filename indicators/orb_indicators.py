@@ -1,5 +1,5 @@
 """Pure deterministic EMA20, EMA slope, prior-volume average, ATR and EMA chop indicators."""
-from typing import Optional
+from typing import Optional, Tuple, List, Dict, Any
 import numpy as np
 import pandas as pd
 
@@ -116,6 +116,100 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> 
     
     dx = 100.0 * (pos_di - neg_di).abs() / (pos_di + neg_di + 1e-12)
     return dx.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+
+
+def vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
+    """Session or rolling cumulative Volume Weighted Average Price (VWAP).
+    
+    If index is a DatetimeIndex, VWAP resets daily at session date boundary.
+    Otherwise, computes cumulative rolling VWAP.
+    """
+    if close.empty or volume.empty:
+        return pd.Series(dtype=float)
+    typical_price = (high.astype(float) + low.astype(float) + close.astype(float)) / 3.0
+    vol = volume.astype(float).clip(lower=0.0)
+    vp = typical_price * vol
+    
+    if isinstance(close.index, pd.DatetimeIndex):
+        dates = close.index.date
+        cum_vp = vp.groupby(dates).cumsum()
+        cum_vol = vol.groupby(dates).cumsum()
+    else:
+        cum_vp = vp.cumsum()
+        cum_vol = vol.cumsum()
+        
+    return cum_vp / cum_vol.replace(0, np.nan)
+
+
+def bollinger_bands(close: pd.Series, period: int = 20, num_std: float = 2.0) -> Tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    """Bollinger Bands.
+    
+    Returns (upper, middle, lower, bandwidth) where bandwidth = (upper - lower) / middle.
+    """
+    if len(close) < period:
+        empty = pd.Series(index=close.index, dtype=float)
+        return empty, empty, empty, empty
+    middle = close.rolling(window=period, min_periods=period).mean()
+    std = close.rolling(window=period, min_periods=period).std()
+    upper = middle + (std * num_std)
+    lower = middle - (std * num_std)
+    bandwidth = (upper - lower) / middle.replace(0, np.nan)
+    return upper, middle, lower, bandwidth
+
+
+def rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    """Welles Wilder's Relative Strength Index (RSI)."""
+    if len(close) < period + 1:
+        return pd.Series(index=close.index, dtype=float)
+    delta = close.astype(float).diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    
+    alpha = 1.0 / period
+    avg_gain = gain.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+    
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi_val = 100.0 - (100.0 / (1.0 + rs))
+    return rsi_val.fillna(100.0 * (avg_gain > 0))
+
+
+def keltner_channels(high: pd.Series, low: pd.Series, close: pd.Series, ema_period: int = 20, atr_period: int = 14, multiplier: float = 1.5) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """Keltner Channels for volatility squeeze detection."""
+    mid = ema(close, ema_period)
+    atr_val = atr(high, low, close, atr_period)
+    upper = mid + (multiplier * atr_val)
+    lower = mid - (multiplier * atr_val)
+    return upper, mid, lower
+
+
+def rolling_swing_levels(high: pd.Series, low: pd.Series, lookback: int = 20) -> Tuple[pd.Series, pd.Series]:
+    """Calculate rolling prior swing highs and lows strictly excluding current bar (shift 1)."""
+    prior_high = high.shift(1).rolling(window=lookback, min_periods=max(5, lookback // 2)).max()
+    prior_low = low.shift(1).rolling(window=lookback, min_periods=max(5, lookback // 2)).min()
+    return prior_high, prior_low
+
+
+def resample_to_15m(df_5m: pd.DataFrame) -> pd.DataFrame:
+    """Resample completed 5m OHLCV bars into strictly completed 15m OHLCV bars.
+    
+    Excludes any incomplete current 15m bucket with fewer than 3 completed 5m bars
+    to strictly eliminate look-ahead and partial-bar bias.
+    """
+    if df_5m.empty:
+        return pd.DataFrame()
+    ohlc = {
+        "Open": "first",
+        "High": "max",
+        "Low": "min",
+        "Close": "last",
+        "Volume": "sum",
+    }
+    grouped = df_5m.resample("15min", closed="left", label="left")
+    counts = grouped["Close"].count()
+    df_15m = grouped.agg(ohlc).dropna()
+    df_15m = df_15m[counts == 3]
+    return df_15m
 
 
 def add_orb_indicators(frame: pd.DataFrame, ema_period: int = 20,

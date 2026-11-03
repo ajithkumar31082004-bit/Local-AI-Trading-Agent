@@ -10,6 +10,12 @@ from config.orb_settings import ORBSettings, settings as default_orb_settings
 from data.delta_candles import fetch_5m_candles, DeltaCandleError
 from strategy.orb_ema_volume import evaluate_orb
 from strategy.trend_following import evaluate_trend_following
+from strategy.vwap_ema import evaluate_vwap_ema
+from strategy.bb_rsi_mean_reversion import evaluate_bb_rsi
+from strategy.atr_compression_breakout import evaluate_atr_compression_breakout
+from strategy.liquidity_sweep import evaluate_liquidity_sweep
+from strategy.arbitrator import arbitrate_strategies, evaluate_arbitrated_portfolio
+from regime.market_regime import detect_market_regime, MarketRegime
 from services.delta_risk import evaluate_delta_trade, DeltaDailyRiskStore
 from services.orb_backtest import backtest_orb
 from services.delta_live_executor import DeltaLiveExecutor
@@ -17,18 +23,28 @@ from services.delta_reconciliation_service import DeltaReconciliationService
 
 ROOT = Path(__file__).resolve().parent.parent
 
+STRATEGY_OPTIONS = [
+    "Multi-Strategy Intelligence Engine (Arbitrated)",
+    "ORB (Opening Range Breakout)",
+    "Trend-Following Pullback (15m + 5m)",
+    "VWAP + EMA Confirmation",
+    "Bollinger Bands + RSI Mean Reversion",
+    "ATR Volatility Compression Breakout",
+    "Liquidity Sweep Reversal",
+]
+
 
 def render_orb_setup():
     """Render the XAUUSD Strategy page with live checklist, chart overlays, risk guard, and backtesting."""
     st.title("🥇 XAUUSD Trading System (Delta Exchange India)")
-    st.caption("Multi-Strategy Monitor & Backtester: ORB (Opening Range Breakout) + Multi-Timeframe Trend-Following.")
+    st.caption("Multi-Strategy Intelligence Engine & Backtester: Independent Strategies + Market Regime Classification + Arbitration.")
 
     # Sidebar parameters
     st.sidebar.markdown("### ⚙️ Strategy & Parameters")
     strategy_choice = st.sidebar.selectbox(
         "Active Strategy",
-        options=["ORB (Opening Range Breakout)", "Trend-Following (15m + 5m)"],
-        index=0 if getattr(default_orb_settings, "strategy_type", "ORB") == "ORB" else 1,
+        options=STRATEGY_OPTIONS,
+        index=0,
     )
     symbol = st.sidebar.text_input("Symbol", value="XAUTUSD").strip().upper()
     timezone_choice = st.sidebar.selectbox(
@@ -58,7 +74,15 @@ def render_orb_setup():
         ema_period=20,
         volume_period=20,
         leverage=leverage,
-        strategy_type="TREND_FOLLOWING" if "Trend" in strategy_choice else "ORB",
+        strategy_type=(
+            "PORTFOLIO" if "Arbitrated" in strategy_choice else
+            "TREND_FOLLOWING" if "Trend" in strategy_choice else
+            "VWAP_EMA" if "VWAP" in strategy_choice else
+            "BB_RSI" if "Bollinger" in strategy_choice else
+            "ATR_BREAKOUT" if "Compression" in strategy_choice else
+            "LIQUIDITY_SWEEP" if "Liquidity" in strategy_choice else
+            "ORB"
+        ),
     )
 
     tab_live, tab_backtest = st.tabs(["📊 Live Strategy Monitor", "🧪 Backtesting"])
@@ -104,7 +128,7 @@ def render_orb_setup():
         candles_df = None
         data_error = None
 
-        lookback_req = 300 if "Trend" in strategy_choice else 100
+        lookback_req = 300
         with st.spinner(f"Loading latest 5m candles for {symbol}..."):
             try:
                 candles_df = fetch_5m_candles(symbol=symbol, lookback_candles=lookback_req)
@@ -118,9 +142,44 @@ def render_orb_setup():
             st.caption("⚠️ Educational tool, not financial advice. Alert-only.")
             return
 
-        # Deterministic strategy evaluation
-        if "Trend" in strategy_choice:
+        # Market Regime Detection
+        regime_res = detect_market_regime(candles_df, cfg=cfg)
+        regime_badges = {
+            MarketRegime.TRENDING_BULLISH: ("#00C853", "🟢 TRENDING BULLISH"),
+            MarketRegime.TRENDING_BEARISH: ("#D50000", "🔴 TRENDING BEARISH"),
+            MarketRegime.RANGING: ("#29B6F6", "🔵 RANGING / MEAN-REVERTING"),
+            MarketRegime.VOLATILE_BREAKOUT: ("#AB47BC", "🟣 VOLATILE BREAKOUT"),
+            MarketRegime.UNCERTAIN: ("#757575", "⚪ UNCERTAIN (NO TRADE)"),
+        }
+        reg_color, reg_title = regime_badges.get(regime_res.regime, ("#757575", str(regime_res.regime.value)))
+
+        st.markdown(
+            f"<div style='background: rgba(255,255,255,0.03); padding: 10px 14px; border-radius: 8px; border-left: 5px solid {reg_color}; margin-bottom: 12px;'>"
+            f"<div style='display: flex; justify-content: space-between; align-items: center;'>"
+            f"<span style='font-size: 1.05em; font-weight: bold; color: {reg_color};'>{reg_title}</span>"
+            f"<span style='font-size: 0.85em; color: #BBB;'>Confidence: <b>{regime_res.confidence * 100:.0f}%</b></span>"
+            f"</div>"
+            f"<div style='font-size: 0.85em; color: #DDD; margin-top: 3px;'>{regime_res.rationale}</div>"
+            f"<div style='font-size: 0.75em; color: #888; margin-top: 2px;'>Allowed Strategies: {', '.join(regime_res.allowed_strategies) if regime_res.allowed_strategies else 'None (Market Uncertain)'}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Deterministic strategy evaluation & arbitration
+        arbitration_res = None
+        if "Arbitrated" in strategy_choice:
+            arbitration_res = arbitrate_strategies(candles_df, cfg=cfg)
+            signal = arbitration_res.winning_signal
+        elif "Trend" in strategy_choice:
             signal = evaluate_trend_following(candles_df, cfg=cfg)
+        elif "VWAP" in strategy_choice:
+            signal = evaluate_vwap_ema(candles_df, cfg=cfg)
+        elif "Bollinger" in strategy_choice:
+            signal = evaluate_bb_rsi(candles_df, cfg=cfg)
+        elif "Compression" in strategy_choice:
+            signal = evaluate_atr_compression_breakout(candles_df, cfg=cfg)
+        elif "Liquidity" in strategy_choice:
+            signal = evaluate_liquidity_sweep(candles_df, cfg=cfg)
         else:
             signal = evaluate_orb(candles_df, cfg=cfg)
         chk = signal.checklist or {}
@@ -152,17 +211,35 @@ def render_orb_setup():
         # Top Metric Cards
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Current Price", f"${current_price:,.2f}")
-        if "Trend" in strategy_choice:
-            m2.metric("Strategy", "Trend-Following")
-            m3.metric("Macro Trend", "15m Aligned" if chk.get("trend_15m_aligned") else "Neutral/Wait")
-        else:
-            m2.metric("ORB High (15m)", f"${signal.orb_high:,.2f}" if signal.orb_high else "Pending")
-            m3.metric("ORB Low (15m)", f"${signal.orb_low:,.2f}" if signal.orb_low else "Pending")
+        active_label = getattr(signal, "strategy_name", strategy_choice.split()[0])
+        m2.metric("Selected Strategy", active_label)
+        score_val = f"{getattr(signal, 'quality_score', 0.0) * 100:.0f}%" if getattr(signal, "quality_score", None) is not None else "N/A"
+        m3.metric("Signal Quality", score_val)
         last_ema = float(candles_df["Close"].ewm(span=20, adjust=False).mean().iloc[-1])
         m4.metric("EMA 20", f"${last_ema:,.2f}")
-        m5.metric("Risk Check", "Approved" if risk_decision.approved else "Blocked", delta="Safe" if risk_decision.approved else "Risk Limit")
+        m5.metric("Risk Guard", "Approved" if risk_decision.approved else "Blocked", delta="Safe" if risk_decision.approved else "Risk Limit")
 
-        # Verification Checklist
+        # Strategy Arbitration Matrix or Checklist
+        if arbitration_res is not None:
+            st.subheader("🤖 Strategy Arbitration Matrix")
+            st.caption("Independent signal generation, regime filtering, conflict rejection, and quality scoring.")
+            grid_rows = []
+            for s_name, s_sig in arbitration_res.all_signals.items():
+                is_selected = (
+                    signal.direction in {"LONG", "SHORT"}
+                    and s_sig.direction == signal.direction
+                    and getattr(s_sig, "strategy_name", s_name) == getattr(signal, "strategy_name", "")
+                )
+                status_text = "🏆 WINNER" if is_selected else ("✅ ELIGIBLE" if s_sig in arbitration_res.eligible_signals else "⚪ FILTERED")
+                grid_rows.append({
+                    "Strategy": s_name,
+                    "Signal": s_sig.direction,
+                    "Quality Score": f"{getattr(s_sig, 'quality_score', 0.0) * 100:.0f}%",
+                    "Status": status_text,
+                    "Reason / Diagnostics": s_sig.reason,
+                })
+            st.dataframe(pd.DataFrame(grid_rows), use_container_width=True)
+
         def badge(ok: bool, text: str):
             if ok:
                 st.markdown(f"✅ **{text}**")
@@ -183,7 +260,7 @@ def render_orb_setup():
                 badge(chk.get("rr_ok", False), "6. 1:2 R:R Net of Costs")
             with col_c4:
                 badge(risk_decision.approved, f"7. Risk Approved (≤ ₹{max_risk_inr:.1f})")
-        else:
+        elif "ORB" in strategy_choice:
             st.subheader("📋 8-Point ORB Verification Checklist")
             col_c1, col_c2, col_c3, col_c4 = st.columns(4)
             with col_c1:
@@ -198,6 +275,12 @@ def render_orb_setup():
             with col_c4:
                 badge(chk.get("rr_ok", False), "7. 1:2 R:R Net of Costs")
                 badge(risk_decision.approved, f"8. Tiny Risk (≤ ₹{max_risk_inr:.1f})")
+        elif chk:
+            st.subheader(f"📋 Verification Checklist: {active_label}")
+            cols = st.columns(len(chk))
+            for i, (k, v) in enumerate(chk.items()):
+                with cols[i % len(cols)]:
+                    badge(bool(v), k.replace("_", " ").title())
 
         # Candlestick Chart with Overlays
         st.subheader("📈 5m Interactive Session Chart")
@@ -269,12 +352,28 @@ def render_orb_setup():
 
     # Tab 2: Backtesting
     with tab_backtest:
+        summary_csv = ROOT / "data" / "multi_strategy_backtest_summary.csv"
+        if summary_csv.exists():
+            st.markdown("### 📊 Multi-Strategy Walk-Forward Benchmark Summary")
+            st.caption("Empirical performance on XAUTUSD 5m (Aug 5 – Oct 30, 2026, 24,999 bars) including trading costs (0.02% fee, 0.02% spread, 0.02% slippage).")
+            try:
+                summary_df = pd.read_csv(summary_csv)
+                st.dataframe(summary_df, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Could not load benchmark summary: {e}")
+            st.markdown("---")
+
         st.subheader("🧪 Deterministic Strategy Backtester")
         st.caption("Chronological historical simulation with strict next-bar execution, fees, spread, and conservative collision resolution.")
 
         bc0, bc1, bc2, bc3 = st.columns(4)
         with bc0:
-            bt_strat_choice = st.selectbox("Strategy", ["ORB", "Trend-Following (15m+5m)"], index=0)
+            bt_strat_choice = st.selectbox(
+                "Strategy",
+                STRATEGY_OPTIONS,
+                index=0,
+                key="backtest_strat_select",
+            )
         with bc1:
             backtest_days = st.number_input("Lookback Days", min_value=1, max_value=60, value=7)
         with bc2:
@@ -288,7 +387,21 @@ def render_orb_setup():
             with st.spinner(f"Executing chronological {bt_strat_choice} backtest replay..."):
                 try:
                     bt_candles = fetch_5m_candles(symbol=symbol, lookback_candles=int(backtest_days * 24 * 12))
-                    strat_fn = evaluate_trend_following if "Trend" in bt_strat_choice else evaluate_orb
+                    if "Arbitrated" in bt_strat_choice:
+                        strat_fn = evaluate_arbitrated_portfolio
+                    elif "Trend" in bt_strat_choice:
+                        strat_fn = evaluate_trend_following
+                    elif "VWAP" in bt_strat_choice:
+                        strat_fn = evaluate_vwap_ema
+                    elif "Bollinger" in bt_strat_choice:
+                        strat_fn = evaluate_bb_rsi
+                    elif "Compression" in bt_strat_choice:
+                        strat_fn = evaluate_atr_compression_breakout
+                    elif "Liquidity" in bt_strat_choice:
+                        strat_fn = evaluate_liquidity_sweep
+                    else:
+                        strat_fn = evaluate_orb
+
                     res = backtest_orb(bt_candles, initial_equity=initial_backtest_equity, cfg=cfg, chart_output_path=None, strategy_fn=strat_fn)
 
                     st.markdown("### Backtest Performance Summary")

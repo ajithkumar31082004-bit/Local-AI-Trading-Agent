@@ -58,7 +58,7 @@ def main():
     # Navigation Selection
     menu_options = [
         "Dashboard",
-        "ORB Setup",
+        "Multi-Strategy Engine",
         "Market Watch",
         "AI Assistant",
         "Trading Signals",
@@ -99,7 +99,7 @@ def main():
     # Render selected view
     if choice == "Dashboard":
         render_dashboard(repo, data_provider)
-    elif choice == "ORB Setup":
+    elif choice in {"Multi-Strategy Engine", "ORB Setup"}:
         render_orb_setup()
     elif choice == "Market Watch":
         render_market_watch(data_provider)

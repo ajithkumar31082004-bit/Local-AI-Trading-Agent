@@ -37,7 +37,29 @@ def get_mode_banner(mode: str, kill_switch: bool = False) -> str:
 def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: bool = False, strategy: Optional[str] = None):
     chosen_strat = (strategy or getattr(settings, "strategy_type", "ORB")).upper()
     if chosen_strat in ("TREND", "TREND_FOLLOWING"):
+        from strategy.trend_following import evaluate_trend_following
         sig = evaluate_trend_following(frame, settings)
+    elif chosen_strat in ("VWAP", "VWAP_EMA"):
+        from strategy.vwap_ema import evaluate_vwap_ema
+        sig = evaluate_vwap_ema(frame, settings)
+    elif chosen_strat in ("BB", "BB_RSI", "BB_RSI_MEAN_REVERSION"):
+        from strategy.bb_rsi_mean_reversion import evaluate_bb_rsi
+        sig = evaluate_bb_rsi(frame, settings)
+    elif chosen_strat in ("BREAKOUT", "ATR_BREAKOUT", "ATR_COMPRESSION_BREAKOUT"):
+        from strategy.atr_compression_breakout import evaluate_atr_compression_breakout
+        sig = evaluate_atr_compression_breakout(frame, settings)
+    elif chosen_strat in ("SWEEP", "LIQUIDITY_SWEEP"):
+        from strategy.liquidity_sweep import evaluate_liquidity_sweep
+        sig = evaluate_liquidity_sweep(frame, settings)
+    elif chosen_strat in ("MULTI", "MULTI_STRATEGY", "PORTFOLIO", "ARBITRATED"):
+        from strategy.arbitrator import arbitrate_strategies
+        arb_res = arbitrate_strategies(frame, settings)
+        sig = arb_res.winning_signal
+        print(f"\n[MARKET REGIME DETECTED]: {arb_res.regime_result.regime.value} (Confidence: {arb_res.regime_result.confidence*100:.0f}%)")
+        print(f"  Rationale: {arb_res.regime_result.rationale}")
+        print(f"  Eligible Strategies: {[s.strategy_name for s in arb_res.eligible_signals]}")
+        if arb_res.rejected_strategies:
+            print(f"  Rejected Strategies: {arb_res.rejected_strategies}")
     else:
         sig = evaluate_orb(frame, settings)
     now = frame.index[-1].to_pydatetime() if len(frame) else datetime.now(timezone.utc)

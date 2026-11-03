@@ -1,0 +1,17 @@
+Strategy,Trades,Win Rate (%),Net P&L ($),Profit Factor,Max DD (%),Expectancy (R),Total R,Avg Win ($),Avg Loss ($),Sharpe Ratio,Long Trades,Long Win Rate (%),Long P&L ($),Short Trades,Short Win Rate (%),Short P&L ($),Split
+1. ORB Baseline,4,0.0,-8.49,0.0,0.08,-0.0425,-0.17,0.0,-2.12,-78.63,2,0.0,-3.67,2,0.0,-4.82,Full Period
+2. Trend-Following Baseline,54,29.63,-52.19,0.8,1.02,-0.0193,-1.04,13.04,-6.86,-1.57,24,8.33,-100.46,30,46.67,48.26,Full Period
+3. VWAP + EMA Confirmation,57,35.09,-6.02,0.98,0.83,-0.002,-0.12,11.81,-6.55,-0.18,28,25.0,-50.98,29,44.83,44.93,Full Period
+4. Bollinger + RSI Mean Reversion,34,26.47,-99.49,0.39,0.99,-0.0588,-2.0,7.15,-6.55,-6.44,20,25.0,-75.91,14,28.57,-23.56,Full Period
+5. ATR Compression Breakout,33,30.3,-14.84,0.89,0.45,-0.0089,-0.29,12.54,-6.1,-0.79,10,30.0,-2.19,23,30.43,-12.63,Full Period
+6. Liquidity Sweep Reversal,22,31.82,-37.14,0.69,0.67,-0.0337,-0.74,11.84,-8.0,-2.72,13,23.08,-40.58,9,44.44,3.45,Full Period
+7. Upgraded Multi-Strategy Arbitrated Portfolio,50,26.0,-92.15,0.63,1.49,-0.0369,-1.85,12.3,-6.81,-3.26,23,17.39,-67.78,27,33.33,-24.4,Full Period
+Existing ORB Baseline,2,0.0,-4.82,0.0,0.05,-0.0482,-0.1,0.0,-2.41,-81.98,0,0.0,0.0,2,0.0,-4.82,1. In-Sample / Dev (Aug 5 - Sep 15)
+Existing Trend-Following Baseline,27,33.33,-15.44,0.89,0.65,-0.0113,-0.31,13.46,-7.59,-0.84,11,18.18,-19.26,16,43.75,3.82,1. In-Sample / Dev (Aug 5 - Sep 15)
+Upgraded Multi-Strategy Engine,28,25.0,-43.57,0.71,0.84,-0.0311,-0.87,15.07,-7.1,-2.46,15,26.67,-12.55,13,23.08,-31.04,1. In-Sample / Dev (Aug 5 - Sep 15)
+Existing ORB Baseline,2,0.0,-3.68,0.0,0.04,-0.0368,-0.07,0.0,-1.84,-688.46,2,0.0,-3.68,0,0.0,0.0,2. Validation (Sep 16 - Oct 15)
+Existing Trend-Following Baseline,18,22.22,-45.12,0.51,0.55,-0.0502,-0.9,11.69,-6.56,-4.84,11,0.0,-68.1,7,57.14,22.97,2. Validation (Sep 16 - Oct 15)
+Upgraded Multi-Strategy Engine,16,25.0,-54.96,0.32,0.74,-0.0688,-1.1,6.41,-6.72,-8.68,7,0.0,-48.71,9,44.44,-6.26,2. Validation (Sep 16 - Oct 15)
+Existing ORB Baseline,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0,0.0,0,0.0,0.0,3. Out-of-Sample / Test (Oct 16 - Oct 30)
+Existing Trend-Following Baseline,9,33.33,8.31,1.25,0.2,0.0186,0.17,13.69,-5.46,1.46,2,0.0,-13.29,7,42.86,21.58,3. Out-of-Sample / Test (Oct 16 - Oct 30)
+Upgraded Multi-Strategy Engine,6,33.33,6.2,1.27,0.13,0.0208,0.12,14.61,-5.76,1.55,1,0.0,-6.8,5,40.0,12.99,3. Out-of-Sample / Test (Oct 16 - Oct 30)

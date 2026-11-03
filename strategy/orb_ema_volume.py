@@ -22,6 +22,8 @@ class Signal:
     orb_low: Optional[float] = None
     diagnostic_code: Optional[str] = None
     checklist_reasons: Optional[Dict[str, str]] = None
+    strategy_name: Optional[str] = None
+    quality_score: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -55,7 +57,16 @@ def _no_trade(
 def _prepare(frame: pd.DataFrame, cfg: ORBSettings) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
-    out = frame.copy()
+    raw = frame.iloc[-300:] if len(frame) > 300 else frame
+    if isinstance(raw.index, pd.DatetimeIndex) and {"Open", "High", "Low", "Close", "Volume"}.issubset(raw.columns):
+        out = raw.copy()
+        if out.index.tz is None:
+            out.index = out.index.tz_localize(cfg.timezone)
+        else:
+            out.index = out.index.tz_convert(cfg.timezone)
+        return add_orb_indicators(out, cfg.ema_period, cfg.volume_period, cfg.atr_period)
+
+    out = raw.copy()
     out.columns = [str(c).strip().title() if str(c).lower() in {"open", "high", "low", "close", "volume"} else c for c in out.columns]
     missing = {"Open", "High", "Low", "Close", "Volume"} - set(out.columns)
     if missing:

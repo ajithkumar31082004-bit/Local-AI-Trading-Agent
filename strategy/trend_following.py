@@ -22,33 +22,11 @@ import numpy as np
 import pandas as pd
 
 from config.orb_settings import ORBSettings, settings
-from indicators.orb_indicators import add_orb_indicators, ema, atr, adx
-from strategy.orb_ema_volume import Signal, calculate_cost_adjusted_target, estimate_lot_risk
+from indicators.orb_indicators import add_orb_indicators, ema, atr, adx, resample_to_15m
+from strategy.orb_ema_volume import Signal, calculate_cost_adjusted_target
+from risk.position_sizing import estimate_lot_risk
 
 logger = logging.getLogger(__name__)
-
-
-def resample_to_15m(df_5m: pd.DataFrame) -> pd.DataFrame:
-    """Resample completed 5m OHLCV bars into strictly completed 15m OHLCV bars.
-    
-    Excludes any incomplete current 15m bucket with fewer than 3 completed 5m bars
-    to strictly eliminate look-ahead and partial-bar bias.
-    """
-    if df_5m.empty:
-        return pd.DataFrame()
-    ohlc = {
-        "Open": "first",
-        "High": "max",
-        "Low": "min",
-        "Close": "last",
-        "Volume": "sum",
-    }
-    grouped = df_5m.resample("15min", closed="left", label="left")
-    counts = grouped["Close"].count()
-    df_15m = grouped.agg(ohlc).dropna()
-    # Retain strictly closed 15m buckets containing all 3 completed 5m bars
-    df_15m = df_15m[counts == 3]
-    return df_15m
 
 
 def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
@@ -84,18 +62,26 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         return _no_trade("NO TRADE: no candle data available.", "NO_CANDLE_DATA")
 
     # 1. Clean and timezone-align dataframe
-    out = frame.copy()
-    out.columns = [str(c).strip().title() if str(c).lower() in {"open", "high", "low", "close", "volume"} else c for c in out.columns]
-    idx = pd.DatetimeIndex(pd.to_datetime(out.index))
-    if idx.tz is None:
-        idx = idx.tz_localize(cfg.timezone)
+    raw = frame.iloc[-300:] if len(frame) > 300 else frame
+    if isinstance(raw.index, pd.DatetimeIndex) and {"Open", "High", "Low", "Close", "Volume"}.issubset(raw.columns):
+        df_5m = raw.copy()
+        if df_5m.index.tz is None:
+            df_5m.index = df_5m.index.tz_localize(cfg.timezone)
+        else:
+            df_5m.index = df_5m.index.tz_convert(cfg.timezone)
     else:
-        idx = idx.tz_convert(cfg.timezone)
-    out.index = idx
-    out = out[~out.index.duplicated(keep="last")].sort_index()
-    for col in ["Open", "High", "Low", "Close", "Volume"]:
-        out[col] = pd.to_numeric(out[col], errors="coerce")
-    df_5m = out.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+        out = raw.copy()
+        out.columns = [str(c).strip().title() if str(c).lower() in {"open", "high", "low", "close", "volume"} else c for c in out.columns]
+        idx = pd.DatetimeIndex(pd.to_datetime(out.index))
+        if idx.tz is None:
+            idx = idx.tz_localize(cfg.timezone)
+        else:
+            idx = idx.tz_convert(cfg.timezone)
+        out.index = idx
+        out = out[~out.index.duplicated(keep="last")].sort_index()
+        for col in ["Open", "High", "Low", "Close", "Volume"]:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+        df_5m = out.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
 
     # Need at least 50 bars on 15m -> ~150 bars on 5m
     if len(df_5m) < 60:
@@ -165,6 +151,33 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
     macro_trend = "LONG" if is_bullish_15m else "SHORT"
     checklist["trend_15m_aligned"] = True
 
+    # 3a. Market-Regime Filter (ADX + EMA Slope/Separation)
+    if getattr(cfg, "use_regime_filter", False):
+        df_15m["ATR"] = atr(df_15m["High"], df_15m["Low"], df_15m["Close"], 14)
+        df_15m["ADX"] = adx(df_15m["High"], df_15m["Low"], df_15m["Close"], 14)
+        last_15m = df_15m.iloc[-1]
+        atr_15m = float(last_15m["ATR"]) if pd.notna(last_15m["ATR"]) else 2.0
+        adx_15m = float(last_15m["ADX"]) if pd.notna(last_15m["ADX"]) else 0.0
+
+        if adx_15m < cfg.min_15m_adx:
+            return _no_trade(
+                f"NO TRADE: market regime is choppy/ranging (15m ADX {adx_15m:.1f} < {cfg.min_15m_adx:.1f}).",
+                "REGIME_CHOPPY_LOW_ADX",
+                {"regime_trending": "REGIME_CHOPPY_LOW_ADX"}
+            )
+
+        ema_sep = abs(ema20_15m - ema50_15m)
+        min_sep = cfg.min_ema_separation_atr * atr_15m
+        if ema_sep < min_sep:
+            return _no_trade(
+                f"NO TRADE: market regime has flat/converging EMAs (separation {ema_sep:.2f} < {min_sep:.2f}).",
+                "REGIME_FLAT_EMA_SLOPE",
+                {"regime_trending": "REGIME_FLAT_EMA_SLOPE"}
+            )
+        checklist["regime_trending"] = True
+    else:
+        checklist["regime_trending"] = True
+
     # 4. Compute 5m Indicators (EMA20, 20-bar Volume Avg, ATR14)
     df_5m_ind = add_orb_indicators(calc_window, ema_period=20, volume_period=20, atr_period=14)
     curr_bar = df_5m_ind.iloc[-1]
@@ -223,9 +236,10 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
             return _no_trade(f"NO TRADE: continuation volume ({curr_vol:,.0f}) below 80% of average ({vol_avg:,.0f}).", "VOLUME_BELOW_THRESHOLD")
         checklist["volume_confirmed"] = True
 
-        # Stop loss: Swing high of recent 5 bars + buffer
+        # Stop loss: Swing high of recent 5 bars + buffer, enforcing minimum stop distance
         recent_high = float(df_5m_ind["High"].iloc[-5:].max())
-        stop_loss = recent_high + (0.5 * curr_atr)
+        min_stop_dist = getattr(cfg, "min_stop_distance_atr", 1.0) * curr_atr
+        stop_loss = max(recent_high + (0.5 * curr_atr), curr_close + min_stop_dist)
 
     else:  # LONG
         pulled_back = any(float(row["Low"]) <= (float(row["EMA20"]) + tolerance) for _, row in recent_bars.iterrows())
@@ -254,7 +268,20 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         checklist["volume_confirmed"] = True
 
         recent_low = float(df_5m_ind["Low"].iloc[-5:].min())
-        stop_loss = recent_low - (0.5 * curr_atr)
+        min_stop_dist = getattr(cfg, "min_stop_distance_atr", 1.0) * curr_atr
+        stop_loss = min(recent_low - (0.5 * curr_atr), curr_close - min_stop_dist)
+
+    # 6a. Trading Friction Tolerance Check
+    per_lot_risk, fee_cost, spread_slip_cost = estimate_lot_risk(curr_close, stop_loss, cfg)
+    raw_risk = abs(curr_close - stop_loss) * cfg.contract_size_xaut
+    total_friction = fee_cost + spread_slip_cost
+    friction_r = total_friction / max(raw_risk, 1e-12)
+    max_friction = getattr(cfg, "max_friction_to_risk_ratio", 0.25)
+    if friction_r > max_friction:
+        return _no_trade(
+            f"NO TRADE: round-trip friction ({friction_r:.2f}R) exceeds tolerance ({max_friction:.2f}R).",
+            "FRICTION_EXCEEDS_TOLERANCE",
+        )
 
     # 7. Reward-to-Risk Calculation (Cost-Adjusted 2R)
     target_price, net_r = calculate_cost_adjusted_target(

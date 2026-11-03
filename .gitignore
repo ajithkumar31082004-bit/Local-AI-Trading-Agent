@@ -32,13 +32,17 @@ Pipfile.lock
 .env.local
 
 # Databases & local persistent storage
-data/*.db
+data/scratch/
+*.db
 data/*.sqlite
 data/*.sqlite3
 data/*.json
 data/*.lock
 data/*.html
 data/*.csv
+!data/multi_strategy_backtest_summary.csv
+!data/multi_strategy_all_trades.csv
+scratch/
 *.db
 *.sqlite
 

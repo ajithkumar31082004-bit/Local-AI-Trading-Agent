@@ -96,9 +96,25 @@ def run_backtest(
         raise ValueError("No candles supplied for backtest replay.")
 
     if strategy_fn is None:
-        if getattr(cfg, "strategy_type", "ORB") in {"TREND", "TREND_FOLLOWING"}:
+        strat_type = getattr(cfg, "strategy_type", "ORB").upper()
+        if strat_type in {"TREND", "TREND_FOLLOWING"}:
             from strategy.trend_following import evaluate_trend_following
             strategy_eval_fn = evaluate_trend_following
+        elif strat_type in {"VWAP", "VWAP_EMA"}:
+            from strategy.vwap_ema import evaluate_vwap_ema
+            strategy_eval_fn = evaluate_vwap_ema
+        elif strat_type in {"BB", "BB_RSI", "BB_RSI_MEAN_REVERSION"}:
+            from strategy.bb_rsi_mean_reversion import evaluate_bb_rsi
+            strategy_eval_fn = evaluate_bb_rsi
+        elif strat_type in {"BREAKOUT", "ATR_BREAKOUT", "ATR_COMPRESSION_BREAKOUT"}:
+            from strategy.atr_compression_breakout import evaluate_atr_compression_breakout
+            strategy_eval_fn = evaluate_atr_compression_breakout
+        elif strat_type in {"SWEEP", "LIQUIDITY_SWEEP"}:
+            from strategy.liquidity_sweep import evaluate_liquidity_sweep
+            strategy_eval_fn = evaluate_liquidity_sweep
+        elif strat_type in {"MULTI", "MULTI_STRATEGY", "PORTFOLIO", "ARBITRATED"}:
+            from strategy.arbitrator import evaluate_arbitrated_portfolio
+            strategy_eval_fn = evaluate_arbitrated_portfolio
         else:
             strategy_eval_fn = evaluate_orb
     else:
@@ -115,7 +131,8 @@ def run_backtest(
         df = df.sort_index()
 
     ts_to_iloc = {t: idx for idx, t in enumerate(df.index)}
-    days = list(dict.fromkeys(df.index.date))
+    day_groups = {d: group for d, group in df.groupby(df.index.date)}
+    days = list(day_groups.keys())
     equity = float(initial_equity)
     peak_equity = equity
     max_drawdown = 0.0
@@ -126,19 +143,27 @@ def run_backtest(
     current_losing_streak = 0
     longest_losing_streak = 0
 
+    session_start_t = time_of_day.fromisoformat(getattr(cfg, "session_start", "09:00"))
+    strat_type = getattr(cfg, "strategy_type", "ORB")
+    if strat_type == "ORB":
+        min_offset = getattr(cfg, "orb_minutes", 15)
+    else:
+        min_offset = getattr(cfg, "no_entry_minutes_after_open", 0)
+    earliest_min = session_start_t.hour * 60 + session_start_t.minute + min_offset
+    earliest_entry_t = time_of_day(hour=min(23, earliest_min // 60), minute=earliest_min % 60)
+    last_entry_t = time_of_day.fromisoformat(getattr(cfg, "last_entry_time", "22:00"))
+    session_end_t = time_of_day.fromisoformat(getattr(cfg, "session_end", "23:30"))
+
     for day in days:
-        day_frame = df[[ts.date() == day for ts in df.index]]
+        day_frame = day_groups[day]
         pending_trade = None
         day_r = 0.0
         trades_today = 0
         last_loss_exit_i: Optional[int] = None
-        session_end_t = time_of_day.fromisoformat(getattr(cfg, "session_end", "23:30"))
 
         for i in range(1, len(day_frame) + 1):
             ts = day_frame.index[i - 1]
-            loc = ts_to_iloc[ts]
-            prefix = df.iloc[:loc + 1]
-            candle = prefix.iloc[-1]
+            candle = day_frame.iloc[i - 1]
 
             # If in an active position, check if current bar hits Stop Loss or Take Profit or Session End
             if pending_trade and (i - 1) > pending_trade["entry_i"]:
@@ -181,12 +206,19 @@ def run_backtest(
                     trades.append({
                         "date": str(day),
                         "direction": side,
+                        "strategy_name": pending_trade.get("strategy_name", getattr(cfg, "strategy_type", "ORB")),
                         "entry_time": str(pending_trade["time"]),
                         "exit_time": str(ts),
                         "entry": pending_trade["entry"],
                         "sl": sl,
                         "tp": tp,
                         "exit": exit_price,
+                        "lots": pending_trade["lots"],
+                        "contract_qty": round(contract_qty, 4),
+                        "gross_pnl": round(gross_pnl_cash, 2),
+                        "fee_cost": round(fee_cost * pending_trade["lots"], 4),
+                        "spread_slip_cost": round(spread_slip_cost * pending_trade["lots"], 4),
+                        "total_friction": round(total_friction, 4),
                         "r": round(net_r, 4),
                         "pnl_cash": round(pnl_cash, 2),
                         "exit_reason": exit_reason,
@@ -207,20 +239,28 @@ def run_backtest(
                     if trades_today >= max_trades or day_r <= -daily_loss_limit:
                         break
 
+            # If no active trade and past last entry cutoff, skip remaining bars of the day
+            if pending_trade is None and ts.time() > last_entry_t:
+                break
+
             # Evaluate strategy on current completed candle prefix if no active trade and guards pass
             max_trades = getattr(cfg, "max_trades_per_day", 1)
             daily_loss_limit = getattr(cfg, "daily_loss_limit_r", 2.0)
             cooldown_bars = getattr(cfg, "cooldown_bars_after_loss", 6)
             cooldown_active = (last_loss_exit_i is not None) and ((i - 1) < last_loss_exit_i + cooldown_bars)
+            in_window = earliest_entry_t <= ts.time() <= last_entry_t
 
             can_evaluate = (
-                pending_trade is None
+                in_window
+                and pending_trade is None
                 and trades_today < max_trades
                 and day_r > -daily_loss_limit
                 and not cooldown_active
             )
 
             if can_evaluate:
+                loc = ts_to_iloc[ts]
+                prefix = df.iloc[max(0, loc - 300):loc + 1]
                 sig = strategy_eval_fn(prefix, cfg)
                 if sig.direction in {"LONG", "SHORT"} and sig.timestamp == str(ts):
                     # Size trade with risk engine
@@ -228,6 +268,7 @@ def run_backtest(
                     if decision.approved:
                         pending_trade = {
                             "direction": sig.direction,
+                            "strategy_name": getattr(sig, "strategy_name", getattr(cfg, "strategy_type", "ORB")),
                             "entry": float(sig.entry),
                             "sl": float(sig.sl),
                             "tp": float(sig.tp),
@@ -259,12 +300,19 @@ def run_backtest(
             trades.append({
                 "date": str(day),
                 "direction": side,
+                "strategy_name": pending_trade.get("strategy_name", getattr(cfg, "strategy_type", "ORB")),
                 "entry_time": str(pending_trade["time"]),
                 "exit_time": str(last_ts),
                 "entry": pending_trade["entry"],
                 "sl": pending_trade["sl"],
                 "tp": pending_trade["tp"],
                 "exit": exit_price,
+                "lots": pending_trade["lots"],
+                "contract_qty": round(contract_qty, 4),
+                "gross_pnl": round(gross_pnl_cash, 2),
+                "fee_cost": round(fee_cost * pending_trade["lots"], 4),
+                "spread_slip_cost": round(spread_slip_cost * pending_trade["lots"], 4),
+                "total_friction": round(total_friction, 4),
                 "r": round(net_r, 4),
                 "pnl_cash": round(pnl_cash, 2),
                 "exit_reason": "END_OF_DAY",
