@@ -188,8 +188,8 @@ class DeltaPaperBroker:
             if self.cash_balance < (margin_required + entry_fee):
                 return False, f"Insufficient paper cash: required ${margin_required + entry_fee:.2f}, available ${self.cash_balance:.2f}", None
 
-            # Deduct entry fee from cash
-            self.cash_balance = round(self.cash_balance - entry_fee, 2)
+            # Deduct entry fee from cash (4-decimal precision for micro contracts)
+            self.cash_balance = round(self.cash_balance - entry_fee, 4)
             self.total_fees += entry_fee
             self.total_slippage += slippage_cost
 
@@ -258,24 +258,33 @@ class DeltaPaperBroker:
             exit_fee = round(exit_notional * (self.cfg.fee_pct_per_side / 100.0), 4)
             exit_slippage = round(abs(exit_fill - exit_price) * contract_qty, 4)
 
-            # Gross P&L
+            # Gross P&L (computed to 4 decimal places for micro-contract precision)
             if side == "LONG":
-                gross_pnl = round((exit_price - pos["signal_entry_price"]) * contract_qty, 2)
+                gross_pnl = round((exit_price - pos["signal_entry_price"]) * contract_qty, 4)
             else:
-                gross_pnl = round((pos["signal_entry_price"] - exit_price) * contract_qty, 2)
+                gross_pnl = round((pos["signal_entry_price"] - exit_price) * contract_qty, 4)
 
-            total_friction = round(pos["entry_fee"] + exit_fee + pos["slippage_cost"] + exit_slippage, 4)
-            net_pnl = round(gross_pnl - total_friction, 2)
+            total_fees = round(pos["entry_fee"] + exit_fee, 4)
+            total_price_impact = round(pos["slippage_cost"] + exit_slippage, 4)
+            spread_cost = round(total_price_impact / 2.0, 4)
+            slippage_cost = round(total_price_impact / 2.0, 4)
+            total_friction = round(total_fees + total_price_impact, 4)
+            net_pnl = round(gross_pnl - total_friction, 4)
 
-            # R-Multiple calculation based on initial risk budget
-            risk_cash = self.initial_equity * (self.cfg.risk_pct / 100.0)
-            r_multiple = round(net_pnl / risk_cash, 4) if risk_cash > 0 else 0.0
+            # Trade-level R-Multiple: Net P&L relative to planned risk on this specific position
+            trade_risk_cash = round(abs(pos["entry_price"] - pos["stop_loss"]) * contract_qty, 4)
+            trade_r_multiple = round(net_pnl / trade_risk_cash, 2) if trade_risk_cash > 0 else 0.0
 
-            # Update cash balance and stats
-            self.cash_balance += round(net_pnl, 2)
-            self.realized_pnl += round(net_pnl, 2)
-            self.total_fees += exit_fee
-            self.total_slippage += exit_slippage
+            # Portfolio-level R-Multiple: Net P&L relative to full account risk budget
+            portfolio_risk_budget = self.initial_equity * (self.cfg.risk_pct / 100.0)
+            portfolio_r_multiple = round(net_pnl / portfolio_risk_budget, 4) if portfolio_risk_budget > 0 else 0.0
+
+            # Update cash balance: since entry_fee was deducted at trade entry,
+            # we restore entry_fee and add net_pnl so that overall cash change is exactly net_pnl
+            self.cash_balance = round(self.cash_balance + net_pnl + pos["entry_fee"], 4)
+            self.realized_pnl = round(self.realized_pnl + net_pnl, 4)
+            self.total_fees = round(self.total_fees + exit_fee, 4)
+            self.total_slippage = round(self.total_slippage + exit_slippage, 4)
 
             current_eq = self.get_account_summary()["equity"]
             self.peak_equity = max(self.peak_equity, current_eq)
@@ -296,11 +305,16 @@ class DeltaPaperBroker:
                 "exit_price": exit_fill,
                 "trigger_price": exit_price,
                 "gross_pnl": gross_pnl,
-                "fees": round(pos["entry_fee"] + exit_fee, 4),
-                "slippage": round(pos["slippage_cost"] + exit_slippage, 4),
+                "fees": total_fees,
+                "spread_cost": spread_cost,
+                "slippage_cost": slippage_cost,
+                "slippage": total_price_impact,
                 "total_friction": total_friction,
                 "net_pnl": net_pnl,
-                "r_multiple": r_multiple,
+                "r_multiple": trade_r_multiple,
+                "trade_r_multiple": trade_r_multiple,
+                "portfolio_r_multiple": portfolio_r_multiple,
+                "trade_risk_cash": trade_risk_cash,
                 "exit_reason": exit_reason,
                 "signal_reason": pos.get("signal_reason", ""),
             }
@@ -311,7 +325,7 @@ class DeltaPaperBroker:
 
             msg = (
                 f"Simulated {side} closed via {exit_reason} @ ${exit_fill:.2f} "
-                f"[Gross: ${gross_pnl:+.2f}, Friction: ${total_friction:.2f}, Net: ${net_pnl:+.2f} ({r_multiple:+.2f}R)]"
+                f"[Gross: ${gross_pnl:+.4f}, Friction: ${total_friction:.4f}, Net: ${net_pnl:+.4f} ({trade_r_multiple:+.2f}R trade / {portfolio_r_multiple:+.4f}R portfolio)]"
             )
             logger.info(msg)
             return True, msg, closed_record
