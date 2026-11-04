@@ -144,3 +144,76 @@ def test_reconcile_reported_trade_accounting(tmp_path):
 
     # Net Realized P&L = fill_to_fill_pnl - fees = -0.01466 - 0.0008 = -0.01546
     assert abs(closed["net_pnl"] - (-0.0154)) <= 0.0001
+
+
+def test_trade_id_uses_candle_timestamp(tmp_path):
+    """Verify that trade_id incorporates candle_timestamp when provided."""
+    cfg = ORBSettings(symbol="XAUTUSD", mode="PAPER")
+    state_file = tmp_path / "test_trade_id_state.json"
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(state_file), initial_equity=10000.0)
+
+    ok, msg, pos = broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="SHORT",
+        entry_price=4094.81,
+        stop_loss=4108.35,
+        take_profit=4060.36,
+        lots=1,
+        strategy_name="VWAP_EMA",
+        candle_timestamp="2026-10-22 13:15:00+05:30",
+    )
+    assert ok is True
+    assert pos["trade_id"] == "PAPER_20261022_131500_SHORT"
+    assert pos["entry_time"] == "2026-10-22 13:15:00+05:30"
+
+
+def test_account_summary_four_decimal_precision(tmp_path):
+    """Verify that get_account_summary reports equity and balance to 4 decimal places."""
+    cfg = ORBSettings(symbol="XAUTUSD", mode="PAPER")
+    state_file = tmp_path / "test_summary_precision.json"
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(state_file), initial_equity=10000.0)
+
+    broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="LONG",
+        entry_price=4034.77,
+        stop_loss=4021.73,
+        take_profit=4068.12,
+        lots=1,
+        strategy_name="VWAP_EMA",
+    )
+    _, _, closed = broker.close_simulated_trade(
+        exit_price=4021.73,
+        exit_reason="STOP_LOSS",
+    )
+
+    summary = broker.get_account_summary()
+    assert summary["equity"] == 9999.9846
+    assert summary["cash_balance"] == 9999.9846
+    assert summary["realized_pnl"] == -0.0154
+
+
+def test_fourteen_day_simulated_ledger_consistency():
+    """Verify mathematical integrity of the 7-trade ledger across 14 forward test days."""
+    import pandas as pd
+    from pathlib import Path
+
+    csv_path = Path(__file__).resolve().parent.parent / "data" / "forward_test_14d_trades.csv"
+    if not csv_path.exists():
+        return
+
+    df = pd.read_csv(csv_path)
+    assert len(df) == 7
+
+    # Check that net_pnl = gross_pnl - total_friction for every trade
+    for _, row in df.iterrows():
+        calc_net = round(row["gross_pnl"] - row["total_friction"], 4)
+        assert abs(calc_net - row["net_pnl"]) <= 0.0001
+        assert abs(row["fees"] - 0.0008) <= 0.0001
+        assert abs(row["total_friction"] - 0.0024) <= 0.0001
+
+    # Check sum of net P&L
+    total_net = round(df["net_pnl"].sum(), 4)
+    assert abs(total_net - (-0.0121)) <= 0.0001
+
+

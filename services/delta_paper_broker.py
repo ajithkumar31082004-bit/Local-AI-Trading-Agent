@@ -93,11 +93,11 @@ class DeltaPaperBroker:
         data = {
             "symbol": self.cfg.symbol,
             "initial_equity": self.initial_equity,
-            "cash_balance": round(self.cash_balance, 2),
-            "realized_pnl": round(self.realized_pnl, 2),
+            "cash_balance": round(self.cash_balance, 4),
+            "realized_pnl": round(self.realized_pnl, 4),
             "total_fees": round(self.total_fees, 4),
             "total_slippage": round(self.total_slippage, 4),
-            "peak_equity": round(self.peak_equity, 2),
+            "peak_equity": round(self.peak_equity, 4),
             "open_position": self.open_position,
             "closed_trades": self.closed_trades,
             "last_updated": datetime.now(timezone.utc).isoformat(),
@@ -193,7 +193,17 @@ class DeltaPaperBroker:
             self.total_fees += entry_fee
             self.total_slippage += slippage_cost
 
-            trade_id = f"PAPER_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{clean_dir}"
+            if candle_timestamp:
+                try:
+                    ts_str = str(candle_timestamp).replace("Z", "+00:00")
+                    parsed_dt = datetime.fromisoformat(ts_str)
+                    ts_fmt = parsed_dt.strftime("%Y%m%d_%H%M%S")
+                except Exception:
+                    ts_fmt = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            else:
+                ts_fmt = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+            trade_id = f"PAPER_{ts_fmt}_{clean_dir}"
             now_iso = datetime.now(timezone.utc).isoformat()
 
             pos = {
@@ -397,7 +407,7 @@ class DeltaPaperBroker:
             pos = dict(self.open_position) if self.open_position else None
             unrealized_pnl = float(pos["unrealized_pnl"]) if pos else 0.0
             margin_used = float(pos["margin"]) if pos else 0.0
-            equity = round(self.cash_balance + margin_used + unrealized_pnl, 2)
+            equity = round(self.cash_balance + margin_used + unrealized_pnl, 4)
             trades = list(self.closed_trades)
 
         total_trades = len(trades)
@@ -428,11 +438,11 @@ class DeltaPaperBroker:
             "mode": "PAPER",
             "symbol": self.cfg.symbol,
             "initial_equity": self.initial_equity,
-            "cash_balance": round(self.cash_balance, 2),
+            "cash_balance": round(self.cash_balance, 4),
             "margin_used": margin_used,
-            "unrealized_pnl": round(unrealized_pnl, 2),
+            "unrealized_pnl": round(unrealized_pnl, 4),
             "equity": equity,
-            "realized_pnl": round(self.realized_pnl, 2),
+            "realized_pnl": round(self.realized_pnl, 4),
             "total_fees": round(self.total_fees, 4),
             "total_slippage": round(self.total_slippage, 4),
             "total_trades": total_trades,
