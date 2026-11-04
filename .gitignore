@@ -30,6 +30,8 @@ Pipfile.lock
 # Environments & secrets
 .env
 .env.local
+*.pem
+*.key
 
 # Databases & local persistent storage
 data/scratch/
