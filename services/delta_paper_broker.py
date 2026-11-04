@@ -189,7 +189,7 @@ class DeltaPaperBroker:
                 return False, f"Insufficient paper cash: required ${margin_required + entry_fee:.2f}, available ${self.cash_balance:.2f}", None
 
             # Deduct entry fee from cash
-            self.cash_balance -= entry_fee
+            self.cash_balance = round(self.cash_balance - entry_fee, 2)
             self.total_fees += entry_fee
             self.total_slippage += slippage_cost
 

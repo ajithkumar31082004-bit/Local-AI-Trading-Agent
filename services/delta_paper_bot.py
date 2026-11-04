@@ -312,7 +312,8 @@ class DeltaPaperBot:
             from indicators.orb_indicators import ema, vwap
             c_5m = df_5m["Close"]
             ema20_5m = float(ema(c_5m, 20).iloc[-1])
-            vwap_val = float(vwap(df_5m).iloc[-1])
+            vwap_series = vwap(df_5m["High"], df_5m["Low"], df_5m["Close"], df_5m["Volume"])
+            vwap_val = float(vwap_series.iloc[-1]) if pd.notna(vwap_series.iloc[-1]) else float(c_5m.iloc[-1])
 
         if not df_15m.empty and len(df_15m) >= 50:
             from indicators.orb_indicators import ema, adx

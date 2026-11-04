@@ -408,6 +408,8 @@ def main():
             print("\n\nShutting down paper trading bot cleanly...")
             bot.stop()
             print("[OK] Paper trading stopped. Simulated account balance and trade records preserved.")
+            return
+        return
         frame = load_candles_csv(args.path, settings.timezone)
         show_signal(frame, args.equity, reserve_alert=False)
 

@@ -420,9 +420,10 @@ class DeltaLiveMarketDataFeed:
                 self._mark_price = mark
             if close > 0:
                 self._latest_price = close
-            self._bid = float(data.get("best_bid", 0.0) or 0.0)
-            self._ask = float(data.get("best_ask", 0.0) or 0.0)
-            self._volume_24h = float(data.get("volume_24h", 0.0) or 0.0)
+            quotes = data.get("quotes") or {}
+            self._bid = float(quotes.get("best_bid") or data.get("best_bid") or 0.0)
+            self._ask = float(quotes.get("best_ask") or data.get("best_ask") or 0.0)
+            self._volume_24h = float(data.get("volume") or data.get("volume_24h") or 0.0)
             self._last_update_ts = datetime.now(timezone.utc)
             price = self._latest_price
             ticker_copy = {
