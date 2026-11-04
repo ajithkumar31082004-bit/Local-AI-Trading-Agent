@@ -13,7 +13,8 @@ Verifies:
 import pytest
 import pandas as pd
 import numpy as np
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock, patch
 
 from config.orb_settings import ORBSettings
 from regime.readiness import (
@@ -28,7 +29,9 @@ from regime.market_regime import (
 )
 from strategy.arbitrator import arbitrate_strategies
 from indicators.orb_indicators import resample_to_15m
-from services.delta_paper_broker import DeltaPaperBroker
+from services.delta_paper_broker import DeltaPaperBroker, PaperSafetyViolation
+from services.delta_paper_bot import DeltaPaperBot
+from market_data.delta_live_feed import DeltaLiveMarketDataFeed
 
 
 def make_test_cfg(**kwargs) -> ORBSettings:
@@ -343,3 +346,203 @@ def test_paper_trading_safety_invariant(tmp_path):
     # No network connections or real orders placed
     summary = broker.get_account_summary()
     assert summary["mode"] == "PAPER"
+
+
+# -----------------------------------------------------------------------------
+# 9: Stale Feed, Disconnect & Recovery Safety Tests (Mocked)
+# -----------------------------------------------------------------------------
+
+def test_stale_feed_blocks_strategy_evaluation_in_bot(tmp_path):
+    """Verify that when market data exceeds staleness limit (> 120s), readiness becomes DEGRADED and bot blocks entries."""
+    cfg = make_test_cfg()
+    df_full = generate_synthetic_candles(180, trend="flat")
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(tmp_path / "stale_test.json"), initial_equity=10000.0)
+
+    # Create mock feed where last update was 150 seconds ago (stale)
+    mock_feed = MagicMock(spec=DeltaLiveMarketDataFeed)
+    mock_feed.get_readiness.return_value = evaluate_system_readiness(
+        df_5m=df_full,
+        is_ws_connected=True,
+        is_feed_running=True,
+        is_bootstrapping=False,
+        is_stale=True,
+        cfg=cfg,
+    )
+
+    DeltaPaperBot._instance = None
+    bot = DeltaPaperBot(cfg=cfg, feed=mock_feed, broker=broker)
+
+    sig = bot._evaluate_strategy(df_full)
+    assert sig is None
+    assert "DEGRADED" in bot._last_rejection_reason
+    assert "stale" in bot._last_rejection_reason.lower()
+
+
+def test_websocket_disconnect_blocks_strategy_evaluation_in_bot(tmp_path):
+    """Verify that when WebSocket disconnects during streaming, readiness becomes DEGRADED and bot blocks entries."""
+    cfg = make_test_cfg()
+    df_full = generate_synthetic_candles(180, trend="flat")
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(tmp_path / "ws_drop_test.json"), initial_equity=10000.0)
+
+    # Create mock feed where ws is disconnected
+    mock_feed = MagicMock(spec=DeltaLiveMarketDataFeed)
+    mock_feed.get_readiness.return_value = evaluate_system_readiness(
+        df_5m=df_full,
+        is_ws_connected=False,
+        is_feed_running=True,
+        is_bootstrapping=False,
+        is_stale=False,
+        cfg=cfg,
+    )
+
+    DeltaPaperBot._instance = None
+    bot = DeltaPaperBot(cfg=cfg, feed=mock_feed, broker=broker)
+
+    sig = bot._evaluate_strategy(df_full)
+    assert sig is None
+    assert "DEGRADED" in bot._last_rejection_reason
+    assert "websocket disconnected" in bot._last_rejection_reason.lower()
+
+
+def test_reconnection_recovers_readiness_and_unblocks_strategy(tmp_path):
+    """Verify that once socket reconnects with fresh data, readiness recovers to READY and evaluations proceed."""
+    cfg = make_test_cfg()
+    df_full = generate_synthetic_candles(180, trend="bull")
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(tmp_path / "recon_test.json"), initial_equity=10000.0)
+
+    mock_feed = MagicMock(spec=DeltaLiveMarketDataFeed)
+    # Recovered state
+    mock_feed.get_readiness.return_value = evaluate_system_readiness(
+        df_5m=df_full,
+        is_ws_connected=True,
+        is_feed_running=True,
+        is_bootstrapping=False,
+        is_stale=False,
+        cfg=cfg,
+    )
+
+    DeltaPaperBot._instance = None
+    bot = DeltaPaperBot(cfg=cfg, feed=mock_feed, broker=broker)
+
+    # Force current time to be within session entry window
+    with patch("services.delta_paper_bot.datetime") as mock_dt:
+        mock_now = datetime(2026, 11, 4, 14, 0, 0, tzinfo=bot.tz)
+        mock_dt.now.return_value = mock_now
+        # Strategy evaluation must proceed without readiness rejection
+        sig = bot._evaluate_strategy(df_full)
+        assert bot._last_rejection_reason != ""
+        assert "DEGRADED" not in bot._last_rejection_reason
+        assert "WARMING_UP" not in bot._last_rejection_reason
+
+
+def test_existing_position_preserved_safely_during_stale_feed(tmp_path):
+    """Verify that existing open positions are preserved and safely managed by SL/TP during feed degradation."""
+    cfg = make_test_cfg()
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(tmp_path / "pos_stale_test.json"), initial_equity=10000.0)
+
+    # Open a simulated trade
+    ok, msg, pos = broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="LONG",
+        entry_price=4000.0,
+        stop_loss=3980.0,
+        take_profit=4040.0,
+        lots=1,
+        strategy_name="PORTFOLIO",
+        signal_reason="Pre-stale entry",
+    )
+    assert ok is True
+    assert broker.open_position is not None
+
+    mock_feed = MagicMock(spec=DeltaLiveMarketDataFeed)
+    df_full = generate_synthetic_candles(180, trend="flat")
+    mock_feed.get_readiness.return_value = evaluate_system_readiness(
+        df_5m=df_full,
+        is_ws_connected=True,
+        is_feed_running=True,
+        is_bootstrapping=False,
+        is_stale=True,  # Stale
+        cfg=cfg,
+    )
+
+    DeltaPaperBot._instance = None
+    bot = DeltaPaperBot(cfg=cfg, feed=mock_feed, broker=broker)
+
+    # Strategy evaluation must NOT open any new position
+    sig = bot._evaluate_strategy(df_full)
+    assert sig is None
+    # Position remains intact in broker
+    assert broker.open_position is not None
+    assert broker.open_position["entry_price"] >= 4000.0
+    assert broker.open_position["stop_loss"] == 3980.0
+    assert broker.open_position["take_profit"] == 4040.0
+
+
+def test_no_strategy_can_bypass_readiness(tmp_path):
+    """Verify that none of the strategy modes (PORTFOLIO, ORB, TREND, VWAP) can bypass readiness checks."""
+    cfg = make_test_cfg()
+    df_full = generate_synthetic_candles(180, trend="bull")
+
+    mock_feed = MagicMock(spec=DeltaLiveMarketDataFeed)
+    mock_feed.get_readiness.return_value = SystemReadiness(
+        state=ReadinessState.WARMING_UP,
+        is_ready=False,
+        completed_5m_count=50,
+        required_5m_count=150,
+        completed_15m_count=16,
+        required_15m_count=50,
+        indicator_status={},
+        missing_requirements=["Warming up indicators"],
+        details={},
+    )
+
+    for strat_mode in ("PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA"):
+        broker = DeltaPaperBroker(cfg=cfg, state_file=str(tmp_path / f"bypass_{strat_mode}.json"), initial_equity=10000.0)
+        bot_cfg = make_test_cfg(strategy_type=strat_mode)
+        DeltaPaperBot._instance = None
+        bot = DeltaPaperBot(cfg=bot_cfg, feed=mock_feed, broker=broker)
+
+        sig = bot._evaluate_strategy(df_full)
+        assert sig is None, f"Strategy mode {strat_mode} bypassed readiness check!"
+        assert "WARMING_UP" in bot._last_rejection_reason
+        assert broker.open_position is None
+
+
+# -----------------------------------------------------------------------------
+# 10: Risk Configuration & Safety Violation Tests
+# -----------------------------------------------------------------------------
+
+def test_risk_configuration_defaults_and_precedence():
+    """Verify exact risk defaults in ORBSettings and precedence."""
+    cfg = ORBSettings()
+    # Default authoritative values
+    assert cfg.risk_pct == 0.5
+    assert cfg.daily_loss_limit_pct == 1.5
+    assert cfg.daily_loss_limit_r == 2.0
+    assert cfg.max_trades_per_day == 1
+
+    # Keyword argument override
+    custom_cfg = ORBSettings(risk_pct=1.0, daily_loss_limit_r=3.0)
+    assert custom_cfg.risk_pct == 1.0
+    assert custom_cfg.daily_loss_limit_r == 3.0
+
+
+def test_paper_safety_violations_unconditional():
+    """Verify DeltaPaperBot and DeltaPaperBroker raise PaperSafetyViolation if live mode is attempted."""
+    # Bot rejects mode='LIVE'
+    with pytest.raises(PaperSafetyViolation, match="mode='PAPER'"):
+        live_cfg = ORBSettings(mode="LIVE")
+        DeltaPaperBot._instance = None
+        DeltaPaperBot(cfg=live_cfg)
+
+    # Bot rejects live_trading_enabled=True
+    with pytest.raises(PaperSafetyViolation, match="LIVE_TRADING_ENABLED"):
+        live_enabled_cfg = ORBSettings(mode="PAPER", live_trading_enabled=True)
+        DeltaPaperBot._instance = None
+        DeltaPaperBot(cfg=live_enabled_cfg)
+
+    # Broker unconditionally rejects execute_live_order
+    paper_broker = DeltaPaperBroker(cfg=make_test_cfg())
+    with pytest.raises(PaperSafetyViolation, match="execute_live_order"):
+        paper_broker.execute_live_order("XAUTUSD", "BUY", 1)
+

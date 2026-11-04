@@ -65,6 +65,9 @@ def detect_market_regime(
         metrics={},
     )
 
+    if frame is None or frame.empty:
+        return empty_result
+
     # 1. Clean & prepare data (up to trailing lookback_cap bars for performance & warm-up)
     lookback_cap = max(450, getattr(cfg, "bootstrap_lookback_candles", 450))
     raw = frame.iloc[-lookback_cap:] if len(frame) > lookback_cap else frame
@@ -77,6 +80,9 @@ def detect_market_regime(
     else:
         df = raw.copy()
         df.columns = [str(c).strip().title() if str(c).lower() in {"open", "high", "low", "close", "volume"} else c for c in df.columns]
+        for req_col in ["Open", "High", "Low", "Close", "Volume"]:
+            if req_col not in df.columns:
+                return empty_result
         idx = pd.DatetimeIndex(pd.to_datetime(df.index))
         if idx.tz is None:
             idx = idx.tz_localize(cfg.timezone)
