@@ -25,7 +25,10 @@ class ORBSettings:
     strategy_type: str = os.getenv("STRATEGY_TYPE", "ORB").upper()  # "ORB", "TREND_FOLLOWING", "DUAL"
     symbol: str = os.getenv("ORB_SYMBOL", "XAUTUSD")
     mode: str = os.getenv("TRADING_MODE", os.getenv("ORB_MODE", "PAPER")).upper()
+    live_trading_enabled: bool = os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
+    paper_trading_acknowledged: str = os.getenv("PAPER_TRADING_ACKNOWLEDGED", "YES").upper()
     live_trading_acknowledged: str = os.getenv("LIVE_TRADING_ACKNOWLEDGED", os.getenv("ORB_LIVE_TRADING_ACKNOWLEDGED", "NO")).upper()
+    paper_initial_equity: float = _float("PAPER_INITIAL_EQUITY", 10000.0)
     kill_switch_active: bool = os.getenv("EMERGENCY_KILL_SWITCH", "false").lower() == "true"
     timezone: str = os.getenv("ORB_TIMEZONE", "Asia/Kolkata")
     session_start: str = os.getenv("ORB_SESSION_START", "09:00")
@@ -81,6 +84,7 @@ class ORBSettings:
     api_key: str = os.getenv("DELTA_EXCHANGE_API_KEY", "")
     api_secret: str = os.getenv("DELTA_EXCHANGE_API_SECRET", "")
     product_id: int = _int("ORB_DELTA_PRODUCT_ID", 131253)
+    ws_base_url: str = os.getenv("DELTA_WS_BASE_URL", "wss://socket.india.delta.exchange")
     request_timeout_seconds: int = _int("DELTA_PUBLIC_TIMEOUT_SECONDS", 10)
 
 
@@ -101,6 +105,14 @@ def validate_settings(cfg: ORBSettings) -> None:
                 "LIVE trading mode requires valid, non-placeholder DELTA_EXCHANGE_API_KEY and DELTA_EXCHANGE_API_SECRET. "
                 "Please configure real exchange credentials."
             )
+        if not getattr(cfg, "live_trading_enabled", False):
+            raise ConfigurationError(
+                "LIVE trading mode requested but LIVE_TRADING_ENABLED is false. "
+                "Refusing to execute live orders."
+            )
+
+    if getattr(cfg, "paper_initial_equity", 10000.0) <= 0:
+        raise ConfigurationError(f"paper_initial_equity must be positive, got {cfg.paper_initial_equity}")
 
     if cfg.risk_pct <= 0 or cfg.risk_pct > 5.0:
         raise ConfigurationError(f"risk_pct must be between 0.01% and 5.0%, got {cfg.risk_pct}%")

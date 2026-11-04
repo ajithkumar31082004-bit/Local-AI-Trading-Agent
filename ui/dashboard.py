@@ -10,11 +10,49 @@ from market_data.base import BaseMarketDataProvider
 
 from config.orb_settings import settings as orb_settings
 from services.delta_account_service import DeltaAccountService
+from services.delta_paper_broker import DeltaPaperBroker
 
 
 def render_dashboard(repo: DatabaseRepository, data_provider: BaseMarketDataProvider):
+    # Prominent Trading Mode & Safety Banner
+    st.markdown(
+        "<div style='background: linear-gradient(90deg, #1E3A8A 0%, #0D9488 100%); color: white; padding: 12px 18px; border-radius: 8px; font-weight: bold; font-size: 1.05em; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between;'>"
+        "<span>🛡️ PAPER TRADING – LIVE MARKET DATA – NO REAL ORDERS</span>"
+        "<span style='background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; font-size: 0.8em;'>DELTA EXCHANGE INDIA: XAUTUSD</span>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
     st.subheader("Executive Portfolio Dashboard")
     st.caption("Local-first paper trading portfolio and verified live exchange telemetry.")
+
+    # Section 1: XAUTUSD Paper Trading Simulated Account
+    with st.container(border=True):
+        st.markdown("### 🥇 XAUTUSD Simulated Paper Account (Delta Exchange India)")
+        st.caption("All orders and fills are simulated locally with exact spread (0.02%), slippage (0.02%), and fees (0.01%). Real exchange balance is isolated.")
+
+        delta_paper = DeltaPaperBroker()
+        d_summary = delta_paper.get_account_summary()
+
+        dp1, dp2, dp3, dp4, dp5 = st.columns(5)
+        dp1.metric("Simulated Equity", f"${d_summary['equity']:,.2f}", delta=f"{d_summary['realized_pnl']:+,.2f} P&L")
+        dp2.metric("Available Cash", f"${d_summary['cash_balance']:,.2f}")
+        dp3.metric("Win Rate", f"{d_summary['win_rate_pct']:.1f}%", f"{d_summary['winning_trades']}W / {d_summary['losing_trades']}L")
+        dp4.metric("Profit Factor", f"{d_summary['profit_factor']:.2f}")
+        dp5.metric("Max Drawdown", f"{d_summary['max_drawdown_pct']:.2f}%", delta=f"-${d_summary['max_drawdown_cash']:,.2f}", delta_color="inverse")
+
+        if d_summary["has_open_position"] and d_summary["open_position"]:
+            pos = d_summary["open_position"]
+            st.info(
+                f"**Active Simulated Position**: {pos['direction']} {pos['lots']} lots ({pos['contract_qty']} XAUT) @ ${pos['entry_price']:.2f} | "
+                f"Market: ${pos.get('market_price', pos['entry_price']):.2f} | "
+                f"Unrealized P&L: **{pos.get('unrealized_pnl', 0.0):+,.2f} USD** | "
+                f"SL: ${pos['stop_loss']:.2f} | TP: ${pos['take_profit']:.2f}"
+            )
+        else:
+            st.caption("No open simulated positions. Awaiting Strategy Intelligence V2 signal confirmation.")
+
+    st.markdown("---")
 
     # Section 1: Delta Exchange Real Account Telemetry
     with st.container(border=True):

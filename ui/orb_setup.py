@@ -20,6 +20,8 @@ from services.delta_risk import evaluate_delta_trade, DeltaDailyRiskStore
 from services.orb_backtest import backtest_orb
 from services.delta_live_executor import DeltaLiveExecutor
 from services.delta_reconciliation_service import DeltaReconciliationService
+from services.delta_paper_broker import DeltaPaperBroker
+from services.delta_paper_bot import DeltaPaperBot
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -88,6 +90,15 @@ def render_orb_setup():
     tab_live, tab_backtest = st.tabs(["📊 Live Strategy Monitor", "🧪 Backtesting"])
 
     with tab_live:
+        # Prominent PAPER TRADING Safety Banner
+        st.markdown(
+            "<div style='background: linear-gradient(90deg, #1E3A8A 0%, #0D9488 100%); color: white; padding: 12px 18px; border-radius: 8px; font-weight: bold; font-size: 1.05em; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between;'>"
+            "<span>🛡️ PAPER TRADING – LIVE MARKET DATA – NO REAL ORDERS</span>"
+            "<span style='background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; font-size: 0.8em;'>DELTA EXCHANGE INDIA (XAUTUSD)</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
         mode_color = "#D50000" if default_orb_settings.mode == "LIVE" else "#FF8F00" if default_orb_settings.mode == "ALERT_ONLY" else "#1E88E5"
         kill_switch_tag = ""
         if default_orb_settings.kill_switch_active:
@@ -105,6 +116,57 @@ def render_orb_setup():
             )
         with col_m2:
             reload_btn = st.button("🔄 Refresh Data", use_container_width=True)
+
+        # Real-Time WebSocket Market Data & Paper Bot Engine Panel
+        paper_bot = DeltaPaperBot.get_instance(cfg=cfg)
+        bot_telem = paper_bot.get_dashboard_telemetry()
+        feed_info = bot_telem.get("feed", {})
+        acc_info = bot_telem.get("account", {})
+
+        with st.container(border=True):
+            col_b1, col_b2, col_b3 = st.columns([2, 1, 1])
+            with col_b1:
+                ws_status = "🟢 WebSocket Streaming Live" if feed_info.get("ws_connected") else ("🟡 Starting WebSocket..." if bot_telem.get("is_running") else "⚪ WebSocket Idle")
+                st.markdown(f"### 📡 Delta Exchange India: {ws_status}")
+                st.caption(f"Symbol: `{cfg.symbol}` | Product ID: `131253` | WebSocket: `wss://socket.india.delta.exchange` | REST: `https://api.india.delta.exchange`")
+            with col_b2:
+                if bot_telem.get("is_running"):
+                    if st.button("⏹️ Stop Paper Bot", use_container_width=True, type="secondary"):
+                        paper_bot.stop()
+                        st.rerun()
+                else:
+                    if st.button("▶️ Start Live Paper Bot", use_container_width=True, type="primary"):
+                        paper_bot.start(bootstrap_lookback=200)
+                        st.rerun()
+            with col_b3:
+                bot_status_str = "ACTIVE" if bot_telem.get("is_running") else "STANDBY"
+                st.markdown(f"<div style='text-align: right; padding-top: 8px;'><b>Status:</b> <code>{bot_status_str}</code></div>", unsafe_allow_html=True)
+
+            # Paper Account Metrics Row
+            p_col1, p_col2, p_col3, p_col4, p_col5 = st.columns(5)
+            p_col1.metric("Simulated Equity", f"${acc_info.get('equity', 10000.0):,.2f}", delta=f"{acc_info.get('realized_pnl', 0.0):+,.2f} Realized P&L")
+            p_col2.metric("Available Cash", f"${acc_info.get('cash_balance', 10000.0):,.2f}")
+            p_col3.metric("Win Rate", f"{acc_info.get('win_rate_pct', 0.0):.1f}%", f"{acc_info.get('winning_trades', 0)}W / {acc_info.get('losing_trades', 0)}L")
+            p_col4.metric("Profit Factor", f"{acc_info.get('profit_factor', 0.0):.2f}")
+            p_col5.metric("Max Drawdown", f"{acc_info.get('max_drawdown_pct', 0.0):.2f}%", delta=f"-${acc_info.get('max_drawdown_cash', 0.0):,.2f}", delta_color="inverse")
+
+            # Active Simulated Position
+            open_pos = acc_info.get("open_position")
+            if open_pos:
+                st.info(
+                    f"**Active Simulated Position**: {open_pos['direction']} {open_pos['lots']} lots ({open_pos['contract_qty']} XAUT) @ ${open_pos['entry_price']:.2f} | "
+                    f"Market: ${feed_info.get('latest_price', open_pos['entry_price']):.2f} | "
+                    f"Unrealized P&L: **{open_pos.get('unrealized_pnl', 0.0):+,.2f} USD** | "
+                    f"SL: ${open_pos['stop_loss']:.2f} | TP: ${open_pos['take_profit']:.2f} | Strategy: `{open_pos['strategy_name']}`"
+                )
+            else:
+                st.caption(f"⚪ No active simulated position. Evaluation Status: {bot_telem.get('last_rejection_reason', 'Awaiting candle close')}")
+
+            # Closed Trades Expander
+            closed_trades = acc_info.get("closed_trades", [])
+            if closed_trades:
+                with st.expander(f"📜 Simulated Paper Trade History ({len(closed_trades)} Trades)", expanded=False):
+                    st.dataframe(pd.DataFrame(closed_trades), use_container_width=True)
 
         if default_orb_settings.mode == "LIVE":
             with st.expander("🚨 Live Order Controls & Emergency Kill-Switch", expanded=False):

@@ -100,7 +100,110 @@ Open your browser at `http://localhost:8501`. Select **"ORB Setup"** in the side
 
 ---
 
-## Mode Isolation & Delta Exchange Live Trading Architecture
+## Real-Time PAPER Trading with Delta Exchange India
+
+The platform features a **Real-Time Paper Trading Engine** for **XAUTUSD (Product ID 131253)** that streams real live market data directly from Delta Exchange India while keeping all order execution 100% simulated locally.
+
+> 🛡️ **PAPER TRADING – LIVE MARKET DATA – NO REAL ORDERS**
+> 
+> - **Zero Exchange Orders**: The paper trading execution path does not submit orders, modify positions, or access live exchange wallets.
+> - **No Trading Credentials Required**: Public market data is accessed via unauthenticated REST and WebSocket feeds.
+> - **Hard Safety Boundary**: Calling live order execution in paper mode immediately raises `PaperSafetyViolation`.
+
+### Architecture & Components
+
+1. **Delta Live Market Data Feed (`market_data/delta_live_feed.py`)**:
+   - **WebSocket**: Connects to `wss://socket.india.delta.exchange`.
+   - **Subscriptions**: Real-time channels `candlestick_5m`, `v2/ticker`, and `all_trades` for `XAUTUSD`.
+   - **REST Bootstrapping**: Seeds 300 completed historical 5m bars via `https://api.india.delta.exchange/v2/history/candles` on startup.
+   - **Candle Completion Guard**: Evaluates trade setups strictly when a 5m candle officially completes (`start_ts > current_forming_start_ts`). Incomplete/forming bars only update mark price for SL/TP evaluation.
+   - **Multi-Timeframe**: Automatically aggregates 5m candles into completed 15m candles for higher-timeframe regime analysis.
+
+2. **Isolated Paper Broker (`services/delta_paper_broker.py`)**:
+   - **Realistic Execution Friction**: Incorporates round-trip spread (0.02%), round-trip slippage (0.02%), and exchange fee (0.01% per side).
+   - **Conservative Collision Handling**: If both Stop Loss and Take Profit are touched within the same candle, Stop Loss is prioritized.
+   - **Persistent Account State**: Saves virtual cash balance, realized P&L, fee deductions, slippage costs, open position, and closed trades to `data/paper_account_xautusd.json`. State is seamlessly restored across restarts.
+   - **Hard Live Block**: `execute_live_order()` raises `PaperSafetyViolation` unconditionally.
+
+3. **Strategy Intelligence V2 Arbitrator (`strategy/arbitrator.py`)**:
+   - **Active Strategies**:
+     - Strategy 1: Opening Range Breakout V2 (ORB V2)
+     - Strategy 2: EMA20/EMA50 Trend-Following V2
+     - Strategy 3: VWAP + EMA Confirmation V2
+   - **Quality Score & Invalidation**: Selects highest-conviction setup across strategies and rejects signals in unfavorable market regimes.
+   - **Risk Limits**: 0.5% risk per trade, max 1 trade per day, 6-bar loss cooldown, session buffers (entries 09:45–22:00 IST, session liquidation at 23:30 IST).
+
+---
+
+### How to Run Paper Trading
+
+#### Option A: Terminal Live Runner (CLI)
+
+Run the real-time paper bot in your terminal with live telemetry and visual progress:
+
+```powershell
+.\.venv\Scripts\python cli.py paper-live
+```
+
+Optional arguments:
+- `--strategy`: Strategy mode to run (`PORTFOLIO` [default], `TREND`, `VWAP`, or `ORB`).
+- `--equity`: Starting paper equity (default: `$10,000`).
+- `--candles`: Number of 5m historical candles to pre-seed (default: `300`).
+- `--reset`: Reset paper account balance and trade history to initial equity.
+
+Example with account reset:
+```powershell
+.\.venv\Scripts\python cli.py paper-live --strategy PORTFOLIO --equity 10000 --reset
+```
+
+#### Option B: Streamlit Web Dashboard
+
+Launch the web UI:
+```powershell
+.\.venv\Scripts\streamlit run app.py
+```
+Navigate to **"Dashboard"** or **"ORB Setup"** in the sidebar. Both views display the prominent banner:
+`🛡️ PAPER TRADING – LIVE MARKET DATA – NO REAL ORDERS` along with live Delta WebSocket connection status, mark price, active paper position, realized P&L, and trade history.
+
+---
+
+### How to Verify No Real Orders Were Placed
+
+1. **Verify Configuration**:
+   Inspect `.env` to verify:
+   ```env
+   TRADING_MODE=PAPER
+   LIVE_TRADING_ENABLED=false
+   PAPER_TRADING_ACKNOWLEDGED=YES
+   LIVE_TRADING_ACKNOWLEDGED=NO
+   ```
+2. **Inspect Exchange Order History**:
+   Query Delta Exchange India API via read-only CLI:
+   ```powershell
+   .\.venv\Scripts\python cli.py account --asset USD
+   ```
+   Confirm that real exchange order count and wallet balance remain completely unchanged.
+3. **Inspect Simulated Paper Account State**:
+   Inspect the local JSON file where all paper trades are tracked:
+   ```powershell
+   type data\paper_account_xautusd.json
+   ```
+
+---
+
+### Safety Test Suite
+
+The dedicated 15-point safety test suite verifies all safety invariants:
+```powershell
+.\.venv\Scripts\pytest tests/test_delta_paper_trading.py -v
+```
+
+All 148 project unit, integration, and safety tests can be executed via:
+```powershell
+.\.venv\Scripts\pytest tests/ -q
+```
+
+---
 
 The platform strictly isolates paper trading, alert monitoring, and live order execution across three explicit operational modes:
 
