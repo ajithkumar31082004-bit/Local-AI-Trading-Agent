@@ -61,6 +61,7 @@ def evaluate_system_readiness(
     is_ws_connected: bool = True,
     is_feed_running: bool = True,
     is_bootstrapping: bool = False,
+    is_stale: bool = False,
     cfg: Optional[ORBSettings] = None,
 ) -> SystemReadiness:
     """Evaluate whether historical candle depth and indicator warm-up satisfy readiness.
@@ -186,9 +187,12 @@ def evaluate_system_readiness(
         except Exception as exc:
             missing.append(f"5m indicator calculation error: {exc}")
 
-    # 4. Connection drop detection (DEGRADED)
-    if is_feed_running and not is_ws_connected and not df_5m.empty:
-        missing.append("WebSocket disconnected during streaming")
+    # 4. Connection drop or staleness detection (DEGRADED)
+    if (is_feed_running and not is_ws_connected and not df_5m.empty) or is_stale:
+        if is_stale:
+            missing.append("Market data feed is stale (no updates received within freshness threshold)")
+        if is_feed_running and not is_ws_connected:
+            missing.append("WebSocket disconnected during streaming")
         return SystemReadiness(
             state=ReadinessState.DEGRADED,
             is_ready=False,
@@ -198,7 +202,7 @@ def evaluate_system_readiness(
             required_15m_count=req_15m,
             indicator_status=indicators,
             missing_requirements=missing,
-            details={"connection": "DISCONNECTED_STREAMING"},
+            details={"connection": "STALE_OR_DISCONNECTED", "is_stale": is_stale, "ws_connected": is_ws_connected},
         )
 
     # 5. Final State Resolution
@@ -226,3 +230,4 @@ def evaluate_system_readiness(
         missing_requirements=[],
         details={"connection": "CONNECTED_READY"},
     )
+

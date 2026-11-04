@@ -217,6 +217,12 @@ def test_readiness_state_machine_transitions():
     assert s_degr.is_ready is False
     assert any("WebSocket disconnected" in req for req in s_degr.missing_requirements)
 
+    # 7. DEGRADED via stale feed: WS connected but no updates within freshness threshold
+    s_stale = evaluate_system_readiness(full_df, is_ws_connected=True, is_feed_running=True, is_bootstrapping=False, is_stale=True, cfg=cfg)
+    assert s_stale.state == ReadinessState.DEGRADED
+    assert s_stale.is_ready is False
+    assert any("stale" in req for req in s_stale.missing_requirements)
+
 
 # -----------------------------------------------------------------------------
 # 6: Arbitrator Integration with Readiness

@@ -185,21 +185,35 @@ class DeltaLiveMarketDataFeed:
     def get_readiness(self) -> SystemReadiness:
         """Evaluate and return full system readiness report."""
         with self._lock:
+            max_staleness_sec = getattr(self.cfg, "max_staleness_seconds", 120)
+            is_stale = False
+            if self._running and self._last_update_ts and self._ws_connected and not self._completed_5m.empty:
+                if (datetime.now(timezone.utc) - self._last_update_ts).total_seconds() > max_staleness_sec:
+                    is_stale = True
+
             return evaluate_system_readiness(
                 df_5m=self._completed_5m.copy(),
                 is_ws_connected=self._ws_connected,
                 is_feed_running=self._running,
                 is_bootstrapping=self._is_bootstrapping,
+                is_stale=is_stale,
                 cfg=self.cfg,
             )
 
     def get_status(self) -> Dict[str, Any]:
         with self._lock:
+            max_staleness_sec = getattr(self.cfg, "max_staleness_seconds", 120)
+            is_stale = False
+            if self._running and self._last_update_ts and self._ws_connected and not self._completed_5m.empty:
+                if (datetime.now(timezone.utc) - self._last_update_ts).total_seconds() > max_staleness_sec:
+                    is_stale = True
+
             readiness = evaluate_system_readiness(
                 df_5m=self._completed_5m.copy(),
                 is_ws_connected=self._ws_connected,
                 is_feed_running=self._running,
                 is_bootstrapping=self._is_bootstrapping,
+                is_stale=is_stale,
                 cfg=self.cfg,
             )
             return {

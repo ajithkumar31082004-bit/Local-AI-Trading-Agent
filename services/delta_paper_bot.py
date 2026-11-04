@@ -194,14 +194,6 @@ class DeltaPaperBot:
             self._last_rejection_reason = "Insufficient completed candle history (< 30 bars)."
             return None
 
-        # Check system & indicator readiness
-        readiness = self.feed.get_readiness()
-        if not readiness.is_ready:
-            missing_str = "; ".join(readiness.missing_requirements) if readiness.missing_requirements else "Unknown requirement"
-            self._last_rejection_reason = f"Readiness {readiness.state.value}: {missing_str}"
-            logger.info("Evaluation skipped due to system readiness: %s (%s)", readiness.state.value, missing_str)
-            return None
-
         now_tz = datetime.now(self.tz)
         cur_t = now_tz.time()
         self._last_evaluation_time = now_tz
@@ -339,8 +331,6 @@ class DeltaPaperBot:
             r_res = detect_market_regime(df_5m, self.cfg)
             regime_val = r_res.regime.value
 
-        readiness = self.feed.get_readiness()
-
         return {
             "is_running": self._is_running,
             "mode": "PAPER",
@@ -350,9 +340,6 @@ class DeltaPaperBot:
             "feed": feed_status,
             "account": account_summary,
             "market_regime": regime_val,
-            "readiness_state": readiness.state.value,
-            "is_ready": readiness.is_ready,
-            "readiness_details": readiness.to_dict(),
             "ema20_5m": round(ema20_5m, 2),
             "ema20_15m": round(ema20_15m, 2),
             "ema50_15m": round(ema50_15m, 2),
