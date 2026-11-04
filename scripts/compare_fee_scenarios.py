@@ -163,3 +163,4 @@ print(f"{'Scenario':<45} | {'Fees':<7} | {'GST':<6} | {'Slip/Spr':<8} | {'Frict'
 print("-" * 120)
 for res in results:
     print(f"{res['scenario']:<45} | ${res['total_fees']:<6.4f} | ${res['total_gst']:<5.4f} | ${res['total_spread']+res['total_slip']:<7.4f} | ${res['total_friction']:<6.4f} | ${res['net_pnl']:<7.4f} | {res['profit_factor']:<5.2f} | {res['avg_r']:<+5.2f}R | ${res['max_dd_cash']:<8.4f}")
+

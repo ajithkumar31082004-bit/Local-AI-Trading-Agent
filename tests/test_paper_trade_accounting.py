@@ -341,4 +341,157 @@ def test_position_sizing_reported_495_lots():
     assert unencumbered_equity >= 9000.0  # At least 90% unencumbered collateral buffer
 
 
+def test_maker_order_fill_and_unfill_conditions(tmp_path):
+    """Verify simulation of Maker orders that fill vs. do NOT fill based on bar price bounds."""
+    cfg = ORBSettings(symbol="XAUTUSD", mode="PAPER")
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(tmp_path / "fill_state.json"), initial_equity=10000.0)
+
+    # 1. Buy limit order where bar low was higher than limit -> UNFILLED
+    ok_unfilled_buy, msg_buy, pos_buy = broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="LONG",
+        entry_price=4000.0,
+        stop_loss=3980.0,
+        take_profit=4040.0,
+        lots=1,
+        strategy_name="VWAP_EMA",
+        order_type="LIMIT",
+        bar_low=4005.0,  # Market low never touched 4000.0
+    )
+    assert ok_unfilled_buy is False
+    assert "unfilled" in msg_buy.lower()
+    assert pos_buy is None
+    assert broker.open_position is None
+
+    # 2. Buy limit order where bar low reached 3995.0 -> FILLED
+    ok_filled_buy, msg_filled_buy, pos_filled = broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="LONG",
+        entry_price=4000.0,
+        stop_loss=3980.0,
+        take_profit=4040.0,
+        lots=1,
+        strategy_name="VWAP_EMA",
+        order_type="LIMIT",
+        bar_low=3995.0,
+    )
+    assert ok_filled_buy is True
+    assert pos_filled is not None
+    assert broker.open_position is not None
+    broker.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+
+    # 3. Sell limit order where bar high was lower than limit -> UNFILLED
+    ok_unfilled_sell, msg_sell, pos_sell = broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="SHORT",
+        entry_price=4050.0,
+        stop_loss=4070.0,
+        take_profit=4010.0,
+        lots=1,
+        strategy_name="VWAP_EMA",
+        order_type="LIMIT",
+        bar_high=4045.0,  # Market high never reached 4050.0
+    )
+    assert ok_unfilled_sell is False
+    assert "unfilled" in msg_sell.lower()
+    assert pos_sell is None
+
+
+def test_partial_fill_simulation(tmp_path):
+    """Verify partial fill simulation where only a fraction of requested size fills."""
+    cfg = ORBSettings(symbol="XAUTUSD", mode="PAPER")
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(tmp_path / "partial_state.json"), initial_equity=10000.0)
+
+    # Request 4 lots with 50% partial fill ratio
+    ok, msg, pos = broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="LONG",
+        entry_price=4000.0,
+        stop_loss=3980.0,
+        take_profit=4040.0,
+        lots=4,
+        strategy_name="VWAP_EMA",
+        fill_ratio=0.5,
+    )
+    assert ok is True
+    assert pos["lots"] == 2  # 50% of 4 lots = 2 lots
+    assert pos["contract_qty"] == 0.002
+    assert pos["fill_ratio"] == 0.5
+
+
+def test_maker_entry_followed_by_taker_sl_exit(tmp_path):
+    """Verify realistic execution of Maker limit entry followed by Taker stop-loss market exit."""
+    cfg = ORBSettings(
+        symbol="XAUTUSD",
+        mode="PAPER",
+        fee_scenario="MAKER_TAKER",
+        maker_fee_pct=0.01,
+        taker_fee_pct=0.05,
+    )
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(tmp_path / "maker_taker_sl.json"), initial_equity=10000.0)
+
+    # 1. Maker Entry
+    ok, _, pos = broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="SHORT",
+        entry_price=4000.0,
+        stop_loss=4020.0,
+        take_profit=3960.0,
+        lots=1,
+        strategy_name="VWAP_EMA",
+        order_type="LIMIT",
+    )
+    assert ok is True
+    # Entry fee @ 0.01% on ~$4.00 notional = $0.0004
+    assert pos["entry_fee"] == 0.0004
+
+    # 2. Stop-loss triggers TAKER market exit
+    _, _, closed = broker.close_simulated_trade(
+        exit_price=4020.0,
+        exit_reason="SL",
+        order_type="TAKER",
+    )
+    # Exit fee @ 0.05% on ~$4.02 notional = $0.0020
+    assert closed["entry_order_type"] == "LIMIT"
+    assert closed["exit_order_type"] == "TAKER"
+    assert closed["fees"] == 0.0024  # 0.0004 + 0.0020
+
+
+def test_regime_dependent_spread_and_slippage(tmp_path):
+    """Verify that VOLATILE_BREAKOUT expands spread and slippage by 1.5x."""
+    cfg = ORBSettings(symbol="XAUTUSD", mode="PAPER")
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(tmp_path / "regime_state.json"), initial_equity=10000.0)
+
+    # Normal RANGING entry
+    broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="LONG",
+        entry_price=4000.0,
+        stop_loss=3980.0,
+        take_profit=4040.0,
+        lots=1,
+        strategy_name="VWAP_EMA",
+        market_regime="RANGING",
+    )
+    _, _, closed_normal = broker.close_simulated_trade(exit_price=4040.0, exit_reason="TP", market_regime="RANGING")
+
+    # VOLATILE_BREAKOUT entry
+    broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="LONG",
+        entry_price=4000.0,
+        stop_loss=3980.0,
+        take_profit=4040.0,
+        lots=1,
+        strategy_name="VWAP_EMA",
+        market_regime="VOLATILE_BREAKOUT",
+    )
+    _, _, closed_volatile = broker.close_simulated_trade(exit_price=4040.0, exit_reason="TP", market_regime="VOLATILE_BREAKOUT")
+
+    # Spread/slip in volatile regime must be 1.5x of normal
+    assert closed_volatile["slippage"] > closed_normal["slippage"]
+    assert closed_volatile["market_regime"] == "VOLATILE_BREAKOUT"
+
+
+
 

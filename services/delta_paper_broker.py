@@ -175,8 +175,20 @@ class DeltaPaperBroker:
         strategy_name: str,
         signal_reason: str = "",
         candle_timestamp: Optional[str] = None,
+        order_type: str = "LIMIT",
+        bar_high: Optional[float] = None,
+        bar_low: Optional[float] = None,
+        fill_ratio: float = 1.0,
+        market_regime: Optional[str] = None,
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
-        """Open a simulated paper position with realistic friction (spread, slippage, fees)."""
+        """Open a simulated paper position with realistic friction (spread, slippage, fees).
+        
+        Supports:
+        - Maker orders that fill vs. do not fill (based on bar high/low price bounds)
+        - Partial fills (via fill_ratio between 0.0 and 1.0)
+        - Regime-dependent spread & slippage (wider during volatile breakouts)
+        - Configurable fee scenarios and GST
+        """
         clean_dir = direction.strip().upper()
         clean_sym = symbol.strip().upper()
 
@@ -192,26 +204,53 @@ class DeltaPaperBroker:
             if self.open_position is not None:
                 return False, f"Position already open: {self.open_position['direction']} {self.open_position['lots']} lots {self.open_position['symbol']}", None
 
-            # 2. Compute fill price with realistic entry spread and slippage
-            # Long enters at Ask (+ half spread + slippage), Short enters at Bid (- half spread - slippage)
-            spread_half = (self.cfg.spread_pct_round_trip / 2.0) / 100.0
-            slip_half = (self.cfg.slippage_pct_round_trip / 2.0) / 100.0
+            # 2. Check Maker Limit order fill condition (orders that do NOT fill)
+            order_kind = order_type.strip().upper()
+            if order_kind == "LIMIT":
+                if clean_dir == "LONG" and bar_low is not None and bar_low > entry_price:
+                    msg = f"Maker LIMIT BUY unfilled: bar low (${bar_low:.2f}) > limit entry (${entry_price:.2f})"
+                    logger.info(msg)
+                    return False, msg, None
+                elif clean_dir == "SHORT" and bar_high is not None and bar_high < entry_price:
+                    msg = f"Maker LIMIT SELL unfilled: bar high (${bar_high:.2f}) < limit entry (${entry_price:.2f})"
+                    logger.info(msg)
+                    return False, msg, None
+
+            # 3. Dynamic regime-dependent spread & slippage multiplier
+            regime = market_regime or "RANGING"
+            if regime == "VOLATILE_BREAKOUT":
+                regime_multiplier = 1.5  # 50% wider spread and slippage under high volatility
+            elif regime == "UNCERTAIN":
+                regime_multiplier = 1.25
+            else:
+                regime_multiplier = 1.0
+
+            # Compute fill price with realistic entry spread and slippage
+            spread_half = ((self.cfg.spread_pct_round_trip / 2.0) * regime_multiplier) / 100.0
+            slip_half = ((self.cfg.slippage_pct_round_trip / 2.0) * regime_multiplier) / 100.0
 
             if clean_dir == "LONG":
                 fill_price = round(entry_price * (1.0 + spread_half + slip_half), 2)
             else:
                 fill_price = round(entry_price * (1.0 - spread_half - slip_half), 2)
 
-            contract_qty = round(lots * self.cfg.contract_size_xaut, 6)
+            # 4. Partial fill modeling
+            actual_ratio = max(0.01, min(1.0, float(fill_ratio)))
+            executed_lots = max(1, int(round(lots * actual_ratio))) if lots > 1 else lots
+            contract_qty = round(executed_lots * self.cfg.contract_size_xaut * (actual_ratio if lots == 1 else 1.0), 6)
             notional = round(fill_price * contract_qty, 2)
             margin_required = round(notional / self.cfg.leverage, 2)
 
             entry_fee_pct, _ = self._get_fee_rates()
+            # If explicit taker entry requested, override entry fee rate to taker
+            if order_kind == "MARKET" or order_kind == "TAKER":
+                entry_fee_pct = getattr(self.cfg, "taker_fee_pct", 0.05)
+
             entry_fee = round(notional * (entry_fee_pct / 100.0), 4)
             entry_gst = round(entry_fee * (self.cfg.gst_rate_pct / 100.0), 4) if getattr(self.cfg, "apply_gst", False) else 0.0
             slippage_cost = round(abs(fill_price - entry_price) * contract_qty, 4)
 
-            # 3. Balance verification
+            # 5. Balance verification
             entry_outflow = entry_fee + entry_gst
             if self.cash_balance < (margin_required + entry_outflow):
                 return False, f"Insufficient paper cash: required ${margin_required + entry_outflow:.2f}, available ${self.cash_balance:.2f}", None
@@ -243,11 +282,15 @@ class DeltaPaperBroker:
                 "entry_price": fill_price,
                 "signal_entry_price": entry_price,
                 "market_price": fill_price,
-                "lots": lots,
+                "lots": executed_lots,
+                "requested_lots": lots,
                 "contract_qty": contract_qty,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
                 "margin": margin_required,
+                "order_type": order_kind,
+                "fill_ratio": actual_ratio,
+                "market_regime": regime,
                 "entry_fee": entry_fee,
                 "entry_gst": entry_gst,
                 "exit_fee": 0.0,
@@ -272,6 +315,8 @@ class DeltaPaperBroker:
         exit_price: float,
         exit_reason: str,
         exit_timestamp: Optional[str] = None,
+        order_type: Optional[str] = None,
+        market_regime: Optional[str] = None,
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """Close current open simulated position, calculate final P&L and friction, and record."""
         with self._lock:
@@ -283,9 +328,17 @@ class DeltaPaperBroker:
             contract_qty = pos["contract_qty"]
             entry_price = pos["entry_price"]
 
-            # Compute realistic exit fill with spread and slippage
-            spread_half = (self.cfg.spread_pct_round_trip / 2.0) / 100.0
-            slip_half = (self.cfg.slippage_pct_round_trip / 2.0) / 100.0
+            # Compute regime-dependent spread and slippage
+            regime = market_regime or pos.get("market_regime") or "RANGING"
+            if regime == "VOLATILE_BREAKOUT":
+                regime_multiplier = 1.5
+            elif regime == "UNCERTAIN":
+                regime_multiplier = 1.25
+            else:
+                regime_multiplier = 1.0
+
+            spread_half = ((self.cfg.spread_pct_round_trip / 2.0) * regime_multiplier) / 100.0
+            slip_half = ((self.cfg.slippage_pct_round_trip / 2.0) * regime_multiplier) / 100.0
 
             if side == "LONG":
                 # Long exits by selling at Bid
@@ -295,7 +348,18 @@ class DeltaPaperBroker:
                 exit_fill = round(exit_price * (1.0 + spread_half + slip_half), 2)
 
             exit_notional = round(exit_fill * contract_qty, 2)
-            _, exit_fee_pct = self._get_fee_rates()
+
+            # Determine exit fee rate based on order type and scenario
+            if order_type:
+                resolved_exit_type = order_type.strip().upper()
+                exit_fee_pct = getattr(self.cfg, "taker_fee_pct", 0.05) if resolved_exit_type in {"TAKER", "MARKET"} else getattr(self.cfg, "maker_fee_pct", 0.01)
+            elif exit_reason.upper() in {"SL", "STOP_LOSS"} and getattr(self.cfg, "fee_scenario", "MAKER_MAKER") != "MAKER_MAKER":
+                resolved_exit_type = "TAKER"
+                exit_fee_pct = getattr(self.cfg, "taker_fee_pct", 0.05)
+            else:
+                _, exit_fee_pct = self._get_fee_rates()
+                resolved_exit_type = "MAKER" if exit_fee_pct <= getattr(self.cfg, "maker_fee_pct", 0.01) else "TAKER"
+
             exit_fee = round(exit_notional * (exit_fee_pct / 100.0), 4)
             exit_gst = round(exit_fee * (self.cfg.gst_rate_pct / 100.0), 4) if getattr(self.cfg, "apply_gst", False) else 0.0
             exit_slippage = round(abs(exit_fill - exit_price) * contract_qty, 4)
@@ -354,6 +418,10 @@ class DeltaPaperBroker:
                 "gst": gst_amount,
                 "gst_applied": getattr(self.cfg, "apply_gst", False),
                 "fee_scenario": getattr(self.cfg, "fee_scenario", "MAKER_MAKER"),
+                "entry_order_type": pos.get("order_type", "LIMIT"),
+                "exit_order_type": resolved_exit_type,
+                "fill_ratio": pos.get("fill_ratio", 1.0),
+                "market_regime": regime,
                 "spread_cost": spread_cost,
                 "slippage_cost": slippage_cost,
                 "slippage": total_price_impact,
