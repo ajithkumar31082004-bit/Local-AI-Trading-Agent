@@ -296,3 +296,4 @@ def write_final_performance_report(enriched_days: list, trades: list, all_signal
 
 if __name__ == "__main__":
     main()
+

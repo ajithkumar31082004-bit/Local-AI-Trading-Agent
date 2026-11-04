@@ -137,6 +137,30 @@ class DeltaPaperBroker:
         )
 
     # -------------------------------------------------------------------------
+    # Fee Scenarios & Cost Modeling
+    # -------------------------------------------------------------------------
+
+    def _get_fee_rates(self) -> Tuple[float, float]:
+        """Return (entry_fee_pct, exit_fee_pct) based on configured fee_scenario.
+        
+        Scenarios:
+        - MAKER_MAKER: 0.01% entry, 0.01% exit (passive limit orders on both sides)
+        - MAKER_TAKER: 0.01% entry, 0.05% exit (limit entry, stop-market / taker exit)
+        - TAKER_TAKER: 0.05% entry, 0.05% exit (aggressive market orders on both sides)
+        """
+        scenario = getattr(self.cfg, "fee_scenario", "MAKER_MAKER").upper()
+        maker = getattr(self.cfg, "maker_fee_pct", 0.01)
+        taker = getattr(self.cfg, "taker_fee_pct", 0.05)
+
+        if scenario == "MAKER_TAKER":
+            return maker, taker
+        elif scenario == "TAKER_TAKER":
+            return taker, taker
+        else:  # MAKER_MAKER or fallback to fee_pct_per_side
+            fee = getattr(self.cfg, "fee_pct_per_side", maker)
+            return fee, fee
+
+    # -------------------------------------------------------------------------
     # Simulated Order Execution
     # -------------------------------------------------------------------------
 
@@ -181,15 +205,19 @@ class DeltaPaperBroker:
             contract_qty = round(lots * self.cfg.contract_size_xaut, 6)
             notional = round(fill_price * contract_qty, 2)
             margin_required = round(notional / self.cfg.leverage, 2)
-            entry_fee = round(notional * (self.cfg.fee_pct_per_side / 100.0), 4)
+
+            entry_fee_pct, _ = self._get_fee_rates()
+            entry_fee = round(notional * (entry_fee_pct / 100.0), 4)
+            entry_gst = round(entry_fee * (self.cfg.gst_rate_pct / 100.0), 4) if getattr(self.cfg, "apply_gst", False) else 0.0
             slippage_cost = round(abs(fill_price - entry_price) * contract_qty, 4)
 
             # 3. Balance verification
-            if self.cash_balance < (margin_required + entry_fee):
-                return False, f"Insufficient paper cash: required ${margin_required + entry_fee:.2f}, available ${self.cash_balance:.2f}", None
+            entry_outflow = entry_fee + entry_gst
+            if self.cash_balance < (margin_required + entry_outflow):
+                return False, f"Insufficient paper cash: required ${margin_required + entry_outflow:.2f}, available ${self.cash_balance:.2f}", None
 
             # Deduct entry fee from cash (4-decimal precision for micro contracts)
-            self.cash_balance = round(self.cash_balance - entry_fee, 4)
+            self.cash_balance = round(self.cash_balance - entry_outflow, 4)
             self.total_fees += entry_fee
             self.total_slippage += slippage_cost
 
@@ -221,7 +249,9 @@ class DeltaPaperBroker:
                 "take_profit": take_profit,
                 "margin": margin_required,
                 "entry_fee": entry_fee,
+                "entry_gst": entry_gst,
                 "exit_fee": 0.0,
+                "exit_gst": 0.0,
                 "slippage_cost": slippage_cost,
                 "unrealized_pnl": 0.0,
                 "signal_reason": signal_reason,
@@ -265,7 +295,9 @@ class DeltaPaperBroker:
                 exit_fill = round(exit_price * (1.0 + spread_half + slip_half), 2)
 
             exit_notional = round(exit_fill * contract_qty, 2)
-            exit_fee = round(exit_notional * (self.cfg.fee_pct_per_side / 100.0), 4)
+            _, exit_fee_pct = self._get_fee_rates()
+            exit_fee = round(exit_notional * (exit_fee_pct / 100.0), 4)
+            exit_gst = round(exit_fee * (self.cfg.gst_rate_pct / 100.0), 4) if getattr(self.cfg, "apply_gst", False) else 0.0
             exit_slippage = round(abs(exit_fill - exit_price) * contract_qty, 4)
 
             # Gross P&L (computed to 4 decimal places for micro-contract precision)
@@ -275,10 +307,13 @@ class DeltaPaperBroker:
                 gross_pnl = round((pos["signal_entry_price"] - exit_price) * contract_qty, 4)
 
             total_fees = round(pos["entry_fee"] + exit_fee, 4)
+            gst_amount = round(total_fees * (self.cfg.gst_rate_pct / 100.0), 4)
+            deducted_gst = gst_amount if getattr(self.cfg, "apply_gst", False) else 0.0
+
             total_price_impact = round(pos["slippage_cost"] + exit_slippage, 4)
             spread_cost = round(total_price_impact / 2.0, 4)
             slippage_cost = round(total_price_impact / 2.0, 4)
-            total_friction = round(total_fees + total_price_impact, 4)
+            total_friction = round(total_fees + deducted_gst + total_price_impact, 4)
             net_pnl = round(gross_pnl - total_friction, 4)
 
             # Trade-level R-Multiple: Net P&L relative to planned risk on this specific position
@@ -289,9 +324,9 @@ class DeltaPaperBroker:
             portfolio_risk_budget = self.initial_equity * (self.cfg.risk_pct / 100.0)
             portfolio_r_multiple = round(net_pnl / portfolio_risk_budget, 4) if portfolio_risk_budget > 0 else 0.0
 
-            # Update cash balance: since entry_fee was deducted at trade entry,
-            # we restore entry_fee and add net_pnl so that overall cash change is exactly net_pnl
-            self.cash_balance = round(self.cash_balance + net_pnl + pos["entry_fee"], 4)
+            # Update cash balance: restore deducted entry costs and apply net_pnl
+            entry_deducted = pos["entry_fee"] + pos.get("entry_gst", 0.0)
+            self.cash_balance = round(self.cash_balance + net_pnl + entry_deducted, 4)
             self.realized_pnl = round(self.realized_pnl + net_pnl, 4)
             self.total_fees = round(self.total_fees + exit_fee, 4)
             self.total_slippage = round(self.total_slippage + exit_slippage, 4)
@@ -316,6 +351,9 @@ class DeltaPaperBroker:
                 "trigger_price": exit_price,
                 "gross_pnl": gross_pnl,
                 "fees": total_fees,
+                "gst": gst_amount,
+                "gst_applied": getattr(self.cfg, "apply_gst", False),
+                "fee_scenario": getattr(self.cfg, "fee_scenario", "MAKER_MAKER"),
                 "spread_cost": spread_cost,
                 "slippage_cost": slippage_cost,
                 "slippage": total_price_impact,

@@ -78,6 +78,11 @@ class ORBSettings:
     spread_pct_round_trip: float = _float("ORB_SPREAD_PCT_ROUND_TRIP", 0.02)
     slippage_pct_round_trip: float = _float("ORB_SLIPPAGE_PCT_ROUND_TRIP", 0.02)
     max_margin_pct_equity: float = _float("ORB_MAX_MARGIN_PCT_EQUITY", 10.0)
+    maker_fee_pct: float = _float("DELTA_MAKER_FEE_PCT", 0.01)
+    taker_fee_pct: float = _float("DELTA_TAKER_FEE_PCT", 0.05)
+    gst_rate_pct: float = _float("DELTA_GST_RATE_PCT", 18.0)
+    fee_scenario: str = os.getenv("DELTA_FEE_SCENARIO", "MAKER_MAKER").upper()
+    apply_gst: bool = os.getenv("DELTA_APPLY_GST", "false").lower() == "true"
     state_path: Path = ROOT / "data" / "orb_risk_state.json"
     journal_path: Path = ROOT / "data" / "orb_journal.sqlite3"
     api_base_url: str = os.getenv("ORB_DELTA_API_BASE_URL", os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")).rstrip("/").replace("https://india.delta.exchange", "https://api.india.delta.exchange")

@@ -251,3 +251,4 @@ The trading environment was audited to ensure strict safety parameters remain ac
    - Do NOT loosen regime filters or increase the 1 trade/day limit. The filters prevented bad trades during volatile/ranging regimes (over 500 signals were safely filtered out).
 3. **Keep Execution in PAPER Mode**:
    - Even though gross expectancy is positive (+0.027R), net profitability after friction requires a higher win rate (target: >38%) or larger reward-to-risk realization before considering live capital.
+

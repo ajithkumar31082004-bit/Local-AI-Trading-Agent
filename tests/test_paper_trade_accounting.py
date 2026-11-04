@@ -217,3 +217,128 @@ def test_fourteen_day_simulated_ledger_consistency():
     assert abs(total_net - (-0.0121)) <= 0.0001
 
 
+def test_fee_scenarios_and_gst(tmp_path):
+    """Verify configurable fee scenarios (Maker-Maker, Maker-Taker, Taker-Taker) and GST."""
+    # Scenario 1: Maker entry (0.01%) + Taker exit (0.05%) with 18% GST applied
+    cfg_maker_taker = ORBSettings(
+        symbol="XAUTUSD",
+        mode="PAPER",
+        fee_scenario="MAKER_TAKER",
+        maker_fee_pct=0.01,
+        taker_fee_pct=0.05,
+        gst_rate_pct=18.0,
+        apply_gst=True,
+    )
+    broker = DeltaPaperBroker(cfg=cfg_maker_taker, state_file=str(tmp_path / "mt_state.json"), initial_equity=10000.0)
+
+    # 1 lot @ 4000.0 (notional = $4.00)
+    broker.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="LONG",
+        entry_price=4000.0,
+        stop_loss=3980.0,
+        take_profit=4040.0,
+        lots=1,
+        strategy_name="VWAP_EMA",
+    )
+    # Entry notional = $4.0008, entry fee @ 0.01% = $0.0004
+    # Entry GST @ 18% = 0.0004 * 0.18 = $0.0001
+    _, _, closed = broker.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+
+    # Exit notional = $4.0392, exit fee @ 0.05% = $0.0020
+    assert closed["fees"] == 0.0024  # 0.0004 entry + 0.0020 exit
+    assert closed["gst"] == 0.0004   # 18% of 0.0024 = 0.000432 -> 0.0004
+    assert closed["fee_scenario"] == "MAKER_TAKER"
+    assert closed["gst_applied"] is True
+
+    # Cash balance must strictly conserve: Initial + net_pnl
+    summary = broker.get_account_summary()
+    assert summary["cash_balance"] == round(10000.0 + closed["net_pnl"], 4)
+
+    # Scenario 2: Taker entry (0.05%) + Taker exit (0.05%)
+    cfg_taker_taker = ORBSettings(
+        symbol="XAUTUSD",
+        mode="PAPER",
+        fee_scenario="TAKER_TAKER",
+        maker_fee_pct=0.01,
+        taker_fee_pct=0.05,
+        apply_gst=False,
+    )
+    broker_tt = DeltaPaperBroker(cfg=cfg_taker_taker, state_file=str(tmp_path / "tt_state.json"), initial_equity=10000.0)
+    broker_tt.open_simulated_trade(
+        symbol="XAUTUSD",
+        direction="LONG",
+        entry_price=4000.0,
+        stop_loss=3980.0,
+        take_profit=4040.0,
+        lots=1,
+        strategy_name="VWAP_EMA",
+    )
+    _, _, closed_tt = broker_tt.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+    # Entry fee @ 0.05% ($0.0020) + Exit fee @ 0.05% ($0.0020) = $0.0040
+    assert closed_tt["fees"] == 0.0040
+    assert closed_tt["fee_scenario"] == "TAKER_TAKER"
+
+
+def test_position_sizing_reported_495_lots():
+    """Independent mathematical verification of the reported 495-lot sizing calculation.
+    
+    Verifies that size_position caps lots at 495 for a $10,000 account at 0.5% risk
+    due to the binding 10% maximum margin limit at 2.0x leverage.
+    """
+    from risk.position_sizing import size_position, estimate_lot_risk
+    from config.orb_settings import settings
+
+    entry = 4035.58
+    stop = 4021.73
+    equity = 10000.0
+
+    # 1. Configured constraints
+    assert settings.risk_pct == 0.5
+    assert settings.max_margin_pct_equity == 10.0
+    assert settings.leverage == 2.0
+    assert settings.contract_size_xaut == 0.001
+    assert settings.lot_increment == 1
+
+    # 2. Financial risk budget
+    risk_budget = equity * (settings.risk_pct / 100.0)
+    assert risk_budget == 50.0
+
+    # 3. Stop distance
+    stop_dist = abs(entry - stop)
+    assert round(stop_dist, 2) == 13.85
+
+    # 4. Per-lot risk and costs
+    per_lot_risk, fee_per_lot, costs_per_lot = estimate_lot_risk(entry, stop, settings)
+    gross_risk_per_lot = stop_dist * settings.contract_size_xaut
+    assert round(gross_risk_per_lot, 5) == 0.01385
+
+    # 5. Raw risk lots (unconstrained by margin)
+    raw_risk_lots = int(risk_budget // per_lot_risk)
+    assert raw_risk_lots > 3000
+
+    # 6. Margin constraint: 10% of $10,000 = $1,000 max margin allocation
+    max_margin_budget = equity * (settings.max_margin_pct_equity / 100.0)
+    assert max_margin_budget == 1000.0
+
+    notional_per_lot = entry * settings.contract_size_xaut  # $4.03558
+    margin_per_lot = notional_per_lot / settings.leverage   # $2.01779
+    max_margin_lots = int(max_margin_budget // margin_per_lot)
+
+    # 1000.0 / 2.01779 = 495.59 -> 495 integer lots
+    assert max_margin_lots == 495
+
+    # 7. Execute size_position and assert exact lot sizing
+    decision = size_position(entry, stop, equity, settings)
+    assert decision.approved is True
+    assert decision.lots == 495
+    assert decision.lots == min(raw_risk_lots, max_margin_lots)
+
+    # 8. Unencumbered equity buffer
+    total_margin = margin_per_lot * decision.lots
+    assert round(total_margin, 2) == 998.81
+    unencumbered_equity = equity - total_margin
+    assert unencumbered_equity >= 9000.0  # At least 90% unencumbered collateral buffer
+
+
+

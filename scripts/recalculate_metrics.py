@@ -100,3 +100,4 @@ print(f"Peak Equity: ${peak_equity:.4f}")
 print(f"Final Equity: ${running_equity:.4f}")
 print(f"Max Drawdown ($): ${max_dd_cash:.4f}")
 print(f"Max Drawdown (%): {max_dd_pct:.6f}%")
+
