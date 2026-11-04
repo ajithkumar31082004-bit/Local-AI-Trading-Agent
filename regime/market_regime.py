@@ -25,6 +25,7 @@ from indicators.orb_indicators import (
     prior_volume_average,
     resample_to_15m,
 )
+from regime.readiness import ReadinessState, SystemReadiness, evaluate_system_readiness
 
 
 class MarketRegime(str, Enum):
@@ -64,11 +65,12 @@ def detect_market_regime(
         metrics={},
     )
 
-    if frame.empty or len(frame) < 60:
+    if frame is None or frame.empty:
         return empty_result
 
-    # 1. Clean & prepare data (up to trailing 300 5m bars for performance)
-    raw = frame.iloc[-300:] if len(frame) > 300 else frame
+    # 1. Clean & prepare data (up to trailing lookback_cap bars for performance & warm-up)
+    lookback_cap = max(450, getattr(cfg, "bootstrap_lookback_candles", 450))
+    raw = frame.iloc[-lookback_cap:] if len(frame) > lookback_cap else frame
     if isinstance(raw.index, pd.DatetimeIndex) and {"Open", "High", "Low", "Close", "Volume"}.issubset(raw.columns):
         df_5m = raw.copy()
         if df_5m.index.tz is None:
@@ -78,6 +80,9 @@ def detect_market_regime(
     else:
         df = raw.copy()
         df.columns = [str(c).strip().title() if str(c).lower() in {"open", "high", "low", "close", "volume"} else c for c in df.columns]
+        for col in ["Open", "High", "Low", "Close", "Volume"]:
+            if col not in df.columns:
+                return empty_result
         idx = pd.DatetimeIndex(pd.to_datetime(df.index))
         if idx.tz is None:
             idx = idx.tz_localize(cfg.timezone)
@@ -89,20 +94,21 @@ def detect_market_regime(
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df_5m = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
 
-    if len(df_5m) < 60:
-        return empty_result
-
-    # 2. Multi-Timeframe 15m Indicators
-    df_15m = resample_to_15m(df_5m)
-    if len(df_15m) < 50:
+    # 2. Explicit System & Indicator Readiness Evaluation
+    readiness = evaluate_system_readiness(df_5m, cfg=cfg)
+    if not readiness.is_ready:
+        missing_str = "; ".join(readiness.missing_requirements) if readiness.missing_requirements else "Data stabilizing"
         return RegimeDetectionResult(
             regime=MarketRegime.UNCERTAIN,
             confidence=0.0,
             allowed_strategies=[],
             disallowed_strategies=["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP"],
-            rationale="Insufficient 15m resampled candles for macro baseline.",
-            metrics={},
+            rationale=f"WARMING_UP: {missing_str}",
+            metrics={"readiness": readiness.to_dict()},
         )
+
+    # 3. Multi-Timeframe 15m Indicators (guaranteed valid & converged)
+    df_15m = resample_to_15m(df_5m)
 
     df_15m["EMA20"] = ema(df_15m["Close"], 20)
     df_15m["EMA50"] = ema(df_15m["Close"], 50)
@@ -160,6 +166,7 @@ def detect_market_regime(
         "ema50_15m": round(ema50_15m, 2),
         "ema20_slope_15m": round(ema20_slope_15m, 4),
         "vol_ratio": round(vol_5m / max(vol_avg_5m, 1e-6), 2),
+        "readiness": readiness.to_dict(),
     }
 
     # 5. REGIME CLASSIFICATION RULES

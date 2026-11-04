@@ -82,14 +82,15 @@ class DeltaPaperBot:
     # Lifecycle Controls
     # -------------------------------------------------------------------------
 
-    def start(self, bootstrap_lookback: int = 300) -> bool:
+    def start(self, bootstrap_lookback: Optional[int] = None) -> bool:
         """Start live market data feed and register event callbacks."""
+        target_lookback = bootstrap_lookback or getattr(self.cfg, "bootstrap_lookback_candles", 450)
         with self._lock:
             if self._is_running:
                 logger.info("DeltaPaperBot is already running.")
                 return True
 
-            logger.info("Starting DeltaPaperBot for %s [Mode: %s, Strategy: %s]...", self.cfg.symbol, self.cfg.mode, self._strategy_type)
+            logger.info("Starting DeltaPaperBot for %s [Mode: %s, Strategy: %s, Bootstrap: %d bars]...", self.cfg.symbol, self.cfg.mode, self._strategy_type, target_lookback)
             self._log_event("SYSTEM", f"Starting DeltaPaperBot for {self.cfg.symbol} in PAPER mode.")
 
             # Register callbacks with feed
@@ -97,7 +98,7 @@ class DeltaPaperBot:
             self.feed.register_tick_callback(self._on_tick)
 
             # Start real-time feed
-            self.feed.start(bootstrap_lookback=bootstrap_lookback)
+            self.feed.start(bootstrap_lookback=target_lookback)
             self._is_running = True
 
             # Evaluate initial historical batch to initialize signal state
@@ -191,6 +192,14 @@ class DeltaPaperBot:
         """Evaluate Strategy Intelligence V2 and execute paper trade if conditions align."""
         if df_candles.empty or len(df_candles) < 30:
             self._last_rejection_reason = "Insufficient completed candle history (< 30 bars)."
+            return None
+
+        # Check system & indicator readiness
+        readiness = self.feed.get_readiness()
+        if not readiness.is_ready:
+            missing_str = "; ".join(readiness.missing_requirements) if readiness.missing_requirements else "Unknown requirement"
+            self._last_rejection_reason = f"Readiness {readiness.state.value}: {missing_str}"
+            logger.info("Evaluation skipped due to system readiness: %s (%s)", readiness.state.value, missing_str)
             return None
 
         now_tz = datetime.now(self.tz)
@@ -330,6 +339,8 @@ class DeltaPaperBot:
             r_res = detect_market_regime(df_5m, self.cfg)
             regime_val = r_res.regime.value
 
+        readiness = self.feed.get_readiness()
+
         return {
             "is_running": self._is_running,
             "mode": "PAPER",
@@ -339,6 +350,9 @@ class DeltaPaperBot:
             "feed": feed_status,
             "account": account_summary,
             "market_regime": regime_val,
+            "readiness_state": readiness.state.value,
+            "is_ready": readiness.is_ready,
+            "readiness_details": readiness.to_dict(),
             "ema20_5m": round(ema20_5m, 2),
             "ema20_15m": round(ema20_15m, 2),
             "ema50_15m": round(ema50_15m, 2),

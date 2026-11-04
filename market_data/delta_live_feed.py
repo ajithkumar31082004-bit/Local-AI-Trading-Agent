@@ -26,6 +26,7 @@ import websockets
 from config.orb_settings import ORBSettings, settings as default_orb_settings
 from data.delta_candles import fetch_5m_candles, DeltaCandleError
 from indicators.orb_indicators import resample_to_15m
+from regime.readiness import ReadinessState, SystemReadiness, evaluate_system_readiness
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class DeltaLiveMarketDataFeed:
         self._rest_connected: bool = False
         self._reconnect_attempts: int = 0
         self._last_error: Optional[str] = None
+        self._is_bootstrapping: bool = False
 
         # Callbacks
         self._candle_callbacks: List[Callable[[pd.DataFrame, pd.DataFrame, Dict[str, Any]], None]] = []
@@ -87,8 +89,9 @@ class DeltaLiveMarketDataFeed:
     # Public Control Methods
     # -------------------------------------------------------------------------
 
-    def start(self, bootstrap_lookback: int = 300) -> bool:
+    def start(self, bootstrap_lookback: Optional[int] = None) -> bool:
         """Bootstrap historical candles via REST and start WebSocket streaming."""
+        target_lookback = bootstrap_lookback if bootstrap_lookback is not None else getattr(self.cfg, "bootstrap_lookback_candles", 450)
         with self._lock:
             if self._running:
                 logger.info("DeltaLiveMarketDataFeed is already running.")
@@ -102,21 +105,24 @@ class DeltaLiveMarketDataFeed:
                 raise DeltaMarketDataError(self._last_error)
 
             # 2. Bootstrap initial historical candles
-            logger.info("Bootstrapping %d completed 5m candles for %s...", bootstrap_lookback, self.symbol)
+            logger.info("Bootstrapping %d completed 5m candles for %s...", target_lookback, self.symbol)
+            self._is_bootstrapping = True
             try:
-                seed_df = fetch_5m_candles(self.symbol, lookback_candles=bootstrap_lookback)
+                seed_df = fetch_5m_candles(self.symbol, lookback_candles=target_lookback)
                 if not seed_df.empty:
                     self._completed_5m = seed_df.copy()
                     self._completed_15m = resample_to_15m(self._completed_5m)
                     self._latest_price = float(seed_df["Close"].iloc[-1])
                     self._last_update_ts = datetime.now(timezone.utc)
                     self._rest_connected = True
-                    logger.info("Successfully bootstrapped %d 5m candles (latest close: $%.2f).", len(seed_df), self._latest_price)
+                    logger.info("Successfully bootstrapped %d 5m candles (resampled %d 15m candles, latest close: $%.2f).", len(seed_df), len(self._completed_15m), self._latest_price)
                 else:
                     logger.warning("REST seed returned empty candle frame.")
             except Exception as exc:
                 self._last_error = f"REST candle bootstrap failed: {exc}"
                 logger.warning(self._last_error)
+            finally:
+                self._is_bootstrapping = False
 
             # 3. Start background asyncio loop for WebSocket
             self._running = True
@@ -176,8 +182,26 @@ class DeltaLiveMarketDataFeed:
                 return False
             return (timestamp_epoch + interval_sec) <= self._current_forming_start_ts
 
+    def get_readiness(self) -> SystemReadiness:
+        """Evaluate and return full system readiness report."""
+        with self._lock:
+            return evaluate_system_readiness(
+                df_5m=self._completed_5m.copy(),
+                is_ws_connected=self._ws_connected,
+                is_feed_running=self._running,
+                is_bootstrapping=self._is_bootstrapping,
+                cfg=self.cfg,
+            )
+
     def get_status(self) -> Dict[str, Any]:
         with self._lock:
+            readiness = evaluate_system_readiness(
+                df_5m=self._completed_5m.copy(),
+                is_ws_connected=self._ws_connected,
+                is_feed_running=self._running,
+                is_bootstrapping=self._is_bootstrapping,
+                cfg=self.cfg,
+            )
             return {
                 "symbol": self.symbol,
                 "product_id": self.product_id,
@@ -185,6 +209,9 @@ class DeltaLiveMarketDataFeed:
                 "ws_connected": self._ws_connected,
                 "is_connected": self._ws_connected,
                 "rest_connected": self._rest_connected,
+                "readiness": readiness.to_dict(),
+                "readiness_state": readiness.state.value,
+                "is_ready": readiness.is_ready,
                 "latest_price": self._latest_price,
                 "mark_price": self._mark_price,
                 "bid": self._bid,
@@ -382,9 +409,9 @@ class DeltaLiveMarketDataFeed:
                     elif prev_ts not in self._completed_5m.index:
                         self._completed_5m = pd.concat([self._completed_5m, new_row]).sort_index()
 
-                    # Keep last 500 completed candles in memory
-                    if len(self._completed_5m) > 500:
-                        self._completed_5m = self._completed_5m.iloc[-500:]
+                    # Keep last 1000 completed candles in memory (providing up to 333 completed 15m bars)
+                    if len(self._completed_5m) > 1000:
+                        self._completed_5m = self._completed_5m.iloc[-1000:]
 
                     # Update 15m resampled candles
                     self._completed_15m = resample_to_15m(self._completed_5m)

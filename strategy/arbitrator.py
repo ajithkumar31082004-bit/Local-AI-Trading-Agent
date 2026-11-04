@@ -55,6 +55,15 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
 
     # If regime is UNCERTAIN, block all trades immediately without computing sub-strategies
     if regime_res.regime == MarketRegime.UNCERTAIN or regime_res.confidence < 0.60:
+        is_warming_up = "WARMING_UP" in regime_res.rationale or regime_res.metrics.get("readiness", {}).get("state") == "WARMING_UP"
+        decision_code = "SYSTEM_WARMING_UP" if is_warming_up else "REGIME_UNCERTAIN"
+        diagnostic_code = "WARMING_UP" if is_warming_up else "REGIME_UNCERTAIN"
+        reason_msg = (
+            f"NO TRADE: system warming up ({regime_res.rationale}). All strategies blocked until indicators are ready."
+            if is_warming_up
+            else f"NO TRADE: market regime is UNCERTAIN ({regime_res.rationale}). All strategies blocked for capital preservation."
+        )
+
         all_strat_names = ["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP"]
         dummy_signals = {
             name: Signal(
@@ -63,10 +72,10 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
                 sl=None,
                 tp=None,
                 r_multiple=0.0,
-                reason=f"NO TRADE: market regime is UNCERTAIN ({regime_res.rationale}).",
+                reason=reason_msg,
                 checklist={},
                 timestamp=str(frame.index[-1]) if not frame.empty else None,
-                diagnostic_code="REGIME_UNCERTAIN",
+                diagnostic_code=diagnostic_code,
                 strategy_name=name,
                 quality_score=0.0,
             )
@@ -78,10 +87,10 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
             sl=None,
             tp=None,
             r_multiple=0.0,
-            reason=f"NO TRADE: market regime is UNCERTAIN ({regime_res.rationale}). All strategies blocked for capital preservation.",
+            reason=reason_msg,
             checklist={k: False for k in ["regime_approved", "no_conflict", "quality_threshold"]},
             timestamp=str(frame.index[-1]) if not frame.empty else None,
-            diagnostic_code="REGIME_UNCERTAIN",
+            diagnostic_code=diagnostic_code,
             strategy_name="ARBITRATOR",
             quality_score=0.0,
         )
@@ -90,8 +99,8 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
             all_signals=dummy_signals,
             regime_result=regime_res,
             eligible_signals=[],
-            rejected_strategies=[(name, "REGIME_UNCERTAIN") for name in all_strat_names],
-            decision="REGIME_UNCERTAIN",
+            rejected_strategies=[(name, diagnostic_code) for name in all_strat_names],
+            decision=decision_code,
         )
 
     # 2. Evaluate only strategies allowed by the identified regime

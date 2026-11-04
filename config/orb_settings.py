@@ -86,6 +86,9 @@ class ORBSettings:
     product_id: int = _int("ORB_DELTA_PRODUCT_ID", 131253)
     ws_base_url: str = os.getenv("DELTA_WS_BASE_URL", "wss://socket.india.delta.exchange")
     request_timeout_seconds: int = _int("DELTA_PUBLIC_TIMEOUT_SECONDS", 10)
+    bootstrap_lookback_candles: int = _int("BOOTSTRAP_LOOKBACK_CANDLES", 450)
+    min_completed_15m_bars: int = _int("MIN_COMPLETED_15M_BARS", 50)
+    min_completed_5m_bars: int = _int("MIN_COMPLETED_5M_BARS", 150)
 
 
 def validate_settings(cfg: ORBSettings) -> None:

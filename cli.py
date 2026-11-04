@@ -209,6 +209,7 @@ def main():
     paper_cmd.add_argument("--symbol", default=settings.symbol, help="Exchange product symbol")
     paper_cmd.add_argument("--equity", type=float, default=10000.0, help="Simulated initial paper equity in USD")
     paper_cmd.add_argument("--strategy", default="PORTFOLIO", choices=["PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA"], help="Strategy model to execute")
+    paper_cmd.add_argument("--candles", type=int, default=getattr(settings, "bootstrap_lookback_candles", 450), help="Historical 5m candles to bootstrap for indicator readiness (min 450 recommended)")
 
     # 3. CSV evaluation
     csv = sub.add_parser("csv", help="Evaluate the latest completed candle from a local CSV")
@@ -374,9 +375,10 @@ def main():
         print("=" * 80)
         print(f"Symbol: {bot_cfg.symbol} | Strategy: {args.strategy} | Session: {bot_cfg.session_start} - {bot_cfg.session_end} {bot_cfg.timezone}")
         print(f"Risk Per Trade: {bot_cfg.risk_pct}% | Daily Loss Limit: {bot_cfg.daily_loss_limit_r}R | Cooldown: {bot_cfg.cooldown_bars_after_loss} bars")
+        print(f"Bootstrapping {args.candles} historical 5m candles to warm up 15m & 5m indicators...")
         print("Connecting to live WebSocket feed at wss://socket.india.delta.exchange...")
 
-        bot.start(bootstrap_lookback=100)
+        bot.start(bootstrap_lookback=args.candles)
         print("\n[OK] Real-time data feed & Strategy Intelligence V2 active. Press Ctrl+C to stop.\n")
 
         try:
@@ -395,12 +397,13 @@ def main():
                 upnl = acc.get("unrealized_pnl", 0.0)
                 regime = telem.get("market_regime", "UNKNOWN")
                 rejection = telem.get("last_rejection_reason", "None")
+                readiness_state = telem.get("readiness_state", "UNKNOWN")
 
                 pos_str = "FLAT" if not pos else f"{pos['direction']} {pos['lots']} lots (Entry ${pos['entry_price']:.2f}, uPnL ${upnl:+.2f})"
                 now_str = datetime.now().strftime("%H:%M:%S")
 
                 print(
-                    f"[{now_str}] WS: {ws_ok:<10} | Price: ${cur_price:>8.2f} | Eq: ${equity:>8.2f} (Cash ${cash:>8.2f}, Realized ${realized:>+6.2f}) | Pos: {pos_str} | Regime: {regime:<17} | Setup: {rejection[:35]}",
+                    f"[{now_str}] WS: {ws_ok:<10} | Ready: {readiness_state:<10} | Price: ${cur_price:>8.2f} | Eq: ${equity:>8.2f} | Pos: {pos_str} | Regime: {regime:<17} | Setup: {rejection[:30]}",
                     end="\r",
                     flush=True,
                 )
@@ -410,8 +413,6 @@ def main():
             print("[OK] Paper trading stopped. Simulated account balance and trade records preserved.")
             return
         return
-        frame = load_candles_csv(args.path, settings.timezone)
-        show_signal(frame, args.equity, reserve_alert=False)
 
     elif args.command == "record-result":
         state = DailyRiskState().record_result(args.pnl, args.equity)

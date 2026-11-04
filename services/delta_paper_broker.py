@@ -40,7 +40,7 @@ class DeltaPaperBroker:
             raise PaperSafetyViolation("CRITICAL: Live trading requested in paper broker context.")
 
         self.initial_equity = float(initial_equity or getattr(self.cfg, "paper_initial_equity", 10000.0))
-        self.state_file = state_file or (Path(self.cfg.state_path).parent / "paper_account_xautusd.json")
+        self.state_file = Path(state_file) if state_file else (Path(self.cfg.state_path).parent / "paper_account_xautusd.json")
         self._lock = threading.RLock()
 
         # In-memory account state
