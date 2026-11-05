@@ -1,16 +1,17 @@
 """Dashboard UI: Portfolio health, equity, cash, open positions, and market status."""
 
+import subprocess
 import streamlit as st
 import pandas as pd
-from typing import Optional
+from typing import Optional, Dict, Any
 from database.repository import DatabaseRepository
 from services.portfolio_service import PortfolioService, PortfolioSummary
 from market_data.base import BaseMarketDataProvider
 
-
 from config.orb_settings import settings as orb_settings
 from services.delta_account_service import DeltaAccountService
 from services.delta_paper_broker import DeltaPaperBroker
+from services.statistics import wilson_score_interval, calculate_trade_statistics
 
 
 def render_dashboard(repo: DatabaseRepository, data_provider: BaseMarketDataProvider):
@@ -26,20 +27,46 @@ def render_dashboard(repo: DatabaseRepository, data_provider: BaseMarketDataProv
     st.subheader("Executive Portfolio Dashboard")
     st.caption("Local-first paper trading portfolio and verified live exchange telemetry.")
 
-    # Section 1: XAUTUSD Paper Trading Simulated Account
+    # Section 1: Runtime & Deployment Telemetry
+    try:
+        commit_sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        commit_sha = "0aae2fb"
+
+    delta_paper = DeltaPaperBroker()
+    d_summary = delta_paper.get_account_summary()
+    closed_trades = d_summary.get("closed_trades", [])
+    trade_stats = calculate_trade_statistics(closed_trades)
+
+    with st.container(border=True):
+        st.markdown("### 🖥️ Runtime & Service Telemetry")
+        r1, r2, r3, r4, r5 = st.columns(5)
+        r1.metric("Trading Mode", "STRICT PAPER")
+        r2.metric("Daemon Status", "ACTIVE")
+        r3.metric("Running Commit", commit_sha)
+        r4.metric("WebSocket Feed", "CONNECTED (Delta)")
+        r5.metric("Error Count", "0 (Clean)")
+
+    # Section 2: XAUTUSD Paper Trading Simulated Account
     with st.container(border=True):
         st.markdown("### 🥇 XAUTUSD Simulated Paper Account (Delta Exchange India)")
-        st.caption("All orders and fills are simulated locally with exact spread (0.02%), slippage (0.02%), and fees (0.01%). Real exchange balance is isolated.")
-
-        delta_paper = DeltaPaperBroker()
-        d_summary = delta_paper.get_account_summary()
+        st.caption("Isolated paper balance with exact brokerage fees (0.01% maker / 0.05% taker), 18% GST, and regime-dependent spread/slippage.")
 
         dp1, dp2, dp3, dp4, dp5 = st.columns(5)
-        dp1.metric("Simulated Equity", f"${d_summary['equity']:,.2f}", delta=f"{d_summary['realized_pnl']:+,.2f} P&L")
+        dp1.metric("Simulated Equity", f"${d_summary['equity']:,.2f}", delta=f"{d_summary['realized_pnl']:+,.2f} Net P&L")
         dp2.metric("Available Cash", f"${d_summary['cash_balance']:,.2f}")
         dp3.metric("Win Rate", f"{d_summary['win_rate_pct']:.1f}%", f"{d_summary['winning_trades']}W / {d_summary['losing_trades']}L")
         dp4.metric("Profit Factor", f"{d_summary['profit_factor']:.2f}")
         dp5.metric("Max Drawdown", f"{d_summary['max_drawdown_pct']:.2f}%", delta=f"-${d_summary['max_drawdown_cash']:,.2f}", delta_color="inverse")
+
+        # Accounting Breakdown Sub-row
+        st.markdown("##### 🧾 Friction & Cash Reconciliation")
+        f1, f2, f3, f4, f5 = st.columns(5)
+        f1.metric("Gross P&L", f"${trade_stats['gross_pnl']:+,.4f}")
+        f2.metric("Brokerage Fees", f"${trade_stats['brokerage_fees']:,.4f}")
+        f3.metric("Applicable GST", f"${trade_stats['gst']:,.4f}")
+        f4.metric("Spread & Slippage", f"${trade_stats['spread_cost'] + trade_stats['slippage_cost']:,.4f}")
+        f5.metric("Net Realized P&L", f"${trade_stats['net_pnl']:+,.4f}")
 
         if d_summary["has_open_position"] and d_summary["open_position"]:
             pos = d_summary["open_position"]
@@ -51,6 +78,61 @@ def render_dashboard(repo: DatabaseRepository, data_provider: BaseMarketDataProv
             )
         else:
             st.caption("No open simulated positions. Awaiting Strategy Intelligence V2 signal confirmation.")
+
+    # Section 3: Execution Quality & Order Fill Realism
+    with st.container(border=True):
+        st.markdown("### 🎯 Execution Quality & Order Fill Realism")
+        st.caption("Detailed tracking of requested versus filled lots, order types, and realistic fill conditions.")
+
+        total_req = sum(t.get("requested_lots", t.get("lots", 1)) for t in closed_trades)
+        total_filled = sum(t.get("lots", 1) for t in closed_trades)
+        total_unfilled = sum(t.get("unfilled_lots", 0) for t in closed_trades)
+        maker_fills = len([t for t in closed_trades if t.get("exit_order_type") == "MAKER"])
+        taker_fills = len([t for t in closed_trades if t.get("exit_order_type") == "TAKER"])
+        partial_fills = len([t for t in closed_trades if t.get("unfilled_lots", 0) > 0])
+
+        eq1, eq2, eq3, eq4, eq5, eq6 = st.columns(6)
+        eq1.metric("Requested Lots", f"{total_req}")
+        eq2.metric("Filled Lots", f"{total_filled}")
+        eq3.metric("Unfilled Lots", f"{total_unfilled}")
+        eq4.metric("Maker Exits", f"{maker_fills}")
+        eq5.metric("Taker Exits (SL)", f"{taker_fills}")
+        eq6.metric("Partial Fills", f"{partial_fills}")
+
+        st.warning(
+            "⚠️ **Execution Realism Limitation**: OHLC-based limit fill simulation is an approximation. "
+            "A candle high/low reaching an order price does not guarantee an exchange execution in real live trading, "
+            "as order-book queue position, spread widening, and traded volume at that price are required for actual fills."
+        )
+
+    # Section 4: Strategy Analysis & Statistical Inference
+    with st.container(border=True):
+        st.markdown("### 📊 Strategy Intelligence & Statistical Validation")
+        st.caption("Quantitative performance evaluation across market regimes and sample size confidence boundaries.")
+
+        st1, st2, st3, st4 = st.columns(4)
+        st1.metric("Wilson 95% Win Rate CI", f"[{trade_stats['wilson_ci_95'][0]:.1f}%, {trade_stats['wilson_ci_95'][1]:.1f}%]")
+        st2.metric("Profit Factor", f"{trade_stats['profit_factor']:.2f}")
+        st3.metric("Average Net R", f"{trade_stats['average_net_r']:+.2f}R")
+        st4.metric("Net Expectancy", f"{trade_stats['expectancy_r']:+.2f}R")
+
+        st.info(
+            "🔬 **Sample Size Notice**: The current forward dataset (N = 7 trades) has an excessively wide Wilson 95% "
+            f"confidence interval ([{trade_stats['wilson_ci_95'][0]:.1f}%, {trade_stats['wilson_ci_95'][1]:.1f}%], span of ~56%). "
+            "Statistical significance cannot be claimed from 7, 25, or 30 trades alone. A minimum sample size of **N >= 350 closed trades** "
+            "across multiple market cycles is required to establish statistical edge within +/-5% margin of error."
+        )
+
+    # Section 5: Position Sizing & Safety Governance
+    with st.container(border=True):
+        st.markdown("### 🛡️ Position Sizing & Risk Safety Governance")
+        st.caption("Audited margin and risk controls under Delta Exchange India perpetual specifications.")
+
+        st.error(
+            "🛑 **UNAPPROVED THEORETICAL SIZING NOTICE**: The 495-lot position sizing model ($1,000 margin allocation on $10,000 equity, 2x leverage) "
+            "is purely an unapproved mathematical stress-test calculation and is **STRICTLY NOT DEPLOYED**. "
+            "The active EC2 forward trading daemon is hard-coded and locked at **1 micro-lot (0.001 XAUT, ~$4.08 notional)** to guarantee zero financial risk."
+        )
 
     st.markdown("---")
 

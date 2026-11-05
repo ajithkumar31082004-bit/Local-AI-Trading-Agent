@@ -8,6 +8,7 @@ STRICT SAFETY GUARANTEE:
 """
 import json
 import logging
+import math
 import os
 import threading
 from datetime import datetime, timezone
@@ -51,6 +52,8 @@ class DeltaPaperBroker:
         self.peak_equity: float = self.initial_equity
         self.open_position: Optional[Dict[str, Any]] = None
         self.closed_trades: List[Dict[str, Any]] = []
+        self.last_order: Optional[Dict[str, Any]] = None
+        self.order_history: List[Dict[str, Any]] = []
 
         # Load persisted state if exists
         self._load_state()
@@ -185,35 +188,64 @@ class DeltaPaperBroker:
         
         Supports:
         - Maker orders that fill vs. do not fill (based on bar high/low price bounds)
-        - Partial fills (via fill_ratio between 0.0 and 1.0)
+        - Partial fills (via fill_ratio between 0.0 and 1.0) with exchange integer lot increment
+        - Zero fills (returns False, creates NO position, locks NO margin, charges ZERO fees)
         - Regime-dependent spread & slippage (wider during volatile breakouts)
-        - Configurable fee scenarios and GST
+        - Configurable fee scenarios and Indian GST (18%)
         """
         clean_dir = direction.strip().upper()
         clean_sym = symbol.strip().upper()
+        order_kind = order_type.strip().upper()
 
         if clean_dir not in {"LONG", "SHORT"}:
             return False, f"Invalid direction: '{clean_dir}'", None
         if entry_price <= 0 or stop_loss <= 0 or take_profit <= 0:
             return False, "Invalid price parameters (entry, SL, TP must be positive)", None
         if lots < 1:
-            return False, f"Lots must be >= 1, got {lots}", None
+            order_info = {
+                "status": "REJECTED",
+                "reason": "INVALID_LOTS",
+                "requested_lots": lots,
+                "filled_lots": 0,
+                "unfilled_lots": max(0, lots),
+            }
+            self.last_order = order_info
+            return False, f"Requested lots must be >= 1 (exchange lot increment = 1), got {lots}", None
 
         with self._lock:
             # 1. Ensure only 1 open position at a time
             if self.open_position is not None:
                 return False, f"Position already open: {self.open_position['direction']} {self.open_position['lots']} lots {self.open_position['symbol']}", None
 
-            # 2. Check Maker Limit order fill condition (orders that do NOT fill)
-            order_kind = order_type.strip().upper()
+            # 2. Check Maker Limit order fill condition (orders that do NOT fill due to price range)
             if order_kind == "LIMIT":
                 if clean_dir == "LONG" and bar_low is not None and bar_low > entry_price:
                     msg = f"Maker LIMIT BUY unfilled: bar low (${bar_low:.2f}) > limit entry (${entry_price:.2f})"
                     logger.info(msg)
+                    self.last_order = {
+                        "status": "UNFILLED",
+                        "reason": "PRICE_NOT_REACHED",
+                        "order_type": "LIMIT",
+                        "requested_lots": lots,
+                        "filled_lots": 0,
+                        "unfilled_lots": lots,
+                        "limit_price": entry_price,
+                        "bar_low": bar_low,
+                    }
                     return False, msg, None
                 elif clean_dir == "SHORT" and bar_high is not None and bar_high < entry_price:
                     msg = f"Maker LIMIT SELL unfilled: bar high (${bar_high:.2f}) < limit entry (${entry_price:.2f})"
                     logger.info(msg)
+                    self.last_order = {
+                        "status": "UNFILLED",
+                        "reason": "PRICE_NOT_REACHED",
+                        "order_type": "LIMIT",
+                        "requested_lots": lots,
+                        "filled_lots": 0,
+                        "unfilled_lots": lots,
+                        "limit_price": entry_price,
+                        "bar_high": bar_high,
+                    }
                     return False, msg, None
 
             # 3. Dynamic regime-dependent spread & slippage multiplier
@@ -234,16 +266,43 @@ class DeltaPaperBroker:
             else:
                 fill_price = round(entry_price * (1.0 - spread_half - slip_half), 2)
 
-            # 4. Partial fill modeling
-            actual_ratio = max(0.01, min(1.0, float(fill_ratio)))
-            executed_lots = max(1, int(round(lots * actual_ratio))) if lots > 1 else lots
-            contract_qty = round(executed_lots * self.cfg.contract_size_xaut * (actual_ratio if lots == 1 else 1.0), 6)
+            # 4. Exchange-compatible integer lot partial fill modeling
+            try:
+                clamped_ratio = max(0.0, min(1.0, float(fill_ratio)))
+            except (ValueError, TypeError):
+                clamped_ratio = 0.0
+
+            raw_fill = round(lots * clamped_ratio, 6)
+            executed_lots = int(math.floor(raw_fill))
+            unfilled_lots = lots - executed_lots
+
+            # Support zero fills: if calculated fill quantity is 0 lots, DO NOT open a position
+            if executed_lots <= 0:
+                msg = (
+                    f"Zero fill on {order_kind} order: calculated fill quantity is 0 lots "
+                    f"(requested {lots} lots, fill ratio {clamped_ratio:.2%}, lot increment 1)"
+                )
+                logger.info(msg)
+                self.last_order = {
+                    "status": "ZERO_FILL",
+                    "symbol": clean_sym,
+                    "direction": clean_dir,
+                    "order_type": order_kind,
+                    "requested_lots": lots,
+                    "filled_lots": 0,
+                    "unfilled_lots": lots,
+                    "fill_ratio": clamped_ratio,
+                    "fees": 0.0,
+                    "contract_qty": 0.0,
+                }
+                return False, msg, None
+
+            contract_qty = round(executed_lots * self.cfg.contract_size_xaut, 6)
             notional = round(fill_price * contract_qty, 2)
             margin_required = round(notional / self.cfg.leverage, 2)
 
             entry_fee_pct, _ = self._get_fee_rates()
-            # If explicit taker entry requested, override entry fee rate to taker
-            if order_kind == "MARKET" or order_kind == "TAKER":
+            if order_kind in {"MARKET", "TAKER"}:
                 entry_fee_pct = getattr(self.cfg, "taker_fee_pct", 0.05)
 
             entry_fee = round(notional * (entry_fee_pct / 100.0), 4)
@@ -271,26 +330,33 @@ class DeltaPaperBroker:
                 ts_fmt = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
             trade_id = f"PAPER_{ts_fmt}_{clean_dir}"
+            order_id = f"ORD_{trade_id}"
             now_iso = datetime.now(timezone.utc).isoformat()
 
             pos = {
                 "trade_id": trade_id,
+                "order_id": order_id,
                 "symbol": clean_sym,
                 "strategy_name": strategy_name,
                 "direction": clean_dir,
+                "side": clean_dir,
                 "entry_time": candle_timestamp or now_iso,
                 "entry_price": fill_price,
                 "signal_entry_price": entry_price,
                 "market_price": fill_price,
                 "lots": executed_lots,
                 "requested_lots": lots,
+                "filled_lots": executed_lots,
+                "unfilled_lots": unfilled_lots,
                 "contract_qty": contract_qty,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
                 "margin": margin_required,
                 "order_type": order_kind,
-                "fill_ratio": actual_ratio,
+                "entry_order_type": order_kind,
+                "fill_ratio": clamped_ratio,
                 "market_regime": regime,
+                "fee_rate_pct": entry_fee_pct,
                 "entry_fee": entry_fee,
                 "entry_gst": entry_gst,
                 "exit_fee": 0.0,
@@ -304,7 +370,7 @@ class DeltaPaperBroker:
             self._save_state()
 
             msg = (
-                f"Simulated {clean_dir} filled: {lots} lots ({contract_qty} XAUT) @ ${fill_price:.2f} "
+                f"Simulated {clean_dir} filled: {executed_lots}/{lots} lots ({contract_qty} XAUT) @ ${fill_price:.2f} "
                 f"[SL: ${stop_loss:.2f}, TP: ${take_profit:.2f}, Margin: ${margin_required:.2f}, Fee: ${entry_fee:.4f}]"
             )
             logger.info(msg)
@@ -317,16 +383,41 @@ class DeltaPaperBroker:
         exit_timestamp: Optional[str] = None,
         order_type: Optional[str] = None,
         market_regime: Optional[str] = None,
+        close_lots: Optional[int] = None,
+        fill_ratio: float = 1.0,
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
-        """Close current open simulated position, calculate final P&L and friction, and record."""
+        """Close current open simulated position (fully or partially), calculate final P&L and friction, and record."""
         with self._lock:
             if self.open_position is None:
                 return False, "No open simulated position to close.", None
 
             pos = dict(self.open_position)
             side = pos["direction"]
-            contract_qty = pos["contract_qty"]
+            open_lots = pos["lots"]
             entry_price = pos["entry_price"]
+
+            # Determine lots to close
+            if close_lots is not None:
+                target_close = int(close_lots)
+            else:
+                clamped_exit_ratio = max(0.0, min(1.0, float(fill_ratio)))
+                target_close = int(math.floor(round(open_lots * clamped_exit_ratio, 6)))
+
+            if target_close <= 0:
+                msg = f"Zero fill on exit order: 0 lots closed out of {open_lots} open lots. Position remains open."
+                logger.info(msg)
+                self.last_order = {
+                    "status": "ZERO_FILL",
+                    "open_lots": open_lots,
+                    "closed_lots": 0,
+                    "remaining_lots": open_lots,
+                    "fees": 0.0,
+                }
+                return False, msg, None
+
+            # Enforce ceiling: cannot close more quantity than current open position
+            actual_close_lots = min(target_close, open_lots)
+            remaining_lots = open_lots - actual_close_lots
 
             # Compute regime-dependent spread and slippage
             regime = market_regime or pos.get("market_regime") or "RANGING"
@@ -347,7 +438,8 @@ class DeltaPaperBroker:
                 # Short exits by buying at Ask
                 exit_fill = round(exit_price * (1.0 + spread_half + slip_half), 2)
 
-            exit_notional = round(exit_fill * contract_qty, 2)
+            close_contract_qty = round(actual_close_lots * self.cfg.contract_size_xaut, 6)
+            exit_notional = round(exit_fill * close_contract_qty, 2)
 
             # Determine exit fee rate based on order type and scenario
             if order_type:
@@ -362,35 +454,40 @@ class DeltaPaperBroker:
 
             exit_fee = round(exit_notional * (exit_fee_pct / 100.0), 4)
             exit_gst = round(exit_fee * (self.cfg.gst_rate_pct / 100.0), 4) if getattr(self.cfg, "apply_gst", False) else 0.0
-            exit_slippage = round(abs(exit_fill - exit_price) * contract_qty, 4)
+            exit_slippage = round(abs(exit_fill - exit_price) * close_contract_qty, 4)
 
-            # Gross P&L (computed to 4 decimal places for micro-contract precision)
+            # Pro-rate entry costs for the closed portion
+            portion = actual_close_lots / open_lots
+            allocated_entry_fee = round(pos["entry_fee"] * portion, 4)
+            allocated_entry_gst = round(pos.get("entry_gst", 0.0) * portion, 4)
+            allocated_entry_slip = round(pos["slippage_cost"] * portion, 4)
+
+            # Gross P&L on closed contracts
             if side == "LONG":
-                gross_pnl = round((exit_price - pos["signal_entry_price"]) * contract_qty, 4)
+                gross_pnl = round((exit_price - pos["signal_entry_price"]) * close_contract_qty, 4)
             else:
-                gross_pnl = round((pos["signal_entry_price"] - exit_price) * contract_qty, 4)
+                gross_pnl = round((pos["signal_entry_price"] - exit_price) * close_contract_qty, 4)
 
-            total_fees = round(pos["entry_fee"] + exit_fee, 4)
-            gst_amount = round(total_fees * (self.cfg.gst_rate_pct / 100.0), 4)
-            deducted_gst = gst_amount if getattr(self.cfg, "apply_gst", False) else 0.0
+            brokerage_fee = round(allocated_entry_fee + exit_fee, 4)
+            total_gst = round(brokerage_fee * (self.cfg.gst_rate_pct / 100.0), 4)
+            deducted_gst = total_gst if getattr(self.cfg, "apply_gst", False) else 0.0
 
-            total_price_impact = round(pos["slippage_cost"] + exit_slippage, 4)
+            total_price_impact = round(allocated_entry_slip + exit_slippage, 4)
             spread_cost = round(total_price_impact / 2.0, 4)
             slippage_cost = round(total_price_impact / 2.0, 4)
-            total_friction = round(total_fees + deducted_gst + total_price_impact, 4)
+            total_friction = round(brokerage_fee + deducted_gst + total_price_impact, 4)
             net_pnl = round(gross_pnl - total_friction, 4)
 
-            # Trade-level R-Multiple: Net P&L relative to planned risk on this specific position
-            trade_risk_cash = round(abs(pos["entry_price"] - pos["stop_loss"]) * contract_qty, 4)
+            # Trade-level R-Multiple: Net P&L relative to planned risk on this closed quantity
+            trade_risk_cash = round(abs(pos["entry_price"] - pos["stop_loss"]) * close_contract_qty, 4)
             trade_r_multiple = round(net_pnl / trade_risk_cash, 2) if trade_risk_cash > 0 else 0.0
 
-            # Portfolio-level R-Multiple: Net P&L relative to full account risk budget
+            # Portfolio-level R-Multiple
             portfolio_risk_budget = self.initial_equity * (self.cfg.risk_pct / 100.0)
             portfolio_r_multiple = round(net_pnl / portfolio_risk_budget, 4) if portfolio_risk_budget > 0 else 0.0
 
-            # Update cash balance: restore deducted entry costs and apply net_pnl
-            entry_deducted = pos["entry_fee"] + pos.get("entry_gst", 0.0)
-            self.cash_balance = round(self.cash_balance + net_pnl + entry_deducted, 4)
+            # Update cash balance: restore allocated entry cash and apply net_pnl
+            self.cash_balance = round(self.cash_balance + net_pnl + allocated_entry_fee + allocated_entry_gst, 4)
             self.realized_pnl = round(self.realized_pnl + net_pnl, 4)
             self.total_fees = round(self.total_fees + exit_fee, 4)
             self.total_slippage = round(self.total_slippage + exit_slippage, 4)
@@ -401,21 +498,32 @@ class DeltaPaperBroker:
             now_iso = datetime.now(timezone.utc).isoformat()
             closed_record = {
                 "trade_id": pos["trade_id"],
+                "order_id": pos.get("order_id", f"ORD_{pos['trade_id']}"),
                 "symbol": pos["symbol"],
                 "strategy_name": pos["strategy_name"],
                 "direction": side,
+                "side": side,
                 "entry_time": pos["entry_time"],
                 "entry_price": entry_price,
-                "lots": pos["lots"],
-                "contract_qty": contract_qty,
+                "requested_lots": pos.get("requested_lots", open_lots),
+                "filled_lots": actual_close_lots,
+                "unfilled_lots": pos.get("unfilled_lots", 0),
+                "remaining_lots": remaining_lots,
+                "lots": actual_close_lots,
+                "contract_qty": close_contract_qty,
                 "stop_loss": pos["stop_loss"],
                 "take_profit": pos["take_profit"],
                 "exit_time": exit_timestamp or now_iso,
                 "exit_price": exit_fill,
                 "trigger_price": exit_price,
                 "gross_pnl": gross_pnl,
-                "fees": total_fees,
-                "gst": gst_amount,
+                "entry_fee": allocated_entry_fee,
+                "exit_fee": exit_fee,
+                "brokerage_fee": brokerage_fee,
+                "fees": brokerage_fee,
+                "entry_gst": allocated_entry_gst,
+                "exit_gst": exit_gst,
+                "gst": total_gst,
                 "gst_applied": getattr(self.cfg, "apply_gst", False),
                 "fee_scenario": getattr(self.cfg, "fee_scenario", "MAKER_MAKER"),
                 "entry_order_type": pos.get("order_type", "LIMIT"),
@@ -436,11 +544,22 @@ class DeltaPaperBroker:
             }
 
             self.closed_trades.append(closed_record)
-            self.open_position = None
+
+            if remaining_lots == 0:
+                self.open_position = None
+            else:
+                pos["lots"] = remaining_lots
+                pos["contract_qty"] = round(remaining_lots * self.cfg.contract_size_xaut, 6)
+                pos["margin"] = round(pos["margin"] * (1.0 - portion), 2)
+                pos["entry_fee"] = round(pos["entry_fee"] - allocated_entry_fee, 4)
+                pos["entry_gst"] = round(pos.get("entry_gst", 0.0) - allocated_entry_gst, 4)
+                pos["slippage_cost"] = round(pos["slippage_cost"] - allocated_entry_slip, 4)
+                self.open_position = pos
+
             self._save_state()
 
             msg = (
-                f"Simulated {side} closed via {exit_reason} @ ${exit_fill:.2f} "
+                f"Simulated {side} closed {actual_close_lots}/{open_lots} lots via {exit_reason} @ ${exit_fill:.2f} "
                 f"[Gross: ${gross_pnl:+.4f}, Friction: ${total_friction:.4f}, Net: ${net_pnl:+.4f} ({trade_r_multiple:+.2f}R trade / {portfolio_r_multiple:+.4f}R portfolio)]"
             )
             logger.info(msg)
@@ -456,8 +575,16 @@ class DeltaPaperBroker:
         high: Optional[float] = None,
         low: Optional[float] = None,
         timestamp: Optional[str] = None,
+        close_lots: Optional[int] = None,
+        tp_fill_ratio: float = 1.0,
     ) -> Optional[Dict[str, Any]]:
-        """Check if active open position touched Stop Loss or Take Profit."""
+        """Check if active open position touched Stop Loss or Take Profit.
+        
+        Models:
+        - SL as TAKER market exit with taker fees and slippage.
+        - TP as passive MAKER limit exit with maker fees and price bounds check.
+        - Conservative collision rule: if both SL and TP are touched in the same bar, SL wins.
+        """
         with self._lock:
             if self.open_position is None:
                 return None
@@ -478,16 +605,25 @@ class DeltaPaperBroker:
             if hit_sl:
                 exit_price = sl
                 reason = "SL"
+                order_type = "TAKER"
+                exit_close_lots = None
+                exit_fill_ratio = 1.0
             else:
                 exit_price = tp
                 reason = "TP"
+                order_type = "MAKER"
+                exit_close_lots = close_lots
+                exit_fill_ratio = tp_fill_ratio
 
-            _, _, closed_trade = self.close_simulated_trade(
+            ok_close, _, closed_trade = self.close_simulated_trade(
                 exit_price=exit_price,
                 exit_reason=reason,
                 exit_timestamp=timestamp,
+                order_type=order_type,
+                close_lots=exit_close_lots,
+                fill_ratio=exit_fill_ratio,
             )
-            return closed_trade
+            return closed_trade if ok_close else None
 
         # Otherwise update unrealized P&L
         with self._lock:

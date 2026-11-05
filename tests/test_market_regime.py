@@ -85,3 +85,72 @@ def test_ranging_regime_detected():
     assert "BB_RSI_MEAN_REVERSION" in res.allowed_strategies or "LIQUIDITY_SWEEP" in res.allowed_strategies
     assert "TREND_FOLLOWING" in res.disallowed_strategies
 
+
+def test_regime_and_indicators_lookahead_immunity():
+    """Phase 3.4 Look-Ahead Bias Audit Test:
+    
+    Proves that altering future candle data (spikes, crashes, volume surges) has
+    EXACTLY ZERO influence on historical regime classification and indicator values.
+    """
+    import numpy as np
+    from strategy.vwap_ema import evaluate_vwap_ema
+    from indicators.orb_indicators import resample_to_15m
+
+    cfg = make_cfg()
+    idx_base = pd.date_range("2026-10-30 07:00", periods=160, freq="5min", tz="Asia/Kolkata")
+    closes = [4000.0 + (i * 0.5) for i in range(160)]
+    df_base = pd.DataFrame({
+        "Open": [c - 0.2 for c in closes],
+        "High": [c + 1.5 for c in closes],
+        "Low": [c - 1.5 for c in closes],
+        "Close": closes,
+        "Volume": [100000.0] * 160
+    }, index=idx_base)
+
+    # 1. Base evaluation at historical bar 150
+    cutoff = 150
+    df_history = df_base.iloc[:cutoff].copy()
+    res_base = detect_market_regime(df_history, cfg)
+    sig_base = evaluate_vwap_ema(df_history, cfg=cfg)
+
+    # 2. Future Scenario A: Extreme upward moonshot in future bars 150-160
+    df_future_spike = df_base.copy()
+    for j in range(cutoff, 160):
+        df_future_spike.iloc[j, df_future_spike.columns.get_loc("Close")] = 5500.0 + (j * 50.0)
+        df_future_spike.iloc[j, df_future_spike.columns.get_loc("High")] = 5600.0 + (j * 50.0)
+        df_future_spike.iloc[j, df_future_spike.columns.get_loc("Volume")] = 9999999.0
+
+    # 3. Future Scenario B: Extreme catastrophic crash in future bars 150-160
+    df_future_crash = df_base.copy()
+    for j in range(cutoff, 160):
+        df_future_crash.iloc[j, df_future_crash.columns.get_loc("Close")] = 2000.0 - (j * 50.0)
+        df_future_crash.iloc[j, df_future_crash.columns.get_loc("Low")] = 1900.0 - (j * 50.0)
+        df_future_crash.iloc[j, df_future_crash.columns.get_loc("Volume")] = 8888888.0
+
+    # 4. Evaluate both scenarios using strictly information up to bar cutoff
+    res_spike_historical = detect_market_regime(df_future_spike.iloc[:cutoff], cfg)
+    sig_spike_historical = evaluate_vwap_ema(df_future_spike.iloc[:cutoff], cfg=cfg)
+
+    res_crash_historical = detect_market_regime(df_future_crash.iloc[:cutoff], cfg)
+    sig_crash_historical = evaluate_vwap_ema(df_future_crash.iloc[:cutoff], cfg=cfg)
+
+    # Assert 100% mathematical invariance
+    assert res_base.regime == res_spike_historical.regime == res_crash_historical.regime
+    assert res_base.confidence == res_spike_historical.confidence == res_crash_historical.confidence
+    assert res_base.allowed_strategies == res_spike_historical.allowed_strategies == res_crash_historical.allowed_strategies
+    assert sig_base.direction == sig_spike_historical.direction == sig_crash_historical.direction
+
+    # 5. Incomplete 15m candle look-ahead elimination test:
+    # A 15m bucket with only 1 or 2 completed 5m bars MUST NOT create a premature 15m bar
+    r15_full = resample_to_15m(df_base.iloc[:150])  # 150 is divisible by 3 -> exactly 50 15m bars
+    assert len(r15_full) == 50
+
+    r15_partial1 = resample_to_15m(df_base.iloc[:151])  # 1 extra 5m bar -> must STILL be 50 15m bars
+    assert len(r15_partial1) == 50
+
+    r15_partial2 = resample_to_15m(df_base.iloc[:152])  # 2 extra 5m bars -> must STILL be 50 15m bars
+    assert len(r15_partial2) == 50
+
+    r15_completed = resample_to_15m(df_base.iloc[:153])  # 3 extra 5m bars -> now exactly 51 15m bars
+    assert len(r15_completed) == 51
+

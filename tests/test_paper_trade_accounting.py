@@ -493,5 +493,196 @@ def test_regime_dependent_spread_and_slippage(tmp_path):
     assert closed_volatile["market_regime"] == "VOLATILE_BREAKOUT"
 
 
+def test_partial_fill_engine_comprehensive_matrix(tmp_path):
+    """Exhaustive test matrix for Phase 3.2 exchange-compatible integer partial-fill engine.
+    
+    Validates all 13 required scenarios:
+    1. Zero requested lots.
+    2. Zero fill ratio.
+    3. Very small fill ratio (< 1 lot increment).
+    4. 10% partial fill.
+    5. 25% partial fill.
+    6. 50% partial fill.
+    7. 100% full fill.
+    8. Invalid negative fill ratio.
+    9. Fill ratio above 100% (ceiling clamp).
+    10. Partial fill followed by cancellation (unfilled tracking).
+    11. Partial fill followed by another fill (multi-step partial exit).
+    12. Minimum one-lot order boundary.
+    13. Maker limit unfill when bar never reaches limit price.
+    """
+    cfg = ORBSettings(symbol="XAUTUSD", mode="PAPER")
+    broker = DeltaPaperBroker(cfg=cfg, state_file=str(tmp_path / "matrix_state.json"), initial_equity=10000.0)
+
+    # 1. Zero requested lots -> REJECTED
+    ok1, msg1, pos1 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=0, strategy_name="TEST"
+    )
+    assert ok1 is False
+    assert pos1 is None
+    assert broker.last_order["status"] == "REJECTED"
+    assert broker.last_order["reason"] == "INVALID_LOTS"
+    assert broker.open_position is None
+
+    # 2. Zero fill ratio -> ZERO_FILL (no position, no margin, zero fees)
+    ok2, msg2, pos2 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=10, fill_ratio=0.0, strategy_name="TEST"
+    )
+    assert ok2 is False
+    assert pos2 is None
+    assert broker.last_order["status"] == "ZERO_FILL"
+    assert broker.last_order["filled_lots"] == 0
+    assert broker.last_order["unfilled_lots"] == 10
+    assert broker.last_order["fees"] == 0.0
+    assert broker.cash_balance == 10000.0
+    assert broker.open_position is None
+
+    # 3. Very small fill ratio (5% on 10 lots = 0.5 lot < 1 lot increment) -> ZERO_FILL
+    ok3, msg3, pos3 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=10, fill_ratio=0.05, strategy_name="TEST"
+    )
+    assert ok3 is False
+    assert pos3 is None
+    assert broker.last_order["status"] == "ZERO_FILL"
+    assert broker.last_order["filled_lots"] == 0
+    assert broker.last_order["unfilled_lots"] == 10
+    assert broker.open_position is None
+
+    # 4. 10% partial fill (10% on 10 lots = 1 lot) -> PARTIAL FILL
+    ok4, msg4, pos4 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=10, fill_ratio=0.10, strategy_name="TEST"
+    )
+    assert ok4 is True
+    assert pos4["lots"] == 1
+    assert pos4["requested_lots"] == 10
+    assert pos4["unfilled_lots"] == 9
+    assert pos4["contract_qty"] == 0.001
+    broker.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+    assert broker.open_position is None
+
+    # 5. 25% partial fill (25% on 4 lots = 1 lot) -> PARTIAL FILL
+    ok5, msg5, pos5 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=4, fill_ratio=0.25, strategy_name="TEST"
+    )
+    assert ok5 is True
+    assert pos5["lots"] == 1
+    assert pos5["requested_lots"] == 4
+    assert pos5["unfilled_lots"] == 3
+    assert pos5["contract_qty"] == 0.001
+    broker.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+    assert broker.open_position is None
+
+    # 6. 50% partial fill (50% on 10 lots = 5 lots) -> PARTIAL FILL
+    ok6, msg6, pos6 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=10, fill_ratio=0.50, strategy_name="TEST"
+    )
+    assert ok6 is True
+    assert pos6["lots"] == 5
+    assert pos6["requested_lots"] == 10
+    assert pos6["unfilled_lots"] == 5
+    assert pos6["contract_qty"] == 0.005
+    broker.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+    assert broker.open_position is None
+
+    # 7. 100% full fill -> COMPLETE FILL
+    ok7, msg7, pos7 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=10, fill_ratio=1.0, strategy_name="TEST"
+    )
+    assert ok7 is True
+    assert pos7["lots"] == 10
+    assert pos7["requested_lots"] == 10
+    assert pos7["unfilled_lots"] == 0
+    assert pos7["contract_qty"] == 0.010
+    broker.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+    assert broker.open_position is None
+
+    # 8. Invalid negative fill ratio (-0.25 clamped to 0.0) -> ZERO_FILL
+    ok8, msg8, pos8 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=10, fill_ratio=-0.25, strategy_name="TEST"
+    )
+    assert ok8 is False
+    assert pos8 is None
+    assert broker.last_order["status"] == "ZERO_FILL"
+    assert broker.open_position is None
+
+    # 9. Fill ratio above 100% (1.5 clamped to 1.0, never overfilling) -> COMPLETE FILL
+    ok9, msg9, pos9 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=10, fill_ratio=1.5, strategy_name="TEST"
+    )
+    assert ok9 is True
+    assert pos9["lots"] == 10
+    assert pos9["requested_lots"] == 10
+    assert pos9["unfilled_lots"] == 0
+    broker.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+    assert broker.open_position is None
+
+    # 10. Partial fill followed by cancellation (unfilled quantity preserved)
+    ok10, msg10, pos10 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="SHORT", entry_price=4050.0, stop_loss=4070.0, take_profit=4010.0, lots=10, fill_ratio=0.40, strategy_name="TEST"
+    )
+    assert ok10 is True
+    assert pos10["lots"] == 4
+    assert pos10["unfilled_lots"] == 6
+    _, _, closed10 = broker.close_simulated_trade(exit_price=4010.0, exit_reason="TP")
+    assert closed10["requested_lots"] == 10
+    assert closed10["lots"] == 4
+    assert closed10["unfilled_lots"] == 6
+
+    # 11. Partial fill followed by another fill (multi-step partial exit)
+    ok11, msg11, pos11 = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=10, fill_ratio=1.0, strategy_name="TEST"
+    )
+    assert ok11 is True
+    assert pos11["lots"] == 10
+    # First exit: close 4 lots
+    ok_ex1, _, cl1 = broker.close_simulated_trade(exit_price=4020.0, exit_reason="PARTIAL_TP", close_lots=4)
+    assert ok_ex1 is True
+    assert cl1["lots"] == 4
+    assert cl1["remaining_lots"] == 6
+    assert broker.open_position is not None
+    assert broker.open_position["lots"] == 6
+    assert broker.open_position["contract_qty"] == 0.006
+
+    # Second exit: close remaining 6 lots
+    ok_ex2, _, cl2 = broker.close_simulated_trade(exit_price=4040.0, exit_reason="FINAL_TP", close_lots=6)
+    assert ok_ex2 is True
+    assert cl2["lots"] == 6
+    assert cl2["remaining_lots"] == 0
+    assert broker.open_position is None
+
+    # 12. Minimum one-lot order boundary
+    # 1 lot with 100% fill -> fills 1
+    ok12a, _, pos12a = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=1, fill_ratio=1.0, strategy_name="TEST"
+    )
+    assert ok12a is True
+    assert pos12a["lots"] == 1
+    broker.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+
+    # 1 lot with 50% fill -> 0.5 lot < 1 integer lot -> ZERO_FILL
+    ok12b, _, pos12b = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=1, fill_ratio=0.50, strategy_name="TEST"
+    )
+    assert ok12b is False
+    assert pos12b is None
+    assert broker.last_order["status"] == "ZERO_FILL"
+    assert broker.open_position is None
+
+    # 13. Maker limit unfill when bar never reaches limit price
+    ok13_buy, _, pos13_buy = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=1, order_type="LIMIT", bar_low=4008.0, strategy_name="TEST"
+    )
+    assert ok13_buy is False
+    assert pos13_buy is None
+    assert broker.last_order["reason"] == "PRICE_NOT_REACHED"
+
+    ok13_sell, _, pos13_sell = broker.open_simulated_trade(
+        symbol="XAUTUSD", direction="SHORT", entry_price=4050.0, stop_loss=4070.0, take_profit=4010.0, lots=1, order_type="LIMIT", bar_high=4042.0, strategy_name="TEST"
+    )
+    assert ok13_sell is False
+    assert pos13_sell is None
+    assert broker.last_order["reason"] == "PRICE_NOT_REACHED"
+
+
 
 
