@@ -239,6 +239,7 @@ class DeploymentRecord(BaseModel):
     commit_sha: str
     branch: str
     author: str
+    environment: str = "EC2"
     status: str
     tests_passed: bool
     message: str
@@ -548,17 +549,17 @@ def get_git_status(token: str = Depends(verify_monitoring_auth)) -> GitStatusRes
 
     try:
         # Get current branch
-        b_res = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, cwd=BASE_DIR)
+        b_res = subprocess.run(["git", "--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, cwd=BASE_DIR)
         if b_res.returncode == 0 and b_res.stdout.strip():
             branch = b_res.stdout.strip()
 
         # Get local commit SHA
-        sha_res = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=BASE_DIR)
+        sha_res = subprocess.run(["git", "--no-optional-locks", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=BASE_DIR)
         if sha_res.returncode == 0 and sha_res.stdout.strip():
             ec2_sha = sha_res.stdout.strip()
 
         # Get latest commit message, author, date
-        log_res = subprocess.run(["git", "log", "-1", "--format=%an|%ad|%s"], capture_output=True, text=True, cwd=BASE_DIR)
+        log_res = subprocess.run(["git", "--no-optional-locks", "log", "-1", "--format=%an|%ad|%s"], capture_output=True, text=True, cwd=BASE_DIR)
         if log_res.returncode == 0 and "|" in log_res.stdout:
             parts = log_res.stdout.strip().split("|", 2)
             author = parts[0]
@@ -566,7 +567,7 @@ def get_git_status(token: str = Depends(verify_monitoring_auth)) -> GitStatusRes
             msg = parts[2]
 
         # Check status
-        st_res = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=BASE_DIR)
+        st_res = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"], capture_output=True, text=True, cwd=BASE_DIR)
         if st_res.returncode == 0:
             lines = [l for l in st_res.stdout.strip().split("\n") if l.strip()]
             uncommitted = len(lines)
@@ -595,7 +596,7 @@ def get_git_commits(
     commits = []
     try:
         res = subprocess.run(
-            ["git", "log", f"-{limit}", "--format=%H|%h|%an|%ad|%s"],
+            ["git", "--no-optional-locks", "log", f"-{limit}", "--format=%H|%h|%an|%ad|%s"],
             capture_output=True,
             text=True,
             cwd=BASE_DIR,
@@ -632,7 +633,7 @@ def get_git_changes(token: str = Depends(verify_monitoring_auth)) -> Dict[str, A
     diff_text = ""
     try:
         res_files = subprocess.run(
-            ["git", "show", "--stat", "--name-status", "HEAD"],
+            ["git", "--no-optional-locks", "show", "--stat", "--name-status", "HEAD"],
             capture_output=True,
             text=True,
             cwd=BASE_DIR,
@@ -644,7 +645,7 @@ def get_git_changes(token: str = Depends(verify_monitoring_auth)) -> Dict[str, A
                     changed_files.append({"status": parts[0], "file": parts[1]})
 
         res_diff = subprocess.run(
-            ["git", "show", "-p", "--no-color", "HEAD"],
+            ["git", "--no-optional-locks", "show", "-p", "--no-color", "HEAD"],
             capture_output=True,
             text=True,
             cwd=BASE_DIR,
@@ -681,6 +682,7 @@ def get_deployments(token: str = Depends(verify_monitoring_auth)) -> List[Deploy
             commit_sha="c8dec34cfa3330f8157e7c2c3b390249d59c07af",
             branch="feature/strategy-intelligence-v2",
             author="ajithkumar31082004-bit",
+            environment="EC2",
             status="SUCCESS",
             tests_passed=True,
             message="24-Hour Continuous Paper Trading Deployment verified and active",

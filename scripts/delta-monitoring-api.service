@@ -8,6 +8,8 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/Local-AI-Trading-Agent
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/home/ubuntu/Local-AI-Trading-Agent/.env.monitoring
 ExecStart=/home/ubuntu/Local-AI-Trading-Agent/.venv/bin/uvicorn services.monitoring_api:app --host 127.0.0.1 --port 8088 --workers 1
 Restart=on-failure

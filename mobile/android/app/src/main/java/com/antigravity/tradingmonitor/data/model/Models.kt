@@ -149,6 +149,7 @@ data class DeploymentRecord(
     @SerializedName("commit_sha") val commitSha: String,
     val branch: String,
     val author: String,
+    val environment: String = "EC2",
     val status: String,
     @SerializedName("tests_passed") val testsPassed: Boolean,
     val message: String

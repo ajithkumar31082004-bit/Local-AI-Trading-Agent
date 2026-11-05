@@ -57,6 +57,21 @@ TOKEN=$(grep "^MONITORING_API_KEY=" "$ENV_MONITORING" | cut -d '=' -f2)
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8088/api/health | jq . || curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8088/api/health
 echo ""
 
+# 7. Record official EC2 deployment record
+CURRENT_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
+"$REPO_DIR/.venv/bin/python" -c "
+from services.deployment_tracker import record_deployment
+record_deployment(
+    commit_sha='${CURRENT_SHA}',
+    branch='feature/strategy-intelligence-v2',
+    author='ajithkumar31082004-bit',
+    environment='EC2',
+    status='SUCCESS',
+    tests_passed=True,
+    message='EC2 Read-Only Monitoring API Hardened Release (Port 8088 Localhost)'
+)
+"
+
 echo "================================================================="
 echo "=== Monitoring API successfully deployed on 127.0.0.1:8088    ==="
 echo "=== Zero public exposure. Connect via SSH Tunnel or WireGuard ==="

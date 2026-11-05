@@ -17,7 +17,7 @@ object ApiClient {
     private const val KEY_BASE_URL = "base_url"
     private const val KEY_API_TOKEN = "api_token"
 
-    const val DEFAULT_BASE_URL = "http://16.4.36.144:8088/"
+    const val DEFAULT_BASE_URL = "http://127.0.0.1:8088/"
     const val DEFAULT_API_TOKEN = "delta_paper_monitor_sec_key_2026_xaut"
 
     private var currentRetrofit: Retrofit? = null
@@ -91,6 +91,7 @@ object ApiClient {
 
         val logging = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BODY
+            redactHeader("Authorization")
         }
 
         val okHttpClient = OkHttpClient.Builder()

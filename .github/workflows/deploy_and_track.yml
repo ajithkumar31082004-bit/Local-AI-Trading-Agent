@@ -77,15 +77,15 @@ jobs:
           print('Security scan PASSED: Zero credentials detected.')
           "
 
-  deployment_tracking:
-    name: Record Deployment and Update Health
+  ci_build_tracking:
+    name: Record CI Build Verification
     needs: [test_and_validate, security_audit]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Record Deployment
+      - name: Record CI Verification
         run: |
           python -c "
           from services.deployment_tracker import record_deployment
@@ -93,10 +93,11 @@ jobs:
               commit_sha='${{ github.sha }}',
               branch='${{ github.ref_name }}',
               author='${{ github.actor }}',
+              environment='GITHUB_CI',
               status='SUCCESS',
               tests_passed=True,
-              message='CI/CD Automated Deployment Record for commit ${{ github.sha }}'
+              message='CI/CD Build & Safety Verification for commit ${{ github.sha }}'
           )
-          print('Deployment tracked:', rec['id'])
+          print('CI Verification tracked:', rec['id'])
           "
 
