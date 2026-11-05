@@ -1,0 +1,102 @@
+name: Deploy and Track AI Trading Agent
+
+on:
+  push:
+    branches:
+      - feature/strategy-intelligence-v2
+      - main
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: 'Deployment Environment'
+        required: true
+        default: 'ec2-paper'
+
+jobs:
+  test_and_validate:
+    name: Run Automated Tests and Safety Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install fastapi uvicorn httpx pytest
+
+      - name: Run Core Test Suite
+        run: |
+          pytest tests/test_dashboard_state_consistency.py \
+                 tests/test_paper_trade_accounting.py \
+                 tests/test_monitoring_api.py -v
+
+      - name: Verify Strict PAPER Trading Safety
+        run: |
+          python -c "
+          from config.orb_settings import settings
+          assert settings.trading_mode == 'PAPER', 'FATAL: TRADING_MODE must be PAPER'
+          assert settings.live_trading_enabled is False, 'FATAL: LIVE_TRADING_ENABLED must be False'
+          print('Safety verification PASSED: Strict PAPER mode enforced.')
+          "
+
+  security_audit:
+    name: Security and Credential Leak Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Scan for Leaked Secrets
+        run: |
+          python -c "
+          import os, re
+          secret_pattern = re.compile(r'(DELTA_API_KEY|DELTA_API_SECRET|AWS_SECRET_ACCESS_KEY)\s*=\s*[\"|\']?[a-zA-Z0-9_\-]{8,}')
+          found = False
+          for root, dirs, files in os.walk('.'):
+              if '.git' in root or '.venv' in root or 'node_modules' in root:
+                  continue
+              for f in files:
+                  if f.endswith(('.py', '.json', '.yaml', '.yml', '.md', '.sh')):
+                      p = os.path.join(root, f)
+                      with open(p, 'r', encoding='utf-8', errors='ignore') as fp:
+                          for idx, line in enumerate(fp, 1):
+                              if secret_pattern.search(line):
+                                  print(f'SECURITY LEAK DETECTED: {p}:{idx}')
+                                  found = True
+          assert not found, 'Security scan failed: Real secrets detected in codebase!'
+          print('Security scan PASSED: Zero credentials detected.')
+          "
+
+  deployment_tracking:
+    name: Record Deployment and Update Health
+    needs: [test_and_validate, security_audit]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Record Deployment
+        run: |
+          python -c "
+          from services.deployment_tracker import record_deployment
+          rec = record_deployment(
+              commit_sha='${{ github.sha }}',
+              branch='${{ github.ref_name }}',
+              author='${{ github.actor }}',
+              status='SUCCESS',
+              tests_passed=True,
+              message='CI/CD Automated Deployment Record for commit ${{ github.sha }}'
+          )
+          print('Deployment tracked:', rec['id'])
+          "
+

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Hardened deployment script for Read-Only Monitoring API on EC2.
+# STRICT SAFETY: Does NOT touch delta-paper-trading.service or delta-paper-dashboard.service!
+# Binds strictly to 127.0.0.1:8088 (No public unencrypted HTTP exposure).
+
+set -euo pipefail
+
+echo "================================================================="
+echo "=== Deploying Hardened Read-Only Monitoring API on EC2 ==="
+echo "================================================================="
+
+REPO_DIR="/home/ubuntu/Local-AI-Trading-Agent"
+cd "$REPO_DIR"
+
+# 1. Verify and generate secure .env.monitoring token if missing
+ENV_MONITORING="$REPO_DIR/.env.monitoring"
+if [ ! -f "$ENV_MONITORING" ]; then
+    echo "Generating secure cryptographically random 32-byte Bearer token..."
+    NEW_TOKEN=$("$REPO_DIR/.venv/bin/python" -c "import secrets; print(secrets.token_hex(32))")
+    cat <<EOF > "$ENV_MONITORING"
+# Monitoring API Authentication Key (Generated $(date -u +"%Y-%m-%d %H:%M:%SZ"))
+MONITORING_API_KEY=${NEW_TOKEN}
+MONITORING_RATE_LIMIT=60
+EOF
+    chmod 600 "$ENV_MONITORING"
+    echo "Saved secure token to $ENV_MONITORING (chmod 600)"
+else
+    echo "Found existing $ENV_MONITORING. Preserving configured token."
+    chmod 600 "$ENV_MONITORING"
+fi
+
+# 2. Verify FastAPI & Uvicorn dependencies in .venv
+echo "Verifying Python dependencies..."
+"$REPO_DIR/.venv/bin/pip" install --quiet fastapi httpx uvicorn
+
+# 3. Ensure logging target file exists with proper permissions
+touch "$REPO_DIR/data/monitoring_api.log"
+chmod 644 "$REPO_DIR/data/monitoring_api.log"
+
+# 4. Install hardened systemd unit file
+echo "Installing hardened systemd unit file..."
+sudo cp "$REPO_DIR/scripts/delta-monitoring-api.service" /etc/systemd/system/delta-monitoring-api.service
+sudo systemctl daemon-reload
+
+# 5. Enable and start monitoring service
+echo "Enabling and starting delta-monitoring-api.service..."
+sudo systemctl enable delta-monitoring-api.service
+sudo systemctl restart delta-monitoring-api.service
+
+# 6. Verify service status and localhost health probe
+sleep 2
+echo "--- Service Status ---"
+sudo systemctl status delta-monitoring-api.service --no-pager
+
+echo "--- Localhost Health Probe ---"
+TOKEN=$(grep "^MONITORING_API_KEY=" "$ENV_MONITORING" | cut -d '=' -f2)
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8088/api/health | jq . || curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8088/api/health
+echo ""
+
+echo "================================================================="
+echo "=== Monitoring API successfully deployed on 127.0.0.1:8088    ==="
+echo "=== Zero public exposure. Connect via SSH Tunnel or WireGuard ==="
+echo "================================================================="
