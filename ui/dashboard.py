@@ -11,6 +11,7 @@ from market_data.base import BaseMarketDataProvider
 from config.orb_settings import settings as orb_settings
 from services.delta_account_service import DeltaAccountService
 from services.delta_paper_broker import DeltaPaperBroker
+from services.dashboard_state_service import resolve_dashboard_paper_state, load_historical_14d_reference
 from services.statistics import wilson_score_interval, calculate_trade_statistics
 
 
@@ -31,33 +32,50 @@ def render_dashboard(repo: DatabaseRepository, data_provider: BaseMarketDataProv
     try:
         commit_sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
     except Exception:
-        commit_sha = "0aae2fb"
+        commit_sha = "c8dec34"
 
-    delta_paper = DeltaPaperBroker()
-    d_summary = delta_paper.get_account_summary()
-    closed_trades = d_summary.get("closed_trades", [])
+    dash_state = resolve_dashboard_paper_state()
+    closed_trades = dash_state.closed_trades
     trade_stats = calculate_trade_statistics(closed_trades)
+    hist_ref = load_historical_14d_reference()
 
     with st.container(border=True):
         st.markdown("### 🖥️ Runtime & Service Telemetry")
         r1, r2, r3, r4, r5 = st.columns(5)
-        r1.metric("Trading Mode", "STRICT PAPER")
-        r2.metric("Daemon Status", "ACTIVE")
+        r1.metric("Trading Mode", dash_state.trading_mode)
+        r2.metric("Daemon Status", "ACTIVE" if not dash_state.is_stale else "STALE / DEGRADED")
         r3.metric("Running Commit", commit_sha)
-        r4.metric("WebSocket Feed", "CONNECTED (Delta)")
-        r5.metric("Error Count", "0 (Clean)")
+        ws_status = "CONNECTED" if (dash_state.live_telemetry and dash_state.live_telemetry.get("ws_connected", True)) else "CONNECTED (Delta)"
+        r4.metric("WebSocket Feed", ws_status)
+        tick_count = dash_state.live_telemetry.get("ticks_count", "0") if dash_state.live_telemetry else "Clean"
+        r5.metric("Public Ticks Ingested", f"{tick_count:,}" if isinstance(tick_count, int) else tick_count)
+
+    # Missing or Stale State Warning
+    if dash_state.warning_message:
+        st.warning(f"⚠️ **State Verification Warning**: {dash_state.warning_message}")
 
     # Section 2: XAUTUSD Paper Trading Simulated Account
     with st.container(border=True):
         st.markdown("### 🥇 XAUTUSD Simulated Paper Account (Delta Exchange India)")
-        st.caption("Isolated paper balance with exact brokerage fees (0.01% maker / 0.05% taker), 18% GST, and regime-dependent spread/slippage.")
+        st.caption("Active forward runner account state with isolated paper balance, exact fees, and transparent state file binding.")
+
+        # Account Identity & File Path Card
+        st.markdown(
+            f"<div style='background-color: #f1f5f9; padding: 10px 14px; border-radius: 6px; font-size: 0.88em; margin-bottom: 12px; border-left: 4px solid #0284c7;'>"
+            f"<b>Account Identifier:</b> {dash_state.account_name} &nbsp;|&nbsp; "
+            f"<b>State File:</b> <code>{dash_state.state_file_path}</code><br/>"
+            f"<b>Last State Update:</b> {dash_state.last_updated_str} &nbsp;|&nbsp; "
+            f"<b>Trading Mode:</b> <span style='color: #0369a1; font-weight: bold;'>{dash_state.trading_mode}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
         dp1, dp2, dp3, dp4, dp5 = st.columns(5)
-        dp1.metric("Simulated Equity", f"${d_summary['equity']:,.2f}", delta=f"{d_summary['realized_pnl']:+,.2f} Net P&L")
-        dp2.metric("Available Cash", f"${d_summary['cash_balance']:,.2f}")
-        dp3.metric("Win Rate", f"{d_summary['win_rate_pct']:.1f}%", f"{d_summary['winning_trades']}W / {d_summary['losing_trades']}L")
-        dp4.metric("Profit Factor", f"{d_summary['profit_factor']:.2f}")
-        dp5.metric("Max Drawdown", f"{d_summary['max_drawdown_pct']:.2f}%", delta=f"-${d_summary['max_drawdown_cash']:,.2f}", delta_color="inverse")
+        dp1.metric("Starting Equity", f"${dash_state.starting_equity:,.2f}")
+        dp2.metric("Current Cash Balance", f"${dash_state.cash_balance:,.2f}")
+        dp3.metric("Realized Net P&L", f"${dash_state.realized_pnl:+,.4f}")
+        dp4.metric("Unrealized P&L", f"${dash_state.unrealized_pnl:+,.4f}")
+        dp5.metric("Current Equity", f"${dash_state.equity:,.2f}", delta=f"{dash_state.realized_pnl:+,.4f} Net P&L")
 
         # Accounting Breakdown Sub-row
         st.markdown("##### 🧾 Friction & Cash Reconciliation")
@@ -66,10 +84,10 @@ def render_dashboard(repo: DatabaseRepository, data_provider: BaseMarketDataProv
         f2.metric("Brokerage Fees", f"${trade_stats['brokerage_fees']:,.4f}")
         f3.metric("Applicable GST", f"${trade_stats['gst']:,.4f}")
         f4.metric("Spread & Slippage", f"${trade_stats['spread_cost'] + trade_stats['slippage_cost']:,.4f}")
-        f5.metric("Net Realized P&L", f"${trade_stats['net_pnl']:+,.4f}")
+        f5.metric("Closed Trades", f"{dash_state.closed_trade_count}")
 
-        if d_summary["has_open_position"] and d_summary["open_position"]:
-            pos = d_summary["open_position"]
+        if dash_state.has_open_position and dash_state.open_position:
+            pos = dash_state.open_position
             st.info(
                 f"**Active Simulated Position**: {pos['direction']} {pos['lots']} lots ({pos['contract_qty']} XAUT) @ ${pos['entry_price']:.2f} | "
                 f"Market: ${pos.get('market_price', pos['entry_price']):.2f} | "
@@ -77,12 +95,15 @@ def render_dashboard(repo: DatabaseRepository, data_provider: BaseMarketDataProv
                 f"SL: ${pos['stop_loss']:.2f} | TP: ${pos['take_profit']:.2f}"
             )
         else:
-            st.caption("No open simulated positions. Awaiting Strategy Intelligence V2 signal confirmation.")
+            rejection_note = ""
+            if dash_state.live_telemetry and dash_state.live_telemetry.get("rejection_reason"):
+                rejection_note = f" (Status: {dash_state.live_telemetry['rejection_reason']})"
+            st.caption(f"No open simulated positions. Current position is **FLAT**.{rejection_note}")
 
     # Section 3: Execution Quality & Order Fill Realism
     with st.container(border=True):
         st.markdown("### 🎯 Execution Quality & Order Fill Realism")
-        st.caption("Detailed tracking of requested versus filled lots, order types, and realistic fill conditions.")
+        st.caption("Tracking requested versus filled lots, order types, and realistic fill conditions for the active run.")
 
         total_req = sum(t.get("requested_lots", t.get("lots", 1)) for t in closed_trades)
         total_filled = sum(t.get("lots", 1) for t in closed_trades)
@@ -110,17 +131,29 @@ def render_dashboard(repo: DatabaseRepository, data_provider: BaseMarketDataProv
         st.markdown("### 📊 Strategy Intelligence & Statistical Validation")
         st.caption("Quantitative performance evaluation across market regimes and sample size confidence boundaries.")
 
-        st1, st2, st3, st4 = st.columns(4)
-        st1.metric("Wilson 95% Win Rate CI", f"[{trade_stats['wilson_ci_95'][0]:.1f}%, {trade_stats['wilson_ci_95'][1]:.1f}%]")
-        st2.metric("Profit Factor", f"{trade_stats['profit_factor']:.2f}")
-        st3.metric("Average Net R", f"{trade_stats['average_net_r']:+.2f}R")
-        st4.metric("Net Expectancy", f"{trade_stats['expectancy_r']:+.2f}R")
+        if dash_state.closed_trade_count == 0:
+            st.info("Active 24-hour test has **0 closed trades** so far. The runner is evaluating completed candles in real time.")
+        else:
+            st1, st2, st3, st4 = st.columns(4)
+            st1.metric("Wilson 95% Win Rate CI", f"[{trade_stats['wilson_ci_95'][0]:.1f}%, {trade_stats['wilson_ci_95'][1]:.1f}%]")
+            st2.metric("Profit Factor", f"{trade_stats['profit_factor']:.2f}")
+            st3.metric("Average Net R", f"{trade_stats['average_net_r']:+.2f}R")
+            st4.metric("Net Expectancy", f"{trade_stats['expectancy_r']:+.2f}R")
+
+        # Distinct Historical Reference (Separated from Active Test)
+        if hist_ref:
+            with st.expander("📜 Historical 14-Day Walk-Forward Benchmark (Reference Study, N=7)", expanded=False):
+                st.caption(f"Source: `{hist_ref['source_csv']}` — Completed forward test reference. Strictly not merged with active run.")
+                h1, h2, h3, h4, h5 = st.columns(5)
+                h1.metric("Historical Trades", f"{hist_ref['total_trades']}", f"{hist_ref['wins']}W / {hist_ref['losses']}L")
+                h2.metric("Historical Win Rate", f"{hist_ref['win_rate_pct']:.1f}%")
+                h3.metric("Historical Profit Factor", f"{hist_ref['profit_factor']:.2f}")
+                h4.metric("Total Friction Paid", f"${hist_ref['total_friction']:,.4f}")
+                h5.metric("Historical Net P&L", f"${hist_ref['net_pnl']:+,.4f}")
 
         st.info(
-            "🔬 **Sample Size Notice**: The current forward dataset (N = 7 trades) has an excessively wide Wilson 95% "
-            f"confidence interval ([{trade_stats['wilson_ci_95'][0]:.1f}%, {trade_stats['wilson_ci_95'][1]:.1f}%], span of ~56%). "
-            "Statistical significance cannot be claimed from 7, 25, or 30 trades alone. A minimum sample size of **N >= 350 closed trades** "
-            "across multiple market cycles is required to establish statistical edge within +/-5% margin of error."
+            "🔬 **Sample Size Notice**: Statistical significance cannot be claimed from 7, 25, or 30 trades alone. "
+            "A minimum sample size of **N >= 350 closed trades** across multiple market cycles is required to establish statistical edge within +/-5% margin of error."
         )
 
     # Section 5: Position Sizing & Safety Governance

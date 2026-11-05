@@ -232,3 +232,4 @@ Forensic inspection of the AWS EC2 Ubuntu instance (`16.4.36.144`) confirmed:
 1. **Statistical Significance Requirement**: A single trade over 24 hours (a -$0.01 loss on 1 mini-lot) provides proof of system stability and safety guardrail enforcement, but is insufficient to judge quantitative strategy edge. A minimum sample of **20 to 30 closed trades** across varying market regimes is required.
 2. **Infrastructure is Production-Grade**: With `systemd` process management, automated crash recovery, user lingering enabled, and zero order leakage risks, the EC2 instance is well-equipped to run unattended for 14 continuous days.
 3. **Execution Guardrails**: Keep the bot strictly in PAPER mode with the existing 0.5% risk limit and 1 trade/day maximum. Do not enable live execution or alter strategy rules.
+

@@ -684,5 +684,90 @@ def test_partial_fill_engine_comprehensive_matrix(tmp_path):
     assert broker.last_order["reason"] == "PRICE_NOT_REACHED"
 
 
+def test_reliability_restart_position_recovery_and_duplicate_prevention(tmp_path):
+    """Verify state persistence, position recovery across restarts, and duplicate order prevention."""
+    cfg = ORBSettings(symbol="XAUTUSD", mode="PAPER")
+    state_file = tmp_path / "recovery_state.json"
+
+    # Instance 1: Open trade
+    b1 = DeltaPaperBroker(cfg=cfg, state_file=str(state_file), initial_equity=10000.0)
+    ok, msg, pos = b1.open_simulated_trade(
+        symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=2, strategy_name="VWAP_EMA"
+    )
+    assert ok is True
+    assert pos["lots"] == 2
+    initial_cash_after_margin = b1.cash_balance
+
+    # Instance 2 (Simulating process restart): Loads existing state file
+    b2 = DeltaPaperBroker(cfg=cfg, state_file=str(state_file), initial_equity=10000.0)
+    assert b2.open_position is not None
+    assert b2.open_position["lots"] == 2
+    assert b2.open_position["entry_price"] == pos["entry_price"]
+    assert b2.cash_balance == initial_cash_after_margin
+
+    # Guard: Duplicate entry must be rejected while position is open
+    dup_ok, dup_msg, dup_pos = b2.open_simulated_trade(
+        symbol="XAUTUSD", direction="SHORT", entry_price=4000.0, stop_loss=4020.0, take_profit=3960.0, lots=1, strategy_name="VWAP_EMA"
+    )
+    assert dup_ok is False
+    assert "Position already open" in dup_msg
+    assert dup_pos is None
+
+    # Instance 2: Close position
+    close_ok, close_msg, closed = b2.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+    assert close_ok is True
+    assert b2.open_position is None
+
+    # Instance 3 (Post-close restart): Verifies flat state and cash reconciliation
+    b3 = DeltaPaperBroker(cfg=cfg, state_file=str(state_file), initial_equity=10000.0)
+    assert b3.open_position is None
+    assert len(b3.closed_trades) == 1
+    assert b3.cash_balance == b2.cash_balance
+    expected_cash = round(10000.0 + closed["net_pnl"], 4)
+    assert b3.cash_balance == expected_cash
+
+
+def test_gst_inclusion_vs_exclusion_reconciliation(tmp_path):
+    """Verify exact discrepancy mechanics between apply_gst=False and apply_gst=True."""
+    state_no_gst = tmp_path / "no_gst.json"
+    state_with_gst = tmp_path / "with_gst.json"
+
+    # 1. apply_gst = False (Historical 14d forward test configuration)
+    cfg_no_gst = ORBSettings(symbol="XAUTUSD", mode="PAPER", apply_gst=False)
+    b_no = DeltaPaperBroker(cfg=cfg_no_gst, state_file=str(state_no_gst), initial_equity=10000.0)
+    b_no.open_simulated_trade(symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=1, strategy_name="VWAP_EMA")
+    _, _, c_no = b_no.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+
+    # In apply_gst = False:
+    # Brokerage = 0.0008, Total Price Impact = 0.0016
+    # Total friction = 0.0008 + 0.0016 = 0.0024
+    # GST field = 0.0001 (calculated for info), but gst_applied = False
+    assert c_no["brokerage_fee"] == 0.0008
+    assert c_no["gst"] == 0.0001
+    assert c_no["gst_applied"] is False
+    assert c_no["total_friction"] == 0.0024
+    assert c_no["net_pnl"] == round(c_no["gross_pnl"] - 0.0024, 4)
+    assert b_no.cash_balance == round(10000.0 + c_no["net_pnl"], 4)
+
+    # 2. apply_gst = True (Full Indian statutory GST deduction scenario)
+    cfg_with_gst = ORBSettings(symbol="XAUTUSD", mode="PAPER", apply_gst=True)
+    b_yes = DeltaPaperBroker(cfg=cfg_with_gst, state_file=str(state_with_gst), initial_equity=10000.0)
+    b_yes.open_simulated_trade(symbol="XAUTUSD", direction="LONG", entry_price=4000.0, stop_loss=3980.0, take_profit=4040.0, lots=1, strategy_name="VWAP_EMA")
+    _, _, c_yes = b_yes.close_simulated_trade(exit_price=4040.0, exit_reason="TP")
+
+    # In apply_gst = True:
+    # Total friction = 0.0008 + 0.0001 + 0.0016 = 0.0025
+    assert c_yes["brokerage_fee"] == 0.0008
+    assert c_yes["gst"] == 0.0001
+    assert c_yes["gst_applied"] is True
+    assert c_yes["total_friction"] == 0.0025
+    assert c_yes["net_pnl"] == round(c_yes["gross_pnl"] - 0.0025, 4)
+    assert b_yes.cash_balance == round(10000.0 + c_yes["net_pnl"], 4)
+
+    # Difference in friction is exactly the GST deduction: 0.0001
+    assert round(c_yes["total_friction"] - c_no["total_friction"], 4) == 0.0001
+
+
+
 
 

@@ -1,0 +1,32 @@
+2026-11-04 22:24:58 [INFO] EC2PaperDaemon24H: ================================================================================
+2026-11-04 22:24:58 [INFO] EC2PaperDaemon24H: PHASE 1: STRICT SAFETY & PRODUCT VERIFICATION
+2026-11-04 22:24:58 [INFO] EC2PaperDaemon24H: ================================================================================
+2026-11-04 22:24:58 [INFO] EC2PaperDaemon24H:   [PASS] Operational Mode: STRICTLY PAPER. Real orders permanently disabled.
+2026-11-04 22:24:58 [INFO] EC2PaperDaemon24H:   [PASS] Execution Pathway: Isolated Simulated Broker (Local disk state).
+2026-11-04 22:25:30 [INFO] EC2PaperDaemon24H: ================================================================================
+2026-11-04 22:25:30 [INFO] EC2PaperDaemon24H: PHASE 1: STRICT SAFETY & PRODUCT VERIFICATION
+2026-11-04 22:25:30 [INFO] EC2PaperDaemon24H: ================================================================================
+2026-11-04 22:25:30 [INFO] EC2PaperDaemon24H:   [PASS] Operational Mode: STRICTLY PAPER. Real orders permanently disabled.
+2026-11-04 22:25:30 [INFO] EC2PaperDaemon24H:   [PASS] Execution Pathway: Isolated Simulated Broker (Local disk state).
+2026-11-04 22:25:30 [INFO] EC2PaperDaemon24H:   [PASS] Verified Risk Limits: 0.5% risk | 1.5% daily loss | 2.0R cutoff | Max 1 trade/day
+2026-11-04 22:25:31 [INFO] EC2PaperDaemon24H:   [PASS] Delta India Public Product: XAUTUSD | ID: 131253 | Contract: perpetual_futures | Settling: USD
+2026-11-04 22:25:31 [INFO] EC2PaperDaemon24H: ================================================================================
+2026-11-04 22:25:31 [INFO] EC2PaperDaemon24H: Backed up initial account state to C:\Users\ajith\Downloads\Local_AI_Agent\reports\ec2_24h_paper_test\paper_account_backup_initial.json
+2026-11-04 22:25:31 [INFO] EC2PaperDaemon24H: Initialized fresh 24-Hour forward test: Target Duration=5 seconds (2026-11-04T16:55:31.605476+00:00 to 2026-11-04T16:55:36.605476+00:00 UTC)
+2026-11-04 22:25:31 [INFO] EC2PaperDaemon24H: Broker initialized: Equity=$10000.00, Cash=$10000.00, Realized P&L=$0.00
+2026-11-04 22:25:31 [INFO] EC2PaperDaemon24H: Starting DeltaPaperBot with bootstrap lookback 450 candles...
+2026-11-04 22:25:31 [INFO] services.delta_paper_bot: Starting DeltaPaperBot for XAUTUSD [Mode: PAPER, Strategy: PORTFOLIO, Bootstrap: 450 bars]...
+2026-11-04 22:25:32 [INFO] market_data.delta_live_feed: Validated XAUTUSD on Delta Exchange (Product ID: 131253, Contract: perpetual_futures).
+2026-11-04 22:25:32 [INFO] market_data.delta_live_feed: Bootstrapping 450 completed 5m candles for XAUTUSD...
+2026-11-04 22:25:33 [INFO] market_data.delta_live_feed: Successfully bootstrapped 449 5m candles (resampled 149 15m candles, latest close: $4053.29).
+2026-11-04 22:25:33 [INFO] services.delta_paper_bot: Evaluating initial completed candle batch (449 bars)...
+2026-11-04 22:25:33 [INFO] services.delta_paper_bot: Evaluation skipped due to system readiness: DEGRADED (WebSocket disconnected during streaming)
+2026-11-04 22:25:33 [INFO] market_data.delta_live_feed: Connecting to Delta WebSocket: wss://socket.india.delta.exchange
+2026-11-04 22:25:34 [INFO] market_data.delta_live_feed: Connected to Delta WebSocket. Subscribing to channels for XAUTUSD...
+2026-11-04 22:25:37 [INFO] EC2PaperDaemon24H: Target duration of 24 hours reached (5 seconds elapsed). Finishing test...
+2026-11-04 22:25:37 [INFO] EC2PaperDaemon24H: Stopping DeltaPaperBot cleanly...
+2026-11-04 22:25:37 [INFO] market_data.delta_live_feed: DeltaLiveMarketDataFeed stopped.
+2026-11-04 22:25:37 [INFO] services.delta_paper_bot: DeltaPaperBot stopped.
+2026-11-04 22:25:37 [INFO] EC2PaperDaemon24H: Compiling final 24-hour forward test reports...
+2026-11-04 22:25:37 [INFO] EC2PaperDaemon24H: Saved final JSON report to C:\Users\ajith\Downloads\Local_AI_Agent\reports\ec2_24h_paper_test\final_report.json
+2026-11-04 22:25:37 [INFO] EC2PaperDaemon24H: Saved human-readable Markdown report to C:\Users\ajith\Downloads\Local_AI_Agent\reports\ec2_24h_paper_test\FINAL_REPORT.md

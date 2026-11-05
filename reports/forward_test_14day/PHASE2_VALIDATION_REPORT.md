@@ -215,3 +215,4 @@ tests/test_vwap_ema.py ......                                            [100%]
    - Because position sizing is constrained to 1 micro-lot ($0.001\text{ XAUT}$), transaction friction ($0.0024) is 17% of total position risk ($0.014). In scaled trading (e.g. 495 lots, $50 risk), friction is 0.06% of notional, allowing the positive gross edge (+2.43R win vs -0.93R loss) to translate directly into net positive R-multiples.
 3. **Execution Mode Policy**:
    - Live execution must remain **strictly disabled** (`LIVE_TRADING_ENABLED=false`). The persistent EC2 paper daemon will continue forward data collection under the audited parameters.
+

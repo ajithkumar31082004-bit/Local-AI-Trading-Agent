@@ -1,0 +1,12 @@
+{
+  "symbol": "XAUTUSD",
+  "initial_equity": 10000.0,
+  "cash_balance": 10000.0,
+  "realized_pnl": 0.0,
+  "total_fees": 0.0,
+  "total_slippage": 0.0,
+  "peak_equity": 10000.0,
+  "open_position": null,
+  "closed_trades": [],
+  "last_updated": "2026-11-04T16:55:31.615813+00:00"
+}
