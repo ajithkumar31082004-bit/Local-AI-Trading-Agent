@@ -1,0 +1,51 @@
+{
+  "phase": "STAGE_1_READONLY_PUBLIC_MARKET_DATA",
+  "symbol": "XAUTUSD",
+  "product_id": 131253,
+  "final_status": "PASS",
+  "status_description": "Public feed is stable, continuous, and compliant with zero execution safety.",
+  "commit_sha": "d4c2498d68796208e6e5a0f72702c5e1300320c4",
+  "observer_pid": 17580,
+  "timing": {
+    "start_utc": "2026-11-06T17:33:36.335111+00:00",
+    "start_ist": "2026-11-06T23:03:36.335111+05:30",
+    "end_utc": "2026-11-06T17:33:46.454018+00:00",
+    "end_ist": "2026-11-06T23:03:46.454018+05:30",
+    "target_duration_seconds": 10,
+    "actual_duration_seconds": 10.12
+  },
+  "public_endpoints": {
+    "ws_url": "wss://socket.india.delta.exchange",
+    "rest_url": "https://api.india.delta.exchange",
+    "private_endpoints_accessed": 0
+  },
+  "telemetry": {
+    "total_ticks_received": 11,
+    "valid_ticks": 11,
+    "duplicate_ticks": 0,
+    "out_of_order_ticks": 1,
+    "completed_candles": 0,
+    "duplicate_candles": 0,
+    "out_of_order_candles": 0,
+    "missing_candles": 0,
+    "websocket_disconnects": 0,
+    "reconnection_attempts": 0,
+    "rest_fallback_events": 0,
+    "stale_feed_intervals": 0,
+    "longest_interruption_seconds": 0.0
+  },
+  "resource_usage": {
+    "cpu_utilization_pct": 3.55,
+    "memory_usage_mb": 0.0
+  },
+  "safety_assertions": {
+    "trading_mode": "PAPER",
+    "live_trading_enabled": false,
+    "zero_broker_calls": true,
+    "zero_orders_submitted": true,
+    "zero_strategy_evaluations": true,
+    "zero_service_modifications": true,
+    "isolated_output_enforced": true
+  },
+  "error_log_count": 0
+}
