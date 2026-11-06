@@ -178,3 +178,152 @@ def test_sensitive_info_redaction_utility():
     assert cleaned_dict["nested"]["token"] == "***REDACTED***"
     assert cleaned_dict["public_data"] == "10000.0"
 
+
+def test_read_only_state_checksum_invariance():
+    """Verify calling API endpoints does not mutate state files."""
+    import hashlib
+    from pathlib import Path
+
+    state_path = Path(__file__).resolve().parent.parent / "data" / "paper_forward_24h_state.json"
+    if not state_path.exists():
+        pytest.skip("State file not present in test environment.")
+
+    with open(state_path, "rb") as f:
+        sha_before = hashlib.sha256(f.read()).hexdigest()
+
+    # Invoke all major data endpoints
+    endpoints = [
+        "/api/health",
+        "/api/ec2/status",
+        "/api/services",
+        "/api/trading/status",
+        "/api/trading/account",
+        "/api/trading/trades",
+        "/api/git/status",
+        "/api/git/commits?limit=5",
+        "/api/git/changes",
+        "/api/deployments",
+        "/api/logs?service=trading&limit=5",
+    ]
+    for ep in endpoints:
+        resp = client.get(ep, headers=AUTH_HEADERS)
+        assert resp.status_code == 200
+
+    with open(state_path, "rb") as f:
+        sha_after = hashlib.sha256(f.read()).hexdigest()
+
+    assert sha_before == sha_after, "State file was mutated by read-only API calls!"
+
+
+def test_android_network_security_and_credentials():
+    """Verify Android network security config blocks cleartext HTTP and source has no hardcoded token."""
+    from pathlib import Path
+    import xml.etree.ElementTree as ET
+
+    base_dir = Path(__file__).resolve().parent.parent
+    net_sec_xml = base_dir / "mobile" / "android" / "app" / "src" / "main" / "res" / "xml" / "network_security_config.xml"
+    manifest_xml = base_dir / "mobile" / "android" / "app" / "src" / "main" / "AndroidManifest.xml"
+    api_client_kt = base_dir / "mobile" / "android" / "app" / "src" / "main" / "java" / "com" / "antigravity" / "tradingmonitor" / "data" / "api" / "ApiClient.kt"
+
+    assert net_sec_xml.exists(), "network_security_config.xml is missing!"
+    assert manifest_xml.exists(), "AndroidManifest.xml is missing!"
+    assert api_client_kt.exists(), "ApiClient.kt is missing!"
+
+    # Parse network security config
+    tree = ET.parse(net_sec_xml)
+    root = tree.getroot()
+
+    base_config = root.find("base-config")
+    assert base_config is not None, "Missing base-config in network_security_config.xml"
+    assert base_config.attrib.get("cleartextTrafficPermitted") == "false", "Cleartext HTTP must be disabled by default!"
+
+    domain_config = root.find("domain-config")
+    assert domain_config is not None, "Missing domain-config in network_security_config.xml"
+    assert domain_config.attrib.get("cleartextTrafficPermitted") == "true"
+
+    permitted_domains = [d.text for d in domain_config.findall("domain")]
+    assert "localhost" in permitted_domains
+    assert "127.0.0.1" in permitted_domains
+    # Ensure no public domains/IPs are permitted cleartext
+    for dom in permitted_domains:
+        assert dom in ["localhost", "127.0.0.1"], f"Unexpected permitted cleartext domain: {dom}"
+
+    # Verify AndroidManifest.xml
+    with open(manifest_xml, "r", encoding="utf-8") as f:
+        manifest_content = f.read()
+    assert 'android:networkSecurityConfig="@xml/network_security_config"' in manifest_content
+    assert 'android:usesCleartextTraffic="true"' not in manifest_content
+
+    # Verify ApiClient.kt has no hardcoded secret token
+    with open(api_client_kt, "r", encoding="utf-8") as f:
+        api_client_content = f.read()
+    assert 'const val DEFAULT_API_TOKEN = ""' in api_client_content
+    assert "delta_paper_monitor_sec_key_2026_xaut" not in api_client_content
+    assert 'redactHeader("Authorization")' in api_client_content
+
+
+def test_deployment_script_safety_and_failure_paths():
+    """Verify deploy_monitoring_api.sh enforces safe bash flags, stops on failure, and does not touch trading daemons."""
+    from pathlib import Path
+
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "deploy_monitoring_api.sh"
+    assert script_path.exists(), "deploy_monitoring_api.sh is missing!"
+
+    with open(script_path, "r", encoding="utf-8") as f:
+        script = f.read()
+
+    # Verify strict safety flags
+    assert "set -Eeuo pipefail" in script, "Script must enable set -Eeuo pipefail"
+
+    # Verify token preservation
+    assert "if [ ! -f " in script and "Preserving configured token" in script
+
+    # Verify failure path on health check
+    assert "curl -s -f -H" in script
+    assert "FATAL ERROR: Health probe failed" in script
+
+    # Verify only delta-monitoring-api is restarted
+    assert "sudo systemctl restart delta-monitoring-api.service" in script
+    assert "restart delta-paper-trading.service" not in script
+    assert "restart delta-paper-dashboard.service" not in script
+    assert "stop delta-paper-trading.service" not in script
+    assert "stop delta-paper-dashboard.service" not in script
+
+    # Verify --no-upgrade is passed to pip
+    assert "--no-upgrade" in script
+
+
+def test_systemd_service_isolation_directives():
+    """Verify delta-monitoring-api.service enforces sandboxing and binds strictly to localhost."""
+    from pathlib import Path
+
+    service_path = Path(__file__).resolve().parent.parent / "scripts" / "delta-monitoring-api.service"
+    assert service_path.exists(), "delta-monitoring-api.service is missing!"
+
+    with open(service_path, "r", encoding="utf-8") as f:
+        service_text = f.read()
+
+    # Host binding
+    assert "--host 127.0.0.1 --port 8088" in service_text
+    assert "--host 0.0.0.0" not in service_text
+
+    # User
+    assert "User=ubuntu" in service_text
+    assert "Group=ubuntu" in service_text
+
+    # Sandboxing
+    assert "ProtectSystem=strict" in service_text
+    assert "ProtectHome=read-only" in service_text
+    assert "ReadWritePaths=/home/ubuntu/Local-AI-Trading-Agent/data/monitoring_api.log" in service_text
+    assert "ReadOnlyPaths=/home/ubuntu/Local-AI-Trading-Agent" in service_text
+    assert "NoNewPrivileges=true" in service_text
+    assert "PrivateTmp=true" in service_text
+    assert "CapabilityBoundingSet=" in service_text
+    assert "AmbientCapabilities=" in service_text
+    assert "PYTHONDONTWRITEBYTECODE=1" in service_text
+
+    # Independence from trading daemons
+    assert "delta-paper-trading.service" not in service_text
+    assert "delta-paper-dashboard.service" not in service_text
+
+

@@ -121,7 +121,7 @@ def test_3_no_private_order_placement_endpoint_called(tmp_path):
             entry_price=2750.0,
             stop_loss=2740.0,
             take_profit=2770.0,
-            lots=2,
+            lots=1,
             strategy_name="ORB_V2",
         )
         assert ok is True
@@ -154,7 +154,7 @@ def test_4_simulated_market_order_does_not_create_exchange_order(tmp_path):
         entry_price=2750.0,
         stop_loss=2735.0,
         take_profit=2780.0,
-        lots=5,
+        lots=1,
         strategy_name="TREND_FOLLOWING_V2",
         signal_reason="Bullish EMA20 pullback",
     )
@@ -162,8 +162,8 @@ def test_4_simulated_market_order_does_not_create_exchange_order(tmp_path):
     assert pos is not None
     assert pos["symbol"] == "XAUTUSD"
     assert pos["direction"] == "LONG"
-    assert pos["lots"] == 5
-    assert pos["contract_qty"] == 0.005  # 5 * 0.001
+    assert pos["lots"] == 1
+    assert pos["contract_qty"] == 0.001  # 1 * 0.001
 
     # Realistic fill: LONG enters at entry_price * (1 + 0.01% spread_half + 0.01% slip_half) = 2750 * 1.0002 = 2750.55
     assert pos["entry_price"] > 2750.0
@@ -190,7 +190,7 @@ def test_5_simulated_stop_loss_closes_only_local_position(tmp_path):
         entry_price=2750.0,
         stop_loss=2740.0,
         take_profit=2780.0,
-        lots=10,
+        lots=1,
         strategy_name="VWAP_EMA_V2",
     )
     assert broker.open_position is not None
@@ -322,7 +322,7 @@ def test_10_incomplete_candles_cannot_trigger_confirmed_entries(tmp_path):
         entry_price=2750.0,
         stop_loss=2740.0,
         take_profit=2780.0,
-        lots=2,
+        lots=1,
         strategy_name="VWAP_EMA_V2",
     )
 
@@ -349,7 +349,7 @@ def test_11_persistence_across_restarts(tmp_path):
         entry_price=2750.0,
         stop_loss=2740.0,
         take_profit=2780.0,
-        lots=4,
+        lots=1,
         strategy_name="ORB_V2",
     )
     broker_a.close_simulated_trade(exit_price=2775.0, exit_reason="TP")

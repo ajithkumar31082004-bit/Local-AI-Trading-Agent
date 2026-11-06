@@ -20,6 +20,11 @@ from strategy.orb_ema_volume import evaluate_orb, Signal
 from strategy.trend_following import evaluate_trend_following
 from strategy.vwap_ema import evaluate_vwap_ema
 from risk.position_sizing import size_position, DailyRiskState, RiskDecision
+from risk.position_size_guard import (
+    validate_paper_order_lots,
+    PositionSizeViolation,
+    APPROVED_MAX_PAPER_LOTS,
+)
 from journal.orb_journal import ORBJournal
 
 logger = logging.getLogger(__name__)
@@ -253,6 +258,14 @@ class DeltaPaperBot:
             logger.warning("Trade signal rejected by sizing engine: %s", sizing.reason)
             return sig
 
+        # PRE-FLIGHT CENTRAL SIZING GUARD CHECK (Phase 3.23)
+        try:
+            validated_lots = validate_paper_order_lots(sizing.lots)
+        except PositionSizeViolation as e:
+            self._last_rejection_reason = f"Central position size guard rejected order: {e}"
+            logger.error("[BOT_SIZING_VIOLATION] Sizing engine returned invalid paper lots: %s", e)
+            return sig
+
         # Open Simulated Trade
         ok, msg, pos = self.broker.open_simulated_trade(
             symbol=self.cfg.symbol,
@@ -260,7 +273,7 @@ class DeltaPaperBot:
             entry_price=sig.entry,
             stop_loss=sig.sl,
             take_profit=sig.tp,
-            lots=sizing.lots,
+            lots=validated_lots,
             strategy_name=getattr(sig, "strategy_name", strat),
             signal_reason=sig.reason,
             candle_timestamp=sig.timestamp,

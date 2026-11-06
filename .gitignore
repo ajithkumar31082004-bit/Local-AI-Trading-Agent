@@ -70,3 +70,8 @@ htmlcov/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Android & Gradle
+.gradle/
+*.apk
+*.aab

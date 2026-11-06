@@ -18,7 +18,7 @@ object ApiClient {
     private const val KEY_API_TOKEN = "api_token"
 
     const val DEFAULT_BASE_URL = "http://127.0.0.1:8088/"
-    const val DEFAULT_API_TOKEN = "delta_paper_monitor_sec_key_2026_xaut"
+    const val DEFAULT_API_TOKEN = ""
 
     private var currentRetrofit: Retrofit? = null
     private var currentBaseUrl: String? = null
@@ -38,7 +38,12 @@ object ApiClient {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Exception) {
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (com.antigravity.tradingmonitor.BuildConfig.DEBUG) {
+                android.util.Log.w("ApiClient", "Keystore unavailable in debug mode. Fallback to private prefs.")
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            } else {
+                throw SecurityException("Hardware-backed encrypted storage failed. Refusing unencrypted fallback in production: ${e.message}", e)
+            }
         }
     }
 

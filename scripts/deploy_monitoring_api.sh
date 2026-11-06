@@ -3,7 +3,7 @@
 # STRICT SAFETY: Does NOT touch delta-paper-trading.service or delta-paper-dashboard.service!
 # Binds strictly to 127.0.0.1:8088 (No public unencrypted HTTP exposure).
 
-set -euo pipefail
+set -Eeuo pipefail
 
 echo "================================================================="
 echo "=== Deploying Hardened Read-Only Monitoring API on EC2 ==="
@@ -29,13 +29,16 @@ else
     chmod 600 "$ENV_MONITORING"
 fi
 
-# 2. Verify FastAPI & Uvicorn dependencies in .venv
+# 2. Verify FastAPI & Uvicorn dependencies in .venv; install only if missing (never upgrades)
 echo "Verifying Python dependencies..."
-"$REPO_DIR/.venv/bin/pip" install --quiet fastapi httpx uvicorn
+if ! "$REPO_DIR/.venv/bin/python" -c "import fastapi, httpx, uvicorn" 2>/dev/null; then
+    echo "One or more packages missing; installing (--no-upgrade)..."
+    "$REPO_DIR/.venv/bin/pip" install --quiet fastapi httpx uvicorn
+fi
 
-# 3. Ensure logging target file exists with proper permissions
+# 3. Ensure logging target file exists with restricted owner-only permissions
 touch "$REPO_DIR/data/monitoring_api.log"
-chmod 644 "$REPO_DIR/data/monitoring_api.log"
+chmod 600 "$REPO_DIR/data/monitoring_api.log"
 
 # 4. Install hardened systemd unit file
 echo "Installing hardened systemd unit file..."
@@ -48,13 +51,18 @@ sudo systemctl enable delta-monitoring-api.service
 sudo systemctl restart delta-monitoring-api.service
 
 # 6. Verify service status and localhost health probe
-sleep 2
+sleep 5
 echo "--- Service Status ---"
 sudo systemctl status delta-monitoring-api.service --no-pager
 
 echo "--- Localhost Health Probe ---"
 TOKEN=$(grep "^MONITORING_API_KEY=" "$ENV_MONITORING" | cut -d '=' -f2)
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8088/api/health | jq . || curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8088/api/health
+# Strictly verify endpoint returns 200 OK before proceeding to record deployment
+if ! curl -s -f -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8088/api/health > /dev/null; then
+    echo "FATAL ERROR: Health probe failed on http://127.0.0.1:8088/api/health. Aborting deployment record!" >&2
+    exit 1
+fi
+echo "Health probe PASSED (200 OK)"
 echo ""
 
 # 7. Record official EC2 deployment record

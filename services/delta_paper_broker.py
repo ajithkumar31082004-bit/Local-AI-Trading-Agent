@@ -16,6 +16,12 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
 from config.orb_settings import ORBSettings, settings as default_orb_settings
+from risk.position_size_guard import (
+    validate_paper_order_lots,
+    validate_contract_quantity,
+    PositionSizeViolation,
+    APPROVED_MAX_PAPER_LOTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,16 +207,25 @@ class DeltaPaperBroker:
             return False, f"Invalid direction: '{clean_dir}'", None
         if entry_price <= 0 or stop_loss <= 0 or take_profit <= 0:
             return False, "Invalid price parameters (entry, SL, TP must be positive)", None
-        if lots < 1:
+        # FINAL ORDER BOUNDARY: Central Hard Position-Sizing Safety Guard (Phase 3.23)
+        try:
+            validated_lots = validate_paper_order_lots(lots)
+        except PositionSizeViolation as e:
             order_info = {
                 "status": "REJECTED",
-                "reason": "INVALID_LOTS",
+                "reason": "SECURITY_SIZING_VIOLATION",
+                "violation_code": e.violation_code,
                 "requested_lots": lots,
                 "filled_lots": 0,
-                "unfilled_lots": max(0, lots),
+                "unfilled_lots": 0,
+                "rejection_message": str(e),
             }
             self.last_order = order_info
-            return False, f"Requested lots must be >= 1 (exchange lot increment = 1), got {lots}", None
+            logger.error(
+                "[FINAL_BOUNDARY_REJECTION] Order rejected by Central Position Size Guard: %s",
+                e,
+            )
+            return False, f"Position Size Guard Rejection: {e}", None
 
         with self._lock:
             # 1. Ensure only 1 open position at a time
@@ -298,6 +313,11 @@ class DeltaPaperBroker:
                 return False, msg, None
 
             contract_qty = round(executed_lots * self.cfg.contract_size_xaut, 6)
+            try:
+                validate_contract_quantity(contract_qty, self.cfg.contract_size_xaut)
+            except PositionSizeViolation as e:
+                logger.error("[FINAL_BOUNDARY_REJECTION] Contract conversion violation: %s", e)
+                return False, f"Contract Conversion Guard Rejection: {e}", None
             notional = round(fill_price * contract_qty, 2)
             margin_required = round(notional / self.cfg.leverage, 2)
 
@@ -635,7 +655,7 @@ class DeltaPaperBroker:
                 else:
                     unrealized_gross = (e_price - current_price) * qty
                 self.open_position["market_price"] = current_price
-                self.open_position["unrealized_pnl"] = round(unrealized_gross - pos["entry_fee"], 2)
+                self.open_position["unrealized_pnl"] = round(unrealized_gross - pos["entry_fee"], 4)
 
         return None
 

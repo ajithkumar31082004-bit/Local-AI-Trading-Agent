@@ -9,6 +9,7 @@ import json
 from zoneinfo import ZoneInfo
 from filelock import FileLock
 from config.orb_settings import ORBSettings, settings
+from risk.position_size_guard import APPROVED_MAX_PAPER_LOTS
 
 logger = logging.getLogger(__name__)
 
@@ -86,16 +87,12 @@ def size_position(entry: float, stop: float, equity: float, cfg: ORBSettings = s
             reason=f"NO TRADE: minimum lot risk (${per_lot_risk:.4f}) exceeds configured risk budget (${risk_budget:.4f}).",
         )
 
-    raw_lots = int(risk_budget // per_lot_risk)
-    lots = (raw_lots // cfg.lot_increment) * cfg.lot_increment
-
     notional_per_lot = entry * cfg.contract_size_xaut
     margin_per_lot = notional_per_lot / cfg.leverage
     max_margin_budget = equity * (cfg.max_margin_pct_equity / 100.0)
     max_margin_lots = int(max_margin_budget // margin_per_lot) if margin_per_lot > 0 else 0
 
-    lots = min(lots, max_margin_lots)
-    if lots < 1:
+    if max_margin_lots < 1:
         return RiskDecision(
             approved=False,
             lots=0,
@@ -106,6 +103,26 @@ def size_position(entry: float, stop: float, equity: float, cfg: ORBSettings = s
             estimated_margin=round(margin_per_lot, 4),
             reason=f"NO TRADE: minimum lot requires margin (${margin_per_lot:.4f}) exceeding allowed margin budget (${max_margin_budget:.4f}).",
         )
+
+    # In PAPER mode (Phase 3.23), position size is fixed to exactly 1 micro-lot
+    # 1 lot is a ceiling and strictly conditioned on satisfying both risk budget and margin limit.
+    if getattr(cfg, "mode", "PAPER") == "PAPER":
+        lots = APPROVED_MAX_PAPER_LOTS
+    else:
+        raw_lots = int(risk_budget // per_lot_risk)
+        lots = (raw_lots // cfg.lot_increment) * cfg.lot_increment
+        lots = min(lots, max_margin_lots)
+        if lots < 1:
+            return RiskDecision(
+                approved=False,
+                lots=0,
+                max_risk_cash=round(risk_budget, 4),
+                estimated_loss_at_sl=round(per_lot_risk, 4),
+                estimated_fees=round(fee_per_lot, 4),
+                estimated_spread_slippage=round(costs_per_lot, 4),
+                estimated_margin=round(margin_per_lot, 4),
+                reason="NO TRADE: calculated lot size is less than 1.",
+            )
 
     total_risk = per_lot_risk * lots
     total_margin = margin_per_lot * lots
