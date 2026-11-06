@@ -195,6 +195,12 @@ class DeltaPaperBot:
 
     def _evaluate_strategy(self, df_candles: pd.DataFrame) -> Optional[Signal]:
         """Evaluate Strategy Intelligence V2 and execute paper trade if conditions align."""
+        # 1. Check Emergency Kill Switch FIRST (Priority safety override)
+        if getattr(self.cfg, "kill_switch_active", False):
+            self._last_rejection_reason = "Emergency kill switch engaged: all trading halted."
+            logger.critical("[KILL_SWITCH_BLOCKED] Evaluation aborted because kill_switch_active=True.")
+            return None
+
         if df_candles.empty or len(df_candles) < 30:
             self._last_rejection_reason = "Insufficient completed candle history (< 30 bars)."
             return None

@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import os
+import secrets
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,10 @@ class DeltaPaperBroker:
         self.last_order: Optional[Dict[str, Any]] = None
         self.order_history: List[Dict[str, Any]] = []
 
+        # Concurrency & Idempotency State (Phase 3.25)
+        self._pending_reservation: Optional[Dict[str, Any]] = None
+        self._processed_idempotency_keys: Dict[str, Dict[str, Any]] = {}
+
         # Load persisted state if exists
         self._load_state()
 
@@ -70,6 +75,9 @@ class DeltaPaperBroker:
 
     def _load_state(self) -> None:
         """Load persistent paper account state from disk."""
+        # Ensure transient in-flight reservations are cleared on start/restart
+        self._pending_reservation = None
+
         if not self.state_file.exists():
             self._save_state()
             return
@@ -131,8 +139,99 @@ class DeltaPaperBroker:
             self.peak_equity = equity
             self.open_position = None
             self.closed_trades = []
+            self._pending_reservation = None
+            self._processed_idempotency_keys = {}
             self._save_state()
             logger.info("Paper account reset to $%.2f.", equity)
+
+    # -------------------------------------------------------------------------
+    # Atomic Order Slot Reservation & Idempotency (Phase 3.25)
+    # -------------------------------------------------------------------------
+
+    def reserve_order_slot(
+        self,
+        idempotency_key: str,
+        strategy_name: str,
+        direction: str,
+        symbol: str,
+        ttl_seconds: float = 30.0,
+    ) -> Tuple[bool, str, Optional[str]]:
+        """Atomically reserve the single available paper position slot.
+
+        Ensures that concurrent threads/callers cannot race to submit duplicate orders
+        before the first order establishes an open position.
+        
+        Returns:
+            Tuple[bool, str, Optional[str]]: (success, message, reservation_token)
+        """
+        with self._lock:
+            if self.open_position is not None:
+                return False, f"Position already open: {self.open_position['direction']} {self.open_position['lots']} lots {self.open_position['symbol']}", None
+
+            # Check if idempotency key was already completed
+            if idempotency_key in self._processed_idempotency_keys:
+                cached = self._processed_idempotency_keys[idempotency_key]
+                return False, f"Duplicate order: idempotency key '{idempotency_key}' already processed with status {cached.get('status', 'COMPLETED')}", None
+
+            # Check existing in-flight reservation
+            if self._pending_reservation is not None:
+                res_time = float(self._pending_reservation.get("timestamp_epoch", 0.0))
+                now_epoch = datetime.now(timezone.utc).timestamp()
+                if (now_epoch - res_time) < ttl_seconds:
+                    active_key = self._pending_reservation.get("idempotency_key")
+                    return False, f"Order slot currently reserved by in-flight order '{active_key}'", None
+                else:
+                    logger.warning("Clearing expired order reservation (age: %.1fs > %.1fs).", now_epoch - res_time, ttl_seconds)
+                    self._pending_reservation = None
+
+            token = f"RES_{secrets.token_hex(8)}"
+            self._pending_reservation = {
+                "token": token,
+                "idempotency_key": idempotency_key,
+                "strategy_name": strategy_name,
+                "direction": direction,
+                "symbol": symbol,
+                "timestamp_epoch": datetime.now(timezone.utc).timestamp(),
+                "timestamp_iso": datetime.now(timezone.utc).isoformat(),
+            }
+            logger.info("Order slot atomically reserved (token=%s, key=%s).", token, idempotency_key)
+            return True, "Slot reserved successfully", token
+
+    def release_order_reservation(self, token: Optional[str], reason: str = "") -> bool:
+        """Release an in-flight order reservation if the order failed or was rejected."""
+        with self._lock:
+            if token and self._pending_reservation and self._pending_reservation.get("token") == token:
+                key = self._pending_reservation.get("idempotency_key")
+                self._pending_reservation = None
+                logger.info("Order reservation %s (key=%s) safely released. Reason: %s", token, key, reason or "unspecified")
+                return True
+            return False
+
+    def commit_order_reservation(self, token: Optional[str], order_record: Dict[str, Any]) -> bool:
+        """Commit an in-flight order reservation upon successful simulated order fill."""
+        with self._lock:
+            if token and self._pending_reservation and self._pending_reservation.get("token") == token:
+                key = self._pending_reservation.get("idempotency_key")
+                self._processed_idempotency_keys[key] = {
+                    "token": token,
+                    "order_id": order_record.get("order_id"),
+                    "trade_id": order_record.get("trade_id"),
+                    "status": "FILLED",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                self._pending_reservation = None
+                logger.info("Order reservation %s committed into idempotency cache.", token)
+                return True
+            return False
+
+    # -------------------------------------------------------------------------
+    # Utilities
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _now_iso() -> str:
+        """Return current UTC timestamp in ISO-8601 format."""
+        return datetime.now(timezone.utc).isoformat()
 
     # -------------------------------------------------------------------------
     # Hard Safety Guard (Blocks Live Execution)
@@ -189,6 +288,7 @@ class DeltaPaperBroker:
         bar_low: Optional[float] = None,
         fill_ratio: float = 1.0,
         market_regime: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """Open a simulated paper position with realistic friction (spread, slippage, fees).
         
@@ -198,6 +298,7 @@ class DeltaPaperBroker:
         - Zero fills (returns False, creates NO position, locks NO margin, charges ZERO fees)
         - Regime-dependent spread & slippage (wider during volatile breakouts)
         - Configurable fee scenarios and Indian GST (18%)
+        - Atomic slot reservation and idempotency keys (Phase 3.25)
         """
         clean_dir = direction.strip().upper()
         clean_sym = symbol.strip().upper()
@@ -227,174 +328,200 @@ class DeltaPaperBroker:
             )
             return False, f"Position Size Guard Rejection: {e}", None
 
+        # Resolve or generate deterministic idempotency key (Phase 3.25)
+        if idempotency_key:
+            resolved_idemp_key = idempotency_key
+        elif candle_timestamp:
+            resolved_idemp_key = f"IDEMP_{clean_sym}_{clean_dir}_{candle_timestamp}_{lots}"
+        else:
+            resolved_idemp_key = f"IDEMP_{clean_sym}_{clean_dir}_{self._now_iso()}_{secrets.token_hex(4)}"
+
         with self._lock:
-            # 1. Ensure only 1 open position at a time
-            if self.open_position is not None:
-                return False, f"Position already open: {self.open_position['direction']} {self.open_position['lots']} lots {self.open_position['symbol']}", None
+            # 1. Atomic Order Slot Reservation & In-Flight Concurrency Check
+            reserved, res_msg, res_token = self.reserve_order_slot(
+                idempotency_key=resolved_idemp_key,
+                strategy_name=strategy_name,
+                direction=clean_dir,
+                symbol=clean_sym,
+            )
+            if not reserved:
+                return False, res_msg, None
 
-            # 2. Check Maker Limit order fill condition (orders that do NOT fill due to price range)
-            if order_kind == "LIMIT":
-                if clean_dir == "LONG" and bar_low is not None and bar_low > entry_price:
-                    msg = f"Maker LIMIT BUY unfilled: bar low (${bar_low:.2f}) > limit entry (${entry_price:.2f})"
-                    logger.info(msg)
-                    self.last_order = {
-                        "status": "UNFILLED",
-                        "reason": "PRICE_NOT_REACHED",
-                        "order_type": "LIMIT",
-                        "requested_lots": lots,
-                        "filled_lots": 0,
-                        "unfilled_lots": lots,
-                        "limit_price": entry_price,
-                        "bar_low": bar_low,
-                    }
-                    return False, msg, None
-                elif clean_dir == "SHORT" and bar_high is not None and bar_high < entry_price:
-                    msg = f"Maker LIMIT SELL unfilled: bar high (${bar_high:.2f}) < limit entry (${entry_price:.2f})"
-                    logger.info(msg)
-                    self.last_order = {
-                        "status": "UNFILLED",
-                        "reason": "PRICE_NOT_REACHED",
-                        "order_type": "LIMIT",
-                        "requested_lots": lots,
-                        "filled_lots": 0,
-                        "unfilled_lots": lots,
-                        "limit_price": entry_price,
-                        "bar_high": bar_high,
-                    }
-                    return False, msg, None
-
-            # 3. Dynamic regime-dependent spread & slippage multiplier
-            regime = market_regime or "RANGING"
-            if regime == "VOLATILE_BREAKOUT":
-                regime_multiplier = 1.5  # 50% wider spread and slippage under high volatility
-            elif regime == "UNCERTAIN":
-                regime_multiplier = 1.25
-            else:
-                regime_multiplier = 1.0
-
-            # Compute fill price with realistic entry spread and slippage
-            spread_half = ((self.cfg.spread_pct_round_trip / 2.0) * regime_multiplier) / 100.0
-            slip_half = ((self.cfg.slippage_pct_round_trip / 2.0) * regime_multiplier) / 100.0
-
-            if clean_dir == "LONG":
-                fill_price = round(entry_price * (1.0 + spread_half + slip_half), 2)
-            else:
-                fill_price = round(entry_price * (1.0 - spread_half - slip_half), 2)
-
-            # 4. Exchange-compatible integer lot partial fill modeling
             try:
-                clamped_ratio = max(0.0, min(1.0, float(fill_ratio)))
-            except (ValueError, TypeError):
-                clamped_ratio = 0.0
+                # 2. Check Maker Limit order fill condition (orders that do NOT fill due to price range)
+                if order_kind == "LIMIT":
+                    if clean_dir == "LONG" and bar_low is not None and bar_low > entry_price:
+                        msg = f"Maker LIMIT BUY unfilled: bar low (${bar_low:.2f}) > limit entry (${entry_price:.2f})"
+                        logger.info(msg)
+                        self.last_order = {
+                            "status": "UNFILLED",
+                            "reason": "PRICE_NOT_REACHED",
+                            "order_type": "LIMIT",
+                            "requested_lots": lots,
+                            "filled_lots": 0,
+                            "unfilled_lots": lots,
+                            "limit_price": entry_price,
+                            "bar_low": bar_low,
+                        }
+                        self.release_order_reservation(res_token, reason="PRICE_NOT_REACHED")
+                        return False, msg, None
+                    elif clean_dir == "SHORT" and bar_high is not None and bar_high < entry_price:
+                        msg = f"Maker LIMIT SELL unfilled: bar high (${bar_high:.2f}) < limit entry (${entry_price:.2f})"
+                        logger.info(msg)
+                        self.last_order = {
+                            "status": "UNFILLED",
+                            "reason": "PRICE_NOT_REACHED",
+                            "order_type": "LIMIT",
+                            "requested_lots": lots,
+                            "filled_lots": 0,
+                            "unfilled_lots": lots,
+                            "limit_price": entry_price,
+                            "bar_high": bar_high,
+                        }
+                        self.release_order_reservation(res_token, reason="PRICE_NOT_REACHED")
+                        return False, msg, None
 
-            raw_fill = round(lots * clamped_ratio, 6)
-            executed_lots = int(math.floor(raw_fill))
-            unfilled_lots = lots - executed_lots
+                # 3. Dynamic regime-dependent spread & slippage multiplier
+                regime = market_regime or "RANGING"
+                if regime == "VOLATILE_BREAKOUT":
+                    regime_multiplier = 1.5  # 50% wider spread and slippage under high volatility
+                elif regime == "UNCERTAIN":
+                    regime_multiplier = 1.25
+                else:
+                    regime_multiplier = 1.0
 
-            # Support zero fills: if calculated fill quantity is 0 lots, DO NOT open a position
-            if executed_lots <= 0:
+                # Compute fill price with realistic entry spread and slippage
+                spread_half = ((self.cfg.spread_pct_round_trip / 2.0) * regime_multiplier) / 100.0
+                slip_half = ((self.cfg.slippage_pct_round_trip / 2.0) * regime_multiplier) / 100.0
+
+                if clean_dir == "LONG":
+                    fill_price = round(entry_price * (1.0 + spread_half + slip_half), 2)
+                else:
+                    fill_price = round(entry_price * (1.0 - spread_half - slip_half), 2)
+
+                # 4. Exchange-compatible integer lot partial fill modeling
+                try:
+                    clamped_ratio = max(0.0, min(1.0, float(fill_ratio)))
+                except (ValueError, TypeError):
+                    clamped_ratio = 0.0
+
+                raw_fill = round(lots * clamped_ratio, 6)
+                executed_lots = int(math.floor(raw_fill))
+                unfilled_lots = lots - executed_lots
+
+                # Support zero fills: if calculated fill quantity is 0 lots, DO NOT open a position
+                if executed_lots <= 0:
+                    msg = (
+                        f"Zero fill on {order_kind} order: calculated fill quantity is 0 lots "
+                        f"(requested {lots} lots, fill ratio {clamped_ratio:.2%}, lot increment 1)"
+                    )
+                    logger.info(msg)
+                    self.last_order = {
+                        "status": "ZERO_FILL",
+                        "symbol": clean_sym,
+                        "direction": clean_dir,
+                        "order_type": order_kind,
+                        "requested_lots": lots,
+                        "filled_lots": 0,
+                        "unfilled_lots": lots,
+                        "fill_ratio": clamped_ratio,
+                        "fees": 0.0,
+                        "contract_qty": 0.0,
+                    }
+                    self.release_order_reservation(res_token, reason="ZERO_FILL")
+                    return False, msg, None
+
+                contract_qty = round(executed_lots * self.cfg.contract_size_xaut, 6)
+                try:
+                    validate_contract_quantity(contract_qty, self.cfg.contract_size_xaut)
+                except PositionSizeViolation as e:
+                    logger.error("[FINAL_BOUNDARY_REJECTION] Contract conversion violation: %s", e)
+                    self.release_order_reservation(res_token, reason="CONTRACT_VIOLATION")
+                    return False, f"Contract Conversion Guard Rejection: {e}", None
+                notional = round(fill_price * contract_qty, 2)
+                margin_required = round(notional / self.cfg.leverage, 2)
+
+                entry_fee_pct, _ = self._get_fee_rates()
+                if order_kind in {"MARKET", "TAKER"}:
+                    entry_fee_pct = getattr(self.cfg, "taker_fee_pct", 0.05)
+
+                entry_fee = round(notional * (entry_fee_pct / 100.0), 4)
+                entry_gst = round(entry_fee * (self.cfg.gst_rate_pct / 100.0), 4) if getattr(self.cfg, "apply_gst", False) else 0.0
+                slippage_cost = round(abs(fill_price - entry_price) * contract_qty, 4)
+
+                # 5. Balance verification
+                entry_outflow = entry_fee + entry_gst
+                if self.cash_balance < (margin_required + entry_outflow):
+                    self.release_order_reservation(res_token, reason="INSUFFICIENT_CASH")
+                    return False, f"Insufficient paper cash: required ${margin_required + entry_outflow:.2f}, available ${self.cash_balance:.2f}", None
+
+                # Deduct entry fee from cash (4-decimal precision for micro contracts)
+                self.cash_balance = round(self.cash_balance - entry_outflow, 4)
+                self.total_fees += entry_fee
+                self.total_slippage += slippage_cost
+
+                if candle_timestamp:
+                    try:
+                        ts_str = str(candle_timestamp).replace("Z", "+00:00")
+                        parsed_dt = datetime.fromisoformat(ts_str)
+                        ts_fmt = parsed_dt.strftime("%Y%m%d_%H%M%S")
+                    except Exception:
+                        ts_fmt = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                else:
+                    ts_fmt = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+                trade_id = f"PAPER_{ts_fmt}_{clean_dir}"
+                order_id = f"ORD_{trade_id}"
+                now_iso = datetime.now(timezone.utc).isoformat()
+
+                pos = {
+                    "trade_id": trade_id,
+                    "order_id": order_id,
+                    "idempotency_key": resolved_idemp_key,
+                    "reservation_token": res_token,
+                    "symbol": clean_sym,
+                    "strategy_name": strategy_name,
+                    "direction": clean_dir,
+                    "side": clean_dir,
+                    "entry_time": candle_timestamp or now_iso,
+                    "entry_price": fill_price,
+                    "signal_entry_price": entry_price,
+                    "market_price": fill_price,
+                    "lots": executed_lots,
+                    "requested_lots": lots,
+                    "filled_lots": executed_lots,
+                    "unfilled_lots": unfilled_lots,
+                    "contract_qty": contract_qty,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "margin": margin_required,
+                    "order_type": order_kind,
+                    "entry_order_type": order_kind,
+                    "fill_ratio": clamped_ratio,
+                    "market_regime": regime,
+                    "fee_rate_pct": entry_fee_pct,
+                    "entry_fee": entry_fee,
+                    "entry_gst": entry_gst,
+                    "exit_fee": 0.0,
+                    "exit_gst": 0.0,
+                    "slippage_cost": slippage_cost,
+                    "unrealized_pnl": 0.0,
+                    "signal_reason": signal_reason,
+                }
+
+                self.open_position = pos
+                self.commit_order_reservation(res_token, pos)
+                self._save_state()
+
                 msg = (
-                    f"Zero fill on {order_kind} order: calculated fill quantity is 0 lots "
-                    f"(requested {lots} lots, fill ratio {clamped_ratio:.2%}, lot increment 1)"
+                    f"Simulated {clean_dir} filled: {executed_lots}/{lots} lots ({contract_qty} XAUT) @ ${fill_price:.2f} "
+                    f"[SL: ${stop_loss:.2f}, TP: ${take_profit:.2f}, Margin: ${margin_required:.2f}, Fee: ${entry_fee:.4f}]"
                 )
                 logger.info(msg)
-                self.last_order = {
-                    "status": "ZERO_FILL",
-                    "symbol": clean_sym,
-                    "direction": clean_dir,
-                    "order_type": order_kind,
-                    "requested_lots": lots,
-                    "filled_lots": 0,
-                    "unfilled_lots": lots,
-                    "fill_ratio": clamped_ratio,
-                    "fees": 0.0,
-                    "contract_qty": 0.0,
-                }
-                return False, msg, None
-
-            contract_qty = round(executed_lots * self.cfg.contract_size_xaut, 6)
-            try:
-                validate_contract_quantity(contract_qty, self.cfg.contract_size_xaut)
-            except PositionSizeViolation as e:
-                logger.error("[FINAL_BOUNDARY_REJECTION] Contract conversion violation: %s", e)
-                return False, f"Contract Conversion Guard Rejection: {e}", None
-            notional = round(fill_price * contract_qty, 2)
-            margin_required = round(notional / self.cfg.leverage, 2)
-
-            entry_fee_pct, _ = self._get_fee_rates()
-            if order_kind in {"MARKET", "TAKER"}:
-                entry_fee_pct = getattr(self.cfg, "taker_fee_pct", 0.05)
-
-            entry_fee = round(notional * (entry_fee_pct / 100.0), 4)
-            entry_gst = round(entry_fee * (self.cfg.gst_rate_pct / 100.0), 4) if getattr(self.cfg, "apply_gst", False) else 0.0
-            slippage_cost = round(abs(fill_price - entry_price) * contract_qty, 4)
-
-            # 5. Balance verification
-            entry_outflow = entry_fee + entry_gst
-            if self.cash_balance < (margin_required + entry_outflow):
-                return False, f"Insufficient paper cash: required ${margin_required + entry_outflow:.2f}, available ${self.cash_balance:.2f}", None
-
-            # Deduct entry fee from cash (4-decimal precision for micro contracts)
-            self.cash_balance = round(self.cash_balance - entry_outflow, 4)
-            self.total_fees += entry_fee
-            self.total_slippage += slippage_cost
-
-            if candle_timestamp:
-                try:
-                    ts_str = str(candle_timestamp).replace("Z", "+00:00")
-                    parsed_dt = datetime.fromisoformat(ts_str)
-                    ts_fmt = parsed_dt.strftime("%Y%m%d_%H%M%S")
-                except Exception:
-                    ts_fmt = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            else:
-                ts_fmt = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-
-            trade_id = f"PAPER_{ts_fmt}_{clean_dir}"
-            order_id = f"ORD_{trade_id}"
-            now_iso = datetime.now(timezone.utc).isoformat()
-
-            pos = {
-                "trade_id": trade_id,
-                "order_id": order_id,
-                "symbol": clean_sym,
-                "strategy_name": strategy_name,
-                "direction": clean_dir,
-                "side": clean_dir,
-                "entry_time": candle_timestamp or now_iso,
-                "entry_price": fill_price,
-                "signal_entry_price": entry_price,
-                "market_price": fill_price,
-                "lots": executed_lots,
-                "requested_lots": lots,
-                "filled_lots": executed_lots,
-                "unfilled_lots": unfilled_lots,
-                "contract_qty": contract_qty,
-                "stop_loss": stop_loss,
-                "take_profit": take_profit,
-                "margin": margin_required,
-                "order_type": order_kind,
-                "entry_order_type": order_kind,
-                "fill_ratio": clamped_ratio,
-                "market_regime": regime,
-                "fee_rate_pct": entry_fee_pct,
-                "entry_fee": entry_fee,
-                "entry_gst": entry_gst,
-                "exit_fee": 0.0,
-                "exit_gst": 0.0,
-                "slippage_cost": slippage_cost,
-                "unrealized_pnl": 0.0,
-                "signal_reason": signal_reason,
-            }
-
-            self.open_position = pos
-            self._save_state()
-
-            msg = (
-                f"Simulated {clean_dir} filled: {executed_lots}/{lots} lots ({contract_qty} XAUT) @ ${fill_price:.2f} "
-                f"[SL: ${stop_loss:.2f}, TP: ${take_profit:.2f}, Margin: ${margin_required:.2f}, Fee: ${entry_fee:.4f}]"
-            )
-            logger.info(msg)
-            return True, msg, dict(pos)
+                return True, msg, dict(pos)
+            except Exception:
+                self.release_order_reservation(res_token, reason="EXECUTION_EXCEPTION")
+                raise
 
     def close_simulated_trade(
         self,
@@ -597,12 +724,14 @@ class DeltaPaperBroker:
         timestamp: Optional[str] = None,
         close_lots: Optional[int] = None,
         tp_fill_ratio: float = 1.0,
+        open_price: Optional[float] = None,
+        require_penetration: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Check if active open position touched Stop Loss or Take Profit.
         
         Models:
-        - SL as TAKER market exit with taker fees and slippage.
-        - TP as passive MAKER limit exit with maker fees and price bounds check.
+        - SL as TAKER market exit with taker fees, slippage, and conservative gap-through-stop pricing.
+        - TP as passive MAKER limit exit with maker fees and optional penetration requirement.
         - Conservative collision rule: if both SL and TP are touched in the same bar, SL wins.
         """
         with self._lock:
@@ -618,12 +747,21 @@ class DeltaPaperBroker:
         bar_low = float(low if low is not None else current_price)
 
         hit_sl = (bar_low <= sl) if side == "LONG" else (bar_high >= sl)
-        hit_tp = (bar_high >= tp) if side == "LONG" else (bar_low <= tp)
+
+        # Realism: touching limit price does not guarantee a fill without penetration or queue priority
+        if require_penetration:
+            hit_tp = (bar_high > tp) if side == "LONG" else (bar_low < tp)
+        else:
+            hit_tp = (bar_high >= tp) if side == "LONG" else (bar_low <= tp)
 
         if hit_sl or hit_tp:
             # Conservative collision rule: if both SL and TP are touched in same bar, SL wins
             if hit_sl:
-                exit_price = sl
+                # Conservative gap handling: if bar opened past stop loss, fill at the worse open price
+                if side == "LONG":
+                    exit_price = min(sl, float(open_price)) if open_price is not None else sl
+                else:
+                    exit_price = max(sl, float(open_price)) if open_price is not None else sl
                 reason = "SL"
                 order_type = "TAKER"
                 exit_close_lots = None
