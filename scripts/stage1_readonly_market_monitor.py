@@ -26,6 +26,16 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Set
 from urllib.parse import urlparse
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Auto-activate repository .venv if invoked with system Python
+if sys.prefix == getattr(sys, "base_prefix", sys.prefix):
+    venv_py_win = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+    venv_py_nix = PROJECT_ROOT / ".venv" / "bin" / "python3"
+    venv_py = venv_py_win if sys.platform == "win32" else venv_py_nix
+    if venv_py.exists() and sys.executable != str(venv_py):
+        os.execv(str(venv_py), [str(venv_py)] + sys.argv)
+
 import requests
 import websockets
 
