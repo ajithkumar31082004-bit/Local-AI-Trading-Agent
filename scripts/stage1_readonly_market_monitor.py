@@ -18,34 +18,60 @@ import json
 import logging
 import os
 import signal
-import subprocess
 import sys
 import threading
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Set
+from urllib.parse import urlparse
 
 import requests
 import websockets
 
-# Allowed Public Endpoints Only
-ALLOWED_WS_URLS = [
-    "wss://socket.india.delta.exchange",
-    "wss://socket.delta.exchange",
-]
-ALLOWED_REST_BASE_URLS = [
-    "https://api.india.delta.exchange",
-    "https://api.delta.exchange",
-]
-ALLOWED_REST_PATHS = [
-    "/v2/products",
-    "/v2/history/candles",
-    "/v2/tickers",
-]
+# Strict Public-Only URL Allowlist
+ALLOWED_WS_SCHEMES = {"wss"}
+ALLOWED_REST_SCHEMES = {"https"}
+ALLOWED_WS_HOSTS = {"socket.india.delta.exchange", "socket.delta.exchange"}
+ALLOWED_REST_HOSTS = {"api.india.delta.exchange", "api.delta.exchange"}
+ALLOWED_REST_PATHS = {"/v2/products", "/v2/history/candles", "/v2/tickers"}
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "reports" / "stage1_readonly"
+
+
+class SafetyViolation(RuntimeError):
+    """Raised when any unsafe dependency, call, or path access is detected."""
+    pass
+
+
+class BlockTradingImportsMetaFinder:
+    """Meta-path finder that intercepts and blocks dynamic imports of any trading modules."""
+    FORBIDDEN_PREFIXES = (
+        "services.delta_paper_broker",
+        "services.delta_paper_bot",
+        "services.delta_live_executor",
+        "services.paper_broker",
+        "services.risk_manager",
+        "services.delta_risk",
+        "strategy",
+        "risk",
+        "subprocess",
+    )
+
+    def find_spec(self, fullname, path, target=None):
+        for prefix in self.FORBIDDEN_PREFIXES:
+            if fullname == prefix or fullname.startswith(prefix + "."):
+                raise SafetyViolation(
+                    f"Dynamic import of trading/execution module strictly blocked: '{fullname}'"
+                )
+        return None
+
+
+# Install dynamic import guard into sys.meta_path if not present
+if not any(isinstance(finder, BlockTradingImportsMetaFinder) for finder in sys.meta_path):
+    sys.meta_path.insert(0, BlockTradingImportsMetaFinder())
+
 
 # Configure Logging
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,11 +99,6 @@ fh.setFormatter(log_fmt)
 logger.addHandler(fh)
 
 
-class SafetyViolation(RuntimeError):
-    """Raised when any unsafe dependency, call, or path access is detected."""
-    pass
-
-
 def get_ist_now(utc_dt: Optional[datetime] = None) -> datetime:
     """Return datetime in Indian Standard Time (UTC+5:30)."""
     base = utc_dt or datetime.now(timezone.utc)
@@ -86,14 +107,31 @@ def get_ist_now(utc_dt: Optional[datetime] = None) -> datetime:
 
 
 def get_git_commit_sha() -> str:
-    """Safely obtain current git commit SHA."""
+    """Safely obtain current git commit SHA by reading .git directly (zero subprocess execution)."""
     try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(PROJECT_ROOT),
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
-        return out
+        git_dir = PROJECT_ROOT / ".git"
+        if not git_dir.exists():
+            return "UNKNOWN_COMMIT"
+        head_file = git_dir / "HEAD"
+        if not head_file.exists():
+            return "UNKNOWN_COMMIT"
+        head_content = head_file.read_text(encoding="utf-8").strip()
+        if not head_content.startswith("ref:"):
+            return head_content
+        ref_path = head_content.split(":", 1)[1].strip()
+        target_ref = git_dir / ref_path
+        if target_ref.exists():
+            return target_ref.read_text(encoding="utf-8").strip()
+        # Fallback to packed-refs
+        packed = git_dir / "packed-refs"
+        if packed.exists():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and not line.startswith("^"):
+                    parts = line.split()
+                    if len(parts) == 2 and parts[1] == ref_path:
+                        return parts[0]
+        return "UNKNOWN_COMMIT"
     except Exception:
         return "UNKNOWN_COMMIT"
 
@@ -233,19 +271,39 @@ class Stage1MarketObserver:
         self.safety_assertions: Dict[str, Any] = {}
 
     def _validate_endpoint(self, url: str, is_ws: bool = True) -> None:
-        """Ensure endpoint is on public allowlist and contains no private path."""
+        """Ensure endpoint is on public allowlist with full scheme, host, port, and path validation."""
+        parsed = urlparse(url)
+
+        # 1. Scheme validation
+        expected_schemes = ALLOWED_WS_SCHEMES if is_ws else ALLOWED_REST_SCHEMES
+        if not parsed.scheme or parsed.scheme.lower() not in expected_schemes:
+            raise SafetyViolation(f"Invalid URL scheme '{parsed.scheme}'; expected {expected_schemes}: '{url}'")
+
+        # 2. Hostname validation
+        allowed_hosts = ALLOWED_WS_HOSTS if is_ws else ALLOWED_REST_HOSTS
+        if not parsed.hostname or parsed.hostname.lower() not in allowed_hosts:
+            raise SafetyViolation(f"Host '{parsed.hostname}' not in public allowlist {allowed_hosts}: '{url}'")
+
+        # 3. Port validation (must be 443 or default None)
+        if parsed.port is not None and parsed.port != 443:
+            raise SafetyViolation(f"Non-standard port '{parsed.port}' strictly forbidden: '{url}'")
+
+        # 4. Path validation
+        path = parsed.path.rstrip("/") or "/"
+        if is_ws:
+            if path != "/":
+                raise SafetyViolation(f"Unexpected WebSocket path '{parsed.path}'; expected root: '{url}'")
+        else:
+            # REST base URL can have empty path during initialization, or specific API path during query
+            if path != "/" and path not in ALLOWED_REST_PATHS:
+                raise SafetyViolation(f"REST path '{parsed.path}' not in public allowlist {ALLOWED_REST_PATHS}: '{url}'")
+
+        # 5. Forbidden keyword check across whole URL
+        forbidden_keywords = ["order", "position", "wallet", "account", "auth", "secret", "private"]
         url_lower = url.lower()
-        forbidden_keywords = ["/order", "/position", "/wallet", "/account", "/auth"]
         for kw in forbidden_keywords:
             if kw in url_lower:
-                raise SafetyViolation(f"Unsafe private endpoint path forbidden: '{url}'")
-
-        if is_ws:
-            if not any(url_lower.startswith(allowed.lower()) for allowed in ALLOWED_WS_URLS):
-                raise SafetyViolation(f"WebSocket URL not on public allowlist: '{url}'")
-        else:
-            if not any(url_lower.startswith(allowed.lower()) for allowed in ALLOWED_REST_BASE_URLS):
-                raise SafetyViolation(f"REST URL not on public allowlist: '{url}'")
+                raise SafetyViolation(f"Unsafe private endpoint keyword '{kw}' forbidden: '{url}'")
 
     def _get_current_memory_mb(self) -> float:
         """Measure current process memory usage across Linux/Windows."""

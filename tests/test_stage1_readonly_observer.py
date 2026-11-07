@@ -101,14 +101,41 @@ def test_validate_write_path_blocks_escape():
 
 
 def test_private_endpoint_detection_raises_safety_violation():
-    with pytest.raises(SafetyViolation, match="Unsafe private endpoint path forbidden"):
+    # 1. Private paths forbidden
+    with pytest.raises(SafetyViolation, match="not in public allowlist"):
         Stage1MarketObserver(rest_url="https://api.india.delta.exchange/v2/orders")
 
-    with pytest.raises(SafetyViolation, match="Unsafe private endpoint path forbidden"):
+    with pytest.raises(SafetyViolation, match="not in public allowlist"):
         Stage1MarketObserver(rest_url="https://api.india.delta.exchange/v2/wallet/balances")
 
-    with pytest.raises(SafetyViolation, match="WebSocket URL not on public allowlist"):
+    # 2. Untrusted host forbidden
+    with pytest.raises(SafetyViolation, match="Host 'untrusted.socket.com' not in public allowlist"):
         Stage1MarketObserver(ws_url="wss://untrusted.socket.com")
+
+    # 3. Invalid scheme forbidden
+    with pytest.raises(SafetyViolation, match="Invalid URL scheme 'http'"):
+        Stage1MarketObserver(rest_url="http://api.india.delta.exchange")
+
+    with pytest.raises(SafetyViolation, match="Invalid URL scheme 'ws'"):
+        Stage1MarketObserver(ws_url="ws://socket.india.delta.exchange")
+
+    # 4. Non-standard port forbidden
+    with pytest.raises(SafetyViolation, match="Non-standard port '8088' strictly forbidden"):
+        Stage1MarketObserver(rest_url="https://api.india.delta.exchange:8088")
+
+    # 5. Non-allowlisted path forbidden
+    with pytest.raises(SafetyViolation, match="REST path '/v2/admin' not in public allowlist"):
+        Stage1MarketObserver(rest_url="https://api.india.delta.exchange/v2/admin")
+
+
+def test_dynamic_import_block_hook():
+    """Verify sys.meta_path hook prevents dynamic importing of trading modules."""
+    import importlib
+    with pytest.raises(SafetyViolation, match="Dynamic import of trading/execution module strictly blocked"):
+        importlib.import_module("services.delta_paper_broker")
+
+    with pytest.raises(SafetyViolation, match="Dynamic import of trading/execution module strictly blocked"):
+        importlib.import_module("strategy.arbitrator")
 
 
 # =============================================================================
