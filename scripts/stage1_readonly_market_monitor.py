@@ -772,6 +772,7 @@ class Stage1MarketObserver:
             "FAIL": "**FAIL — UNSAFE ACCESS OR UNEXPECTED BEHAVIOR**",
         }.get(status, f"**{status}**")
 
+        output_dir_str = str(OUTPUT_DIR).replace("\\", "/")
         content = f"""# Stage 1 — EC2 Read-Only Public Market-Data Observer Report
 
 **Date:** {self.start_utc.strftime("%Y-%m-%d") if self.start_utc else "2026-11-06"}  
@@ -794,7 +795,7 @@ All operations adhered strictly to read-only constraints:
 - Zero API keys or cryptographic signatures were generated or loaded.
 - Zero systemd services were started, stopped, restarted, or altered.
 - The EC2 trading daemon (`delta-paper-trading.service`) remained **STOPPED** throughout.
-- All telemetry was written exclusively to [`reports/stage1_readonly/`](file:///{str(OUTPUT_DIR).replace('\\', '/')}).
+- All telemetry was written exclusively to [`reports/stage1_readonly/`](file:///{output_dir_str}).
 
 ---
 
