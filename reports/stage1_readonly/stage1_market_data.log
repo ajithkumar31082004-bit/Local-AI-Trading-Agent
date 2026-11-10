@@ -132,3 +132,46 @@
 2026-11-07 07:45:55 [INFO] Stage1Observer (PID:10568): Executing Pre-Flight Safety Verification...
 2026-11-07 07:45:55 [WARNING] Stage1Observer (PID:10568): Stale feed detected: No public update for 75.0s (interval count: 1)
 2026-11-07 07:45:55 [INFO] Stage1Observer (PID:10568): REST fallback query successful: XAUTUSD reachable (total REST events: 1).
+2026-11-07 02:22:41 [INFO] Stage1Observer (PID:31098): Executing Pre-Flight Safety Verification...
+2026-11-07 02:22:41 [INFO] Stage1Observer (PID:31098): Pre-Flight Safety Verification: ALL CHECKS PASSED.
+2026-11-07 02:22:41 [INFO] Stage1Observer (PID:31098): Starting Stage 1 Observer (PID: 31098, SHA: 3174f493, Symbol: XAUTUSD, Target Duration: 10s / 0.0h)...
+2026-11-07 02:22:41 [INFO] Stage1Observer (PID:31098): Start Time: 2026-11-07T02:22:41.057958+00:00 UTC | 2026-11-07T07:52:41.057958+05:30 IST
+2026-11-07 02:22:41 [INFO] Stage1Observer (PID:31098): Connecting to public Delta WebSocket: wss://socket.india.delta.exchange
+2026-11-07 02:22:41 [INFO] Stage1Observer (PID:31098): Connected to WebSocket. Subscribing to public channels for XAUTUSD...
+2026-11-07 02:22:51 [INFO] Stage1Observer (PID:31098): Stage 1 Observer stopped. Generating final reports...
+2026-11-07 02:22:51 [INFO] Stage1Observer (PID:31098): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/stage1_summary.json
+2026-11-07 02:22:51 [INFO] Stage1Observer (PID:31098): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/stage1_candle_health.csv (0 records)
+2026-11-07 02:22:51 [INFO] Stage1Observer (PID:31098): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/STAGE1_READONLY_REPORT.md
+2026-11-07 02:24:59 [INFO] Stage1Observer (PID:31489): Executing Pre-Flight Safety Verification...
+2026-11-07 02:24:59 [INFO] Stage1Observer (PID:31489): Pre-Flight Safety Verification: ALL CHECKS PASSED.
+2026-11-07 02:24:59 [INFO] Stage1Observer (PID:31489): Starting Stage 1 Observer (PID: 31489, SHA: 3174f493, Symbol: XAUTUSD, Target Duration: 10s / 0.0h)...
+2026-11-07 02:24:59 [INFO] Stage1Observer (PID:31489): Start Time: 2026-11-07T02:24:59.192660+00:00 UTC | 2026-11-07T07:54:59.192660+05:30 IST
+2026-11-07 02:24:59 [INFO] Stage1Observer (PID:31489): Connecting to public Delta WebSocket: wss://socket.india.delta.exchange
+2026-11-07 02:24:59 [INFO] Stage1Observer (PID:31489): Connected to WebSocket. Subscribing to public channels for XAUTUSD...
+2026-11-07 02:25:03 [INFO] Stage1Observer (PID:31489): 5m Candle Finalized: 07:50:00 IST | Close: $4061.98 | Vol: 61458.00
+2026-11-07 02:25:04 [INFO] Stage1Observer (PID:31489): Stage 1 Observer stopped. Generating final reports...
+2026-11-07 02:25:04 [INFO] Stage1Observer (PID:31489): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/stage1_summary.json
+2026-11-07 02:25:04 [INFO] Stage1Observer (PID:31489): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/stage1_candle_health.csv (1 records)
+2026-11-07 02:25:04 [INFO] Stage1Observer (PID:31489): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/STAGE1_READONLY_REPORT.md
+2026-11-07 02:25:16 [INFO] Stage1Observer (PID:31552): Executing Pre-Flight Safety Verification...
+2026-11-07 02:25:16 [INFO] Stage1Observer (PID:31552): Pre-Flight Safety Verification: ALL CHECKS PASSED.
+2026-11-07 02:25:16 [INFO] Stage1Observer (PID:31552): Starting Stage 1 Observer (PID: 31552, SHA: 3174f493, Symbol: XAUTUSD, Target Duration: 3600s / 1.0h)...
+2026-11-07 02:25:16 [INFO] Stage1Observer (PID:31552): Start Time: 2026-11-07T02:25:16.366077+00:00 UTC | 2026-11-07T07:55:16.366077+05:30 IST
+2026-11-07 02:25:16 [INFO] Stage1Observer (PID:31552): Connecting to public Delta WebSocket: wss://socket.india.delta.exchange
+2026-11-07 02:25:16 [INFO] Stage1Observer (PID:31552): Connected to WebSocket. Subscribing to public channels for XAUTUSD...
+2026-11-07 02:30:04 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 07:55:00 IST | Close: $4063.56 | Vol: 93748.00
+2026-11-07 02:35:04 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:00:00 IST | Close: $4063.59 | Vol: 40302.00
+2026-11-07 02:40:02 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:05:00 IST | Close: $4063.59 | Vol: 57452.00
+2026-11-07 02:45:02 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:10:00 IST | Close: $4063.61 | Vol: 11290.00
+2026-11-07 02:50:04 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:15:00 IST | Close: $4063.76 | Vol: 36160.00
+2026-11-07 02:55:03 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:20:00 IST | Close: $4063.75 | Vol: 53986.00
+2026-11-07 03:00:02 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:25:00 IST | Close: $4064.02 | Vol: 29938.00
+2026-11-07 03:05:03 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:30:00 IST | Close: $4064.02 | Vol: 36785.00
+2026-11-07 03:10:03 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:35:00 IST | Close: $4064.37 | Vol: 68794.00
+2026-11-07 03:15:04 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:40:00 IST | Close: $4064.45 | Vol: 24587.00
+2026-11-07 03:20:03 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:45:00 IST | Close: $4064.67 | Vol: 35318.00
+2026-11-07 03:25:03 [INFO] Stage1Observer (PID:31552): 5m Candle Finalized: 08:50:00 IST | Close: $4064.82 | Vol: 66801.00
+2026-11-07 03:25:16 [INFO] Stage1Observer (PID:31552): Stage 1 Observer stopped. Generating final reports...
+2026-11-07 03:25:16 [INFO] Stage1Observer (PID:31552): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/stage1_summary.json
+2026-11-07 03:25:16 [INFO] Stage1Observer (PID:31552): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/stage1_candle_health.csv (12 records)
+2026-11-07 03:25:16 [INFO] Stage1Observer (PID:31552): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/STAGE1_READONLY_REPORT.md

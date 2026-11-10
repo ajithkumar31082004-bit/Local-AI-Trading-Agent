@@ -1,11 +1,11 @@
 # Stage 1 — EC2 Read-Only Public Market-Data Observer Report
 
-**Date:** 2026-11-06  
+**Date:** 2026-11-07  
 **System:** Delta Exchange India — Local AI Trading Agent  
 **Instrument:** `XAUTUSD` (Product ID: `131253`)  
 **Execution Mode:** STRICT READ-ONLY PUBLIC MARKET DATA  
-**Observer Process ID:** `17580`  
-**Commit SHA:** `d4c2498d68796208e6e5a0f72702c5e1300320c4`  
+**Observer Process ID:** `31552`  
+**Commit SHA:** `3174f4937cdd396d03befd98c3064252104e2d96`  
 **Final Status:** **PASS — PUBLIC FEED STABLE**  
 **Operational Invariant:** **TRADING DAEMON REMAINS STOPPED**  
 
@@ -20,7 +20,7 @@ All operations adhered strictly to read-only constraints:
 - Zero API keys or cryptographic signatures were generated or loaded.
 - Zero systemd services were started, stopped, restarted, or altered.
 - The EC2 trading daemon (`delta-paper-trading.service`) remained **STOPPED** throughout.
-- All telemetry was written exclusively to [`reports/stage1_readonly/`](file:///C:/Users/ajith/Downloads/Local_AI_Agent/reports/stage1_readonly).
+- All telemetry was written exclusively to [`reports/stage1_readonly/`](file:////home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly).
 
 ---
 
@@ -28,14 +28,14 @@ All operations adhered strictly to read-only constraints:
 
 | Parameter | Value |
 |---|---|
-| **Start Time (UTC)** | `2026-11-06T17:33:36.335111+00:00` |
-| **Start Time (IST)** | `2026-11-06T23:03:36.335111+05:30` |
-| **End Time (UTC)** | `2026-11-06T17:33:46.454018+00:00` |
-| **End Time (IST)** | `2026-11-06T23:03:46.454018+05:30` |
-| **Target Duration** | `10 seconds` |
-| **Actual Elapsed** | `10.12 seconds` |
-| **Commit SHA** | `d4c2498d68796208e6e5a0f72702c5e1300320c4` |
-| **Process ID** | `17580` |
+| **Start Time (UTC)** | `2026-11-07T02:25:16.366077+00:00` |
+| **Start Time (IST)** | `2026-11-07T07:55:16.366077+05:30` |
+| **End Time (UTC)** | `2026-11-07T03:25:16.968286+00:00` |
+| **End Time (IST)** | `2026-11-07T08:55:16.968286+05:30` |
+| **Target Duration** | `3600 seconds` |
+| **Actual Elapsed** | `3600.6 seconds` |
+| **Commit SHA** | `3174f4937cdd396d03befd98c3064252104e2d96` |
+| **Process ID** | `31552` |
 
 ---
 
@@ -53,11 +53,11 @@ All operations adhered strictly to read-only constraints:
 
 | Metric | Recorded Value | Quality Assessment |
 |---|:---:|---|
-| **Total Ticks Received** | `11` | Raw tick throughput |
-| **Valid Ticks** | `11` | Schema and timestamp compliant |
+| **Total Ticks Received** | `2299` | Raw tick throughput |
+| **Valid Ticks** | `2299` | Schema and timestamp compliant |
 | **Duplicate Ticks** | `0` | Identified via unique payload hashes |
-| **Out-of-Order Ticks** | `1` | Sequence arrival order |
-| **Finalized 5m Candles** | `0` | Discretely completed 5m bars |
+| **Out-of-Order Ticks** | `250` | Sequence arrival order |
+| **Finalized 5m Candles** | `12` | Discretely completed 5m bars |
 | **Duplicate Candles** | `0` | Redundant bar timestamp updates |
 | **Out-of-Order Candles** | `0` | Chronological bar sequence |
 | **Missing Candle Gaps** | `0` | Interval gaps > 300s |
@@ -80,8 +80,8 @@ All operations adhered strictly to read-only constraints:
 
 | Resource | Utilization | Limit / Safety Standard | Status |
 |---|:---:|:---:|:---:|
-| **CPU Utilization** | `3.55%` | < 10.0% nominal | **PASS** |
-| **Process Memory** | `0.0 MB` | < 150 MB nominal | **PASS** |
+| **CPU Utilization** | `0.05%` | < 10.0% nominal | **PASS** |
+| **Process Memory** | `36.47 MB` | < 150 MB nominal | **PASS** |
 
 ---
 
