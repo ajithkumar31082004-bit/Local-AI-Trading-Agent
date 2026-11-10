@@ -561,19 +561,26 @@ class DurableIdempotencyRegistry:
         if clean_mode not in {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
             raise ValueError(f"Invalid WAL checkpoint mode: {mode}")
 
+        conn = None
         try:
-            with self._get_connection() as conn:
-                cur = conn.execute(f"PRAGMA wal_checkpoint({clean_mode});")
-                row = cur.fetchone()
-                busy, log_frames, checkpointed = int(row[0]), int(row[1]), int(row[2])
-                logger.info(
-                    "WAL checkpoint (%s) completed: busy=%d, log=%d, checkpointed=%d",
-                    clean_mode, busy, log_frames, checkpointed,
-                )
-                return busy, log_frames, checkpointed
+            conn = self._get_connection()
+            cur = conn.execute(f"PRAGMA wal_checkpoint({clean_mode});")
+            row = cur.fetchone()
+            busy, log_frames, checkpointed = int(row[0]), int(row[1]), int(row[2])
+            logger.info(
+                "WAL checkpoint (%s) completed: busy=%d, log=%d, checkpointed=%d",
+                clean_mode, busy, log_frames, checkpointed,
+            )
+            return busy, log_frames, checkpointed
         except sqlite3.DatabaseError as exc:
             logger.error("WAL checkpoint failed (%s): %s", clean_mode, exc)
             raise IdempotencyRegistryError(f"Checkpoint failed: {exc}") from exc
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def backup_to_file(self, target_path: Union[str, Path]) -> None:
         """Safely back up the active SQLite database using SQLite's Online Backup API.
@@ -585,17 +592,36 @@ class DurableIdempotencyRegistry:
         if dest_path.resolve() == self.db_path.resolve():
             raise IdempotencyRegistryError("Target backup path cannot be identical to active database path")
 
+        src_conn = None
+        dest_conn = None
         try:
-            with self._get_connection() as src_conn:
-                dest_conn = sqlite3.connect(str(dest_path), timeout=10.0)
-                try:
-                    src_conn.backup(dest_conn)
-                finally:
-                    dest_conn.close()
+            src_conn = self._get_connection()
+            dest_conn = sqlite3.connect(str(dest_path), timeout=10.0)
+            src_conn.backup(dest_conn)
             logger.info("Durable idempotency registry safely backed up to %s via Online Backup API", dest_path)
         except sqlite3.DatabaseError as exc:
             logger.error("Failed to backup registry to %s: %s", dest_path, exc)
             raise IdempotencyRegistryError(f"Backup failed: {exc}") from exc
+        finally:
+            if dest_conn is not None:
+                try:
+                    dest_conn.close()
+                except Exception:
+                    pass
+            if src_conn is not None:
+                try:
+                    src_conn.close()
+                except Exception:
+                    pass
+
+    def close(self) -> None:
+        """Perform a TRUNCATE checkpoint and release resources."""
+        try:
+            self.checkpoint("TRUNCATE")
+        except Exception as exc:
+            logger.debug("Silently ignoring checkpoint error during close: %s", exc)
+        import gc
+        gc.collect()
 
     def sync_historical_keys(
         self,

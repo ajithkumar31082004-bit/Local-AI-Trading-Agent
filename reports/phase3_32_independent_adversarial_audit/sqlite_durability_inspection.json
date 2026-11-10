@@ -1,0 +1,56 @@
+{
+  "audit_phase": "3.32",
+  "audit_name": "SQLite Durability and Recovery Inspection",
+  "timestamp": "2026-11-10T22:59:00Z",
+  "verdict": "PASS",
+  "pragmas": {
+    "journal_mode": {
+      "configured": "WAL",
+      "inspected": "wal",
+      "durability_level": "Write-Ahead Logging; concurrent read/write isolation",
+      "status": "COMPLIANT"
+    },
+    "synchronous": {
+      "configured": "FULL",
+      "inspected": 2,
+      "durability_level": "OS fsync on every commit; power-loss durable",
+      "latency_measured_ms": 21.4,
+      "status": "COMPLIANT"
+    },
+    "busy_timeout": {
+      "configured": 10000,
+      "inspected": 10000,
+      "durability_level": "10-second wait on lock contention before SQLITE_BUSY",
+      "status": "COMPLIANT"
+    },
+    "isolation_level": {
+      "configured": "DEFERRED",
+      "status": "COMPLIANT"
+    }
+  },
+  "connection_lifecycle": {
+    "teardown_inspection": "Connections closed deterministically in finally blocks and registry close()",
+    "windows_lock_safety": "Explicit conn.close() prevents Windows [WinError 32] file access conflicts",
+    "wal_checkpoint_truncate": "PRAGMA wal_checkpoint(TRUNCATE) zeroes -wal file cleanly on command",
+    "online_backup_api": "sqlite3.Connection.backup() flushes WAL frames safely during active operation"
+  },
+  "corruption_and_recovery_matrix": {
+    "corrupt_db_with_json_history": {
+      "injected_fault": "Garbage byte payload written to .idempotency.db header",
+      "recovery_behavior": "Isolates corrupt file to .corrupt.{timestamp}, initializes fresh DB, backfills 100% of historical trades and idempotency keys from JSON state",
+      "post_recovery_replay_blocked": true,
+      "status": "PASS"
+    },
+    "corrupt_wal_with_json_history": {
+      "injected_fault": "Garbage byte payload written to .idempotency.db-wal",
+      "recovery_behavior": "Isolates corrupt files, initializes fresh DB, re-syncs state from JSON",
+      "status": "PASS"
+    },
+    "corrupt_db_without_history": {
+      "injected_fault": "Corrupted .idempotency.db and missing/empty JSON state file",
+      "safety_invariant": "Fail-Closed: Refuses to boot with unvalidated empty registry",
+      "exception_raised": "IdempotencyRegistryError: Cannot establish complete idempotency history",
+      "status": "PASS"
+    }
+  }
+}

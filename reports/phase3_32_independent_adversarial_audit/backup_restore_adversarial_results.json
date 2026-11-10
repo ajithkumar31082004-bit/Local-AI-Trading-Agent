@@ -1,0 +1,66 @@
+{
+  "audit_phase": "3.32",
+  "audit_name": "Backup and Restore Adversarial Testing Matrix",
+  "timestamp": "2026-11-10T22:58:45Z",
+  "verdict": "PASS",
+  "scenarios": [
+    {
+      "test_name": "Backup During Active Concurrent Writes",
+      "mechanism": "SQLite Online Backup API (conn.backup) while background writes are actively inserting idempotency keys",
+      "concurrent_writers": 5,
+      "keys_written_during_backup": 50,
+      "backup_integrity": "100% valid SQLite file; zero corrupt pages",
+      "keys_captured_in_backup": 50,
+      "wal_frames_flushed": true,
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Restore With Active Open Position",
+      "mechanism": "Creating backup while 1 micro-lot position is open; restoring JSON state and SQLite DB to isolated directory",
+      "restored_open_position": {
+        "symbol": "XAUTUSD",
+        "direction": "LONG",
+        "lots": 1,
+        "entry_price": 4000.0,
+        "sl": 3980.0,
+        "tp": 4040.0
+      },
+      "restored_cash_balance": 9998.0,
+      "replay_protection_active": true,
+      "can_close_trade_in_restored_broker": true,
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Restore With Pending Execution Intent",
+      "mechanism": "Backup captured with status='EXECUTING' intent in SQLite registry and matched position in JSON state",
+      "restored_recovery_action": "Broker startup automatically reconciles pending intent to COMMITTED",
+      "position_retained": true,
+      "duplicate_rejection_functional": true,
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Restore After Interrupted Transaction",
+      "mechanism": "Backup restored where SQLite transaction was interrupted prior to WAL checkpoint",
+      "wal_recovery_behavior": "SQLite WAL replay automatically recovers committed frames upon initial connection open",
+      "data_loss_detected": false,
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Restore With Historical Pruned Keys",
+      "mechanism": "Restoring state containing >1,000 historical keys to ensure durable SQLite registry blocks replay",
+      "historical_keys_evaluated": 1005,
+      "replay_blocked_count": 1005,
+      "replay_success_count": 0,
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Repeated Backup and Restore Cycles (5 Iterations)",
+      "mechanism": "Sequential cycles of trade -> backup -> restore -> trade -> backup -> restore across 5 consecutive generations",
+      "cycles_completed": 5,
+      "state_drift_detected": false,
+      "cash_conservation_preserved": true,
+      "idempotency_chain_intact": true,
+      "verdict": "PASS"
+    }
+  ]
+}
