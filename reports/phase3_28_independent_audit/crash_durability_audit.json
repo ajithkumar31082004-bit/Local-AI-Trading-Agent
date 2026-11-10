@@ -1,0 +1,32 @@
+{
+  "audit_area": "Audit C — Crash Durability, Atomic State Persistence & Recovery",
+  "audit_target": "services/delta_paper_broker.py",
+  "atomic_persistence_mechanism": {
+    "strategy": "Write-to-temp-and-atomic-rename",
+    "temp_file_pattern": "{state_file}.tmp.{pid}_{time_ns}",
+    "replace_call": "temp_file.replace(self.state_file)",
+    "isolation": "Parent directory creation guaranteed, temp file deleted on write exception"
+  },
+  "flush_and_fsync_evaluation": {
+    "has_explicit_fsync": false,
+    "implementation_detail": "Uses Path.write_text(..., encoding='utf-8') followed by Path.replace().",
+    "risk_profile": "Safe against process-level crashes, SIGKILL, and thread panics (as verified by test_audit_b_recovery_after_process_crash_while_locked and test_audit_c_atomic_state_replacement). Minor vulnerability to total hardware power loss / kernel panic before disk controller flushes OS dirty pages.",
+    "recommendation": "Use open() with f.flush() and os.fsync(f.fileno()) before replace() for 100% power-loss durability."
+  },
+  "corruption_and_recovery_tests": {
+    "test_corrupt_state_recovery": {
+      "scenario": "State file corrupted with truncated garbage JSON string",
+      "result": "PASSED (Broker caught json.JSONDecodeError gracefully, initialized default safe baseline, and did not crash)"
+    },
+    "test_state_data_consistency": {
+      "scenario": "Open trade -> Close trade -> Save -> Load new instance",
+      "result": "PASSED (Full ledger, cash, closed_trades, and idempotency cache matched across disk reload)"
+    }
+  },
+  "data_integrity_invariants": {
+    "equity_cash_margin_conservation": "VERIFIED (equity == cash + margin_used + unrealized_pnl)",
+    "closed_trades_ledger_immutable": "VERIFIED (append-only ledger of historical executions)",
+    "atomic_swap_guarantee": "VERIFIED (temp file write completed prior to atomic rename)"
+  },
+  "audit_verdict": "PASS"
+}
