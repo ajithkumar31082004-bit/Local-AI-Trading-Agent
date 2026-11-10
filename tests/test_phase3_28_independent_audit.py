@@ -115,9 +115,10 @@ def test_audit_a_pruned_key_replay_vulnerability(tmp_path):
     # 4. Attempt replay of KEY_TARGET
     ok_replay, msg_replay, _ = b2.open_simulated_trade("XAUTUSD", "LONG", 4000.0, 3980.0, 4040.0, 1, "VWAP", idempotency_key="KEY_TARGET")
 
-    # Documenting the architectural boundary:
-    # A pruned key is permitted to execute because the cache is bounded to 1,000 keys.
-    assert ok_replay is True, "Documents architectural finding: pruned keys past 1,000 window can be re-executed"
+    # Phase 3.29 remediation verification:
+    # Pruned key is permanently blocked by the durable SQLite registry
+    assert ok_replay is False, "Pruned key must be deterministically rejected by durable registry"
+    assert "already executed in durable registry" in msg_replay
 
 
 # =============================================================================

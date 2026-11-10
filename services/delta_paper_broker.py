@@ -14,7 +14,7 @@ import secrets
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union
 
 import portalocker
 
@@ -25,6 +25,7 @@ from risk.position_size_guard import (
     PositionSizeViolation,
     APPROVED_MAX_PAPER_LOTS,
 )
+from services.idempotency_registry import DurableIdempotencyRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,7 @@ class DeltaPaperBroker:
         cfg: Optional[ORBSettings] = None,
         state_file: Optional[Path] = None,
         initial_equity: Optional[float] = None,
+        idempotency_db_path: Optional[Union[str, Path]] = None,
     ):
         self.cfg = cfg or default_orb_settings
 
@@ -110,6 +112,10 @@ class DeltaPaperBroker:
         self.state_file = Path(state_file) if state_file else (Path(self.cfg.state_path).parent / "paper_account_xautusd.json")
         self._lock = threading.RLock()
         self._process_lock = CrossProcessReentrantLock.get_lock(self.state_file.with_suffix(".lock"))
+
+        # Durable Idempotency Registry (Phase 3.29)
+        self.idempotency_db_path = Path(idempotency_db_path) if idempotency_db_path else self.state_file.with_suffix(".idempotency.db")
+        self._idempotency_registry = DurableIdempotencyRegistry(self.idempotency_db_path)
 
         # In-memory account state
         self.cash_balance: float = self.initial_equity
@@ -130,6 +136,11 @@ class DeltaPaperBroker:
         # Load persisted state if exists under cross-process lock
         with self._process_lock:
             self._load_state()
+            # Synchronize historical keys from state into durable registry
+            self._idempotency_registry.sync_historical_keys(
+                self._processed_idempotency_keys,
+                self.closed_trades,
+            )
 
     # -------------------------------------------------------------------------
     # Persistence
@@ -204,6 +215,8 @@ class DeltaPaperBroker:
         try:
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
             temp_file.replace(self.state_file)
         except Exception as exc:
             logger.error("Failed to persist paper account state: %s", exc)
@@ -223,6 +236,11 @@ class DeltaPaperBroker:
             self._pending_reservation = None
             self._processed_idempotency_keys = {}
             self._reservation_generation = 0
+            if hasattr(self, "_idempotency_registry") and self._idempotency_registry:
+                try:
+                    self._idempotency_registry.clear()
+                except Exception as exc:
+                    logger.warning("Failed to clear idempotency registry during account reset: %s", exc)
             self._save_state()
             logger.info("Paper account reset to $%.2f.", equity)
 
@@ -253,13 +271,23 @@ class DeltaPaperBroker:
         with self._process_lock:
             self._load_state()
 
-            if self.open_position is not None:
-                return False, f"Position already open: {self.open_position['direction']} {self.open_position['lots']} lots {self.open_position['symbol']}", None
-
-            # Check if idempotency key was already completed
+            # L1 Check: Fast-path in-memory cache
             if clean_key in self._processed_idempotency_keys:
                 cached = self._processed_idempotency_keys[clean_key]
                 return False, f"Duplicate order: idempotency key '{clean_key}' already processed with status {cached.get('status', 'COMPLETED')}", None
+
+            # L2 Check: Durable SQLite Idempotency Registry (Phase 3.29)
+            if self._idempotency_registry.is_executed(clean_key):
+                rec = self._idempotency_registry.get_record(clean_key)
+                trade_info = f" (trade_id={rec.get('trade_id')})" if rec and rec.get('trade_id') else ""
+                return False, f"Duplicate order: idempotency key '{clean_key}' already executed in durable registry{trade_info}", None
+
+            # L3 Check: Historical closed trades ledger fallback
+            if any(t.get("idempotency_key") == clean_key for t in self.closed_trades):
+                return False, f"Duplicate order: idempotency key '{clean_key}' already recorded in historical closed trades ledger", None
+
+            if self.open_position is not None:
+                return False, f"Position already open: {self.open_position['direction']} {self.open_position['lots']} lots {self.open_position['symbol']}", None
 
             now_epoch = datetime.now(timezone.utc).timestamp()
 
@@ -285,6 +313,20 @@ class DeltaPaperBroker:
             gen = self._reservation_generation
             token = f"RES_GEN{gen}_{secrets.token_hex(8)}"
             ttl_val = float(ttl_seconds)
+
+            # Atomic reservation in durable SQLite registry (Phase 3.29)
+            reg_ok, reg_msg = self._idempotency_registry.reserve(
+                idempotency_key=clean_key,
+                token=token,
+                generation=gen,
+                strategy_name=strategy_name,
+                direction=direction,
+                symbol=symbol,
+                ttl_seconds=ttl_val,
+            )
+            if not reg_ok:
+                return False, reg_msg, None
+
             self._pending_reservation = {
                 "token": token,
                 "generation": gen,
@@ -310,6 +352,7 @@ class DeltaPaperBroker:
                 self._load_state()
             if self._pending_reservation and self._pending_reservation.get("token") == token:
                 key = self._pending_reservation.get("idempotency_key")
+                self._idempotency_registry.release(token, reason=reason)
                 self._pending_reservation = None
                 self._save_state()
                 logger.info("Order reservation %s (key=%s) safely released. Reason: %s", token, key, reason or "unspecified")
@@ -335,6 +378,15 @@ class DeltaPaperBroker:
             # Reject commit if reservation has expired past TTL (uncontended case)
             if now_epoch >= expires_at:
                 logger.error("Order reservation %s expired before commit (age: %.1fs >= %.1fs TTL). Commit rejected.", token, now_epoch - res_time, res_ttl)
+                self._idempotency_registry.release(token, reason="TTL_EXPIRED")
+                self._pending_reservation = None
+                self._save_state()
+                return False
+
+            # Commit in durable SQLite registry FIRST (ACID transaction)
+            reg_ok, reg_msg = self._idempotency_registry.commit(token, order_record)
+            if not reg_ok:
+                logger.error("Durable registry commit failed for token %s: %s", token, reg_msg)
                 self._pending_reservation = None
                 self._save_state()
                 return False
@@ -359,7 +411,7 @@ class DeltaPaperBroker:
 
             self._pending_reservation = None
             self._save_state()
-            logger.info("Order reservation %s (gen=%s) committed into idempotency cache.", token, gen)
+            logger.info("Order reservation %s (gen=%s) committed into durable registry and cache.", token, gen)
             return True
 
     # -------------------------------------------------------------------------
