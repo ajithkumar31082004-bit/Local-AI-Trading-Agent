@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import secrets
+import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +26,7 @@ from risk.position_size_guard import (
     PositionSizeViolation,
     APPROVED_MAX_PAPER_LOTS,
 )
-from services.idempotency_registry import DurableIdempotencyRegistry
+from services.idempotency_registry import DurableIdempotencyRegistry, IdempotencyRegistryError
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,19 @@ class DeltaPaperBroker:
         # Load persisted state if exists under cross-process lock
         with self._process_lock:
             self._load_state()
+
+            # Fail-closed check: if the database experienced corruption recovery but the persistent
+            # state file was missing or empty (no historical trades or keys to establish idempotency),
+            # the broker must fail closed rather than accept potentially duplicated execution keys.
+            if getattr(self._idempotency_registry, "had_corruption_recovery", False):
+                has_history = bool(self.closed_trades or self._processed_idempotency_keys or self.open_position)
+                if not has_history:
+                    raise IdempotencyRegistryError(
+                        "Cannot establish complete idempotency history: durable database was corrupted "
+                        "and persistent state file is missing or contains zero historical trades. "
+                        "Failing closed to prevent duplicate order execution."
+                    )
+
             # Synchronize historical keys from state into durable registry
             self._idempotency_registry.sync_historical_keys(
                 self._processed_idempotency_keys,
@@ -188,9 +202,58 @@ class DeltaPaperBroker:
                 "YES" if self.open_position else "NO",
                 len(self._processed_idempotency_keys),
             )
+            # Reconcile in-flight execution intents across stores
+            self._recover_pending_execution_intents()
         except Exception as exc:
             logger.warning("Could not read paper account state file (%s); starting fresh: %s", self.state_file, exc)
             self._save_state()
+
+    def _recover_pending_execution_intents(self) -> None:
+        """Scan and deterministically resolve any in-flight EXECUTING intents in the durable registry."""
+        if not hasattr(self, "_idempotency_registry") or not self._idempotency_registry:
+            return
+        try:
+            pending = self._idempotency_registry.get_pending_intents()
+            if not pending:
+                return
+
+            for intent in pending:
+                key = intent.get("idempotency_key")
+                token = intent.get("token")
+                try:
+                    meta = json.loads(intent.get("metadata_json") or "{}")
+                except Exception:
+                    meta = {}
+                intent_order_id = intent.get("order_id") or meta.get("order_id")
+
+                # Case 1: Open position already exists in JSON state with matching order/key
+                if self.open_position and (
+                    self.open_position.get("idempotency_key") == key or
+                    self.open_position.get("order_id") == intent_order_id
+                ):
+                    logger.info("Crash recovery: Completing transition to COMMITTED for key '%s'.", key)
+                    self._idempotency_registry.commit_execution(token, self.open_position)
+                    self._processed_idempotency_keys[key] = {
+                        "token": token,
+                        "generation": intent.get("generation", 0),
+                        "order_id": intent_order_id,
+                        "trade_id": intent.get("trade_id") or meta.get("trade_id"),
+                        "status": "FILLED",
+                        "timestamp": self._now_iso(),
+                    }
+                # Case 2: Recorded in closed trades
+                elif any(t.get("idempotency_key") == key for t in self.closed_trades):
+                    logger.info("Crash recovery: Completing transition to COMMITTED for closed key '%s'.", key)
+                    self._idempotency_registry.commit_execution(token, {"order_id": intent_order_id, "trade_id": intent.get("trade_id")})
+                # Case 3: Position never made it to JSON state -> roll back intent
+                else:
+                    logger.warning("Crash recovery: Rolling back unpersisted execution intent for key '%s'.", key)
+                    self._idempotency_registry.rollback_execution(token, reason="CRASH_RECOVERY_UNPERSISTED")
+                    if self._pending_reservation and self._pending_reservation.get("token") == token:
+                        self._pending_reservation = None
+                        self._save_state()
+        except Exception as exc:
+            logger.error("Failed to recover pending execution intents: %s", exc)
 
     def _save_state(self) -> None:
         """Atomically persist paper account state to disk."""
@@ -239,6 +302,7 @@ class DeltaPaperBroker:
             if hasattr(self, "_idempotency_registry") and self._idempotency_registry:
                 try:
                     self._idempotency_registry.clear()
+                    self._idempotency_registry.checkpoint("TRUNCATE")
                 except Exception as exc:
                     logger.warning("Failed to clear idempotency registry during account reset: %s", exc)
             self._save_state()
@@ -645,11 +709,6 @@ class DeltaPaperBroker:
                     self.release_order_reservation(res_token, reason="INSUFFICIENT_CASH")
                     return False, f"Insufficient paper cash: required ${margin_required + entry_outflow:.2f}, available ${self.cash_balance:.2f}", None
 
-                # Deduct entry fee from cash (4-decimal precision for micro contracts)
-                self.cash_balance = round(self.cash_balance - entry_outflow, 4)
-                self.total_fees += entry_fee
-                self.total_slippage += slippage_cost
-
                 if candle_timestamp:
                     try:
                         ts_str = str(candle_timestamp).replace("Z", "+00:00")
@@ -699,18 +758,61 @@ class DeltaPaperBroker:
                     "signal_reason": signal_reason,
                 }
 
-                # Gated Position Assignment: Commit reservation first and verify result
-                commit_ok = self.commit_order_reservation(res_token, pos)
-                if not commit_ok:
-                    # Roll back in-memory fee and slippage counters on rejected commit
-                    self.total_fees -= entry_fee
-                    self.total_slippage -= slippage_cost
-                    logger.error("[RESERVATION_FENCING_REJECTION] Failed to commit reservation token %s. Aborting trade entry.", res_token)
-                    return False, f"Order reservation commit failed: lease expired or preempted (token={res_token})", None
+                # Construct write-ahead intent payload
+                intent_payload = {
+                    "pos": pos,
+                    "order_id": order_id,
+                    "trade_id": trade_id,
+                    "cash_outflow": entry_outflow,
+                    "entry_fee": entry_fee,
+                    "slippage_cost": slippage_cost,
+                    "prev_cash_balance": self.cash_balance,
+                    "new_cash_balance": round(self.cash_balance - entry_outflow, 4),
+                }
 
-                # Position assignment occurs ONLY after successful commit validation
+                # Step 1: Durably log execution intent to SQLite WAL (Write-Ahead Intent)
+                intent_ok, intent_msg = self._idempotency_registry.record_execution_intent(res_token, intent_payload)
+                if not intent_ok:
+                    self.release_order_reservation(res_token, reason=f"INTENT_FAILED: {intent_msg}")
+                    return False, f"Order execution intent failed: {intent_msg}", None
+
+                # Step 2: Mutate broker state atomically in-memory
+                self.cash_balance = round(self.cash_balance - entry_outflow, 4)
+                self.total_fees += entry_fee
+                self.total_slippage += slippage_cost
                 self.open_position = pos
+                self.last_order = {
+                    "order_id": order_id,
+                    "trade_id": trade_id,
+                    "status": "FILLED",
+                    "direction": clean_dir,
+                    "lots": executed_lots,
+                    "price": fill_price,
+                    "fees": entry_fee,
+                }
+                self._pending_reservation = None
+                self._processed_idempotency_keys[resolved_idemp_key] = {
+                    "token": res_token,
+                    "generation": self._reservation_generation,
+                    "order_id": order_id,
+                    "trade_id": trade_id,
+                    "status": "FILLED",
+                    "timestamp": now_iso,
+                }
+                if len(self._processed_idempotency_keys) > 1000:
+                    sorted_keys = sorted(
+                        self._processed_idempotency_keys.items(),
+                        key=lambda item: item[1].get("timestamp", ""),
+                    )
+                    self._processed_idempotency_keys = dict(sorted_keys[-1000:])
+
+                # Step 3: Persist complete broker state to JSON (Atomic file replacement with fsync)
                 self._save_state()
+
+                # Step 4: Durably transition intent to COMMITTED in SQLite
+                commit_ok, commit_msg = self._idempotency_registry.commit_execution(res_token, pos)
+                if not commit_ok:
+                    logger.warning("Post-save SQLite commit transition returned false for token %s: %s", res_token, commit_msg)
 
                 msg = (
                     f"Simulated {clean_dir} filled: {executed_lots}/{lots} lots ({contract_qty} XAUT) @ ${fill_price:.2f} "
@@ -718,8 +820,13 @@ class DeltaPaperBroker:
                 )
                 logger.info(msg)
                 return True, msg, dict(pos)
-            except Exception:
-                self.release_order_reservation(res_token, reason="EXECUTION_EXCEPTION")
+            except Exception as exc:
+                if 'res_token' in locals() and res_token:
+                    try:
+                        self._idempotency_registry.rollback_execution(res_token, reason=f"EXECUTION_EXCEPTION: {exc}")
+                        self.release_order_reservation(res_token, reason="EXECUTION_EXCEPTION")
+                    except Exception:
+                        pass
                 raise
 
     def close_simulated_trade(
@@ -910,6 +1017,26 @@ class DeltaPaperBroker:
             )
             logger.info(msg)
             return True, msg, closed_record
+
+    def checkpoint_db(self, mode: str = "TRUNCATE") -> Tuple[int, int, int]:
+        """Execute an explicit WAL checkpoint on the broker's SQLite database."""
+        with self._process_lock:
+            return self._idempotency_registry.checkpoint(mode=mode)
+
+    def backup_state(self, backup_dir: Union[str, Path]) -> Tuple[Path, Path]:
+        """Atomically back up both JSON state and the SQLite database to a backup directory.
+        
+        Uses SQLite's Online Backup API to ensure dirty WAL pages are safely captured.
+        """
+        with self._process_lock:
+            bdir = Path(backup_dir)
+            bdir.mkdir(parents=True, exist_ok=True)
+            self._save_state()
+            json_backup = bdir / self.state_file.name
+            shutil.copy2(self.state_file, json_backup)
+            db_backup = bdir / self.idempotency_db_path.name
+            self._idempotency_registry.backup_to_file(db_backup)
+            return json_backup, db_backup
 
     # -------------------------------------------------------------------------
     # Position & SL/TP Evaluation

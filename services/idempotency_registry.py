@@ -31,6 +31,8 @@ class DurableIdempotencyRegistry:
     def __init__(self, db_path: Union[str, Path]):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.had_corruption_recovery: bool = False
+        self.isolated_corrupt_file: Optional[Path] = None
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -41,40 +43,53 @@ class DurableIdempotencyRegistry:
             isolation_level="DEFERRED",
         )
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("PRAGMA synchronous = NORMAL;")
-        conn.execute("PRAGMA busy_timeout = 10000;")
-        return conn
+        try:
+            conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA synchronous = FULL;")
+            conn.execute("PRAGMA busy_timeout = 10000;")
+            return conn
+        except Exception:
+            conn.close()
+            raise
 
     def _init_db(self) -> None:
         """Initialize SQLite database tables and indices, with auto-recovery for corrupt files."""
+        conn = None
         try:
-            with self._get_connection() as conn:
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS idempotency_records (
-                        idempotency_key TEXT PRIMARY KEY NOT NULL,
-                        status TEXT NOT NULL,         -- 'RESERVED', 'COMMITTED', 'RELEASED', 'EXPIRED'
-                        token TEXT,                   -- Reservation token RES_GEN{gen}_{hex}
-                        generation INTEGER,           -- Fencing generation counter
-                        strategy_name TEXT,
-                        symbol TEXT,
-                        direction TEXT,
-                        order_id TEXT,
-                        trade_id TEXT,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        expires_at REAL,              -- Epoch timestamp when reservation expires
-                        metadata_json TEXT
-                    );
-                    """
-                )
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_idemp_status ON idempotency_records(status);")
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_idemp_token ON idempotency_records(token);")
-        except sqlite3.DatabaseError as exc:
+            conn = self._get_connection()
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS idempotency_records (
+                    idempotency_key TEXT PRIMARY KEY NOT NULL,
+                    status TEXT NOT NULL,         -- 'RESERVED', 'EXECUTING', 'COMMITTED', 'ROLLED_BACK', 'RELEASED', 'EXPIRED'
+                    token TEXT,                   -- Reservation token RES_GEN{gen}_{hex}
+                    generation INTEGER,           -- Fencing generation counter
+                    strategy_name TEXT,
+                    symbol TEXT,
+                    direction TEXT,
+                    order_id TEXT,
+                    trade_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    expires_at REAL,              -- Epoch timestamp when reservation expires
+                    metadata_json TEXT
+                );
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_idemp_status ON idempotency_records(status);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_idemp_token ON idempotency_records(token);")
+            conn.commit()
+        except (sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
             logger.error("Failed to initialize idempotency database at %s: %s. Attempting auto-recovery...", self.db_path, exc)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = None
             try:
-                # Corrupt DB auto-recovery: isolate corrupted file and rebuild fresh database
+                import gc
+                gc.collect()
                 timestamp = int(datetime.now(timezone.utc).timestamp())
                 corrupt_backup = self.db_path.with_name(f"{self.db_path.name}.corrupt.{timestamp}")
                 if self.db_path.exists():
@@ -83,8 +98,13 @@ class DurableIdempotencyRegistry:
                     wal_file = self.db_path.with_name(self.db_path.name + wal_ext)
                     if wal_file.exists():
                         wal_file.unlink(missing_ok=True)
-                with self._get_connection() as conn:
-                    conn.execute(
+
+                self.had_corruption_recovery = True
+                self.isolated_corrupt_file = corrupt_backup
+
+                rec_conn = self._get_connection()
+                try:
+                    rec_conn.execute(
                         """
                         CREATE TABLE IF NOT EXISTS idempotency_records (
                             idempotency_key TEXT PRIMARY KEY NOT NULL,
@@ -103,12 +123,21 @@ class DurableIdempotencyRegistry:
                         );
                         """
                     )
-                    conn.execute("CREATE INDEX IF NOT EXISTS idx_idemp_status ON idempotency_records(status);")
-                    conn.execute("CREATE INDEX IF NOT EXISTS idx_idemp_token ON idempotency_records(token);")
+                    rec_conn.execute("CREATE INDEX IF NOT EXISTS idx_idemp_status ON idempotency_records(status);")
+                    rec_conn.execute("CREATE INDEX IF NOT EXISTS idx_idemp_token ON idempotency_records(token);")
+                    rec_conn.commit()
+                finally:
+                    rec_conn.close()
                 logger.info("Successfully recovered fresh idempotency database after isolating %s", corrupt_backup)
             except Exception as rec_exc:
                 logger.critical("Fatal: Idempotency database recovery failed: %s", rec_exc)
                 raise IdempotencyRegistryError(f"Database initialization and recovery failed: {rec_exc}") from rec_exc
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     @staticmethod
     def _now_epoch() -> float:
@@ -198,6 +227,11 @@ class DurableIdempotencyRegistry:
                             f"Duplicate order: idempotency key '{clean_key}' already executed in durable registry "
                             f"(trade_id={row['trade_id']}, order_id={row['order_id']})"
                         )
+                    elif status == "EXECUTING":
+                        return False, (
+                            f"Duplicate order: idempotency key '{clean_key}' currently executing in durable registry "
+                            f"(token={row['token']}, order_id={row['order_id']})"
+                        )
                     elif status == "RESERVED":
                         row_exp = float(row["expires_at"] or 0.0)
                         if now_epoch < row_exp:
@@ -231,7 +265,7 @@ class DurableIdempotencyRegistry:
                             ),
                         )
                         return True, "Slot reserved successfully (overwrote expired reservation)"
-                    else:  # RELEASED or EXPIRED
+                    else:  # RELEASED, EXPIRED, or ROLLED_BACK
                         conn.execute(
                             """
                             UPDATE idempotency_records
@@ -317,7 +351,7 @@ class DurableIdempotencyRegistry:
                 status = row["status"]
                 if status == "COMMITTED":
                     return False, f"Commit rejected: reservation token '{clean_token}' already committed"
-                if status != "RESERVED":
+                if status not in ("RESERVED", "EXECUTING"):
                     return False, f"Commit rejected: reservation token '{clean_token}' is in invalid status '{status}'"
 
                 expires_at = float(row["expires_at"] or 0.0)
@@ -377,7 +411,7 @@ class DurableIdempotencyRegistry:
                 if not row:
                     return False, f"Release rejected: token '{clean_token}' not found"
 
-                if row["status"] == "RESERVED":
+                if row["status"] in ("RESERVED", "EXECUTING"):
                     meta_json = json.dumps({"release_reason": reason or "unspecified"})
                     conn.execute(
                         """
@@ -395,6 +429,173 @@ class DurableIdempotencyRegistry:
         except sqlite3.DatabaseError as exc:
             logger.error("Database error during release for token %s: %s", clean_token, exc)
             raise IdempotencyRegistryError(f"Release failed: {exc}") from exc
+
+    # -------------------------------------------------------------------------
+    # Write-Ahead Execution Record (Intent) Lifecycle (Phase 3.31)
+    # -------------------------------------------------------------------------
+
+    def record_execution_intent(self, token: str, intent_payload: Dict[str, Any]) -> Tuple[bool, str]:
+        """Durably persist order execution intent to SQLite prior to mutating broker state.
+        
+        Transitions status from 'RESERVED' to 'EXECUTING'.
+        """
+        clean_token = str(token or "").strip()
+        if not clean_token:
+            return False, "Invalid token: token cannot be empty"
+
+        now_epoch = self._now_epoch()
+        now_iso = self._now_iso()
+
+        try:
+            with self._get_connection() as conn:
+                cur = conn.execute(
+                    "SELECT idempotency_key, status, expires_at FROM idempotency_records WHERE token = ?",
+                    (clean_token,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return False, f"Intent rejected: token '{clean_token}' not found"
+
+                status = row["status"]
+                if status == "COMMITTED":
+                    return False, f"Intent rejected: token '{clean_token}' already committed"
+                if status == "EXECUTING":
+                    return True, "Execution intent already active"
+                if status != "RESERVED":
+                    return False, f"Intent rejected: token '{clean_token}' is in invalid status '{status}'"
+
+                expires_at = float(row["expires_at"] or 0.0)
+                if now_epoch >= expires_at:
+                    conn.execute(
+                        "UPDATE idempotency_records SET status = 'EXPIRED', updated_at = ? WHERE token = ?",
+                        (now_iso, clean_token),
+                    )
+                    return False, f"Intent rejected: token '{clean_token}' expired past TTL"
+
+                meta_json = json.dumps(intent_payload or {})
+                order_id = intent_payload.get("order_id") if intent_payload else None
+                trade_id = intent_payload.get("trade_id") if intent_payload else None
+
+                conn.execute(
+                    """
+                    UPDATE idempotency_records
+                    SET status = 'EXECUTING',
+                        order_id = ?,
+                        trade_id = ?,
+                        updated_at = ?,
+                        metadata_json = ?
+                    WHERE token = ?
+                    """,
+                    (order_id, trade_id, now_iso, meta_json, clean_token),
+                )
+                return True, "Execution intent recorded successfully"
+        except sqlite3.DatabaseError as exc:
+            logger.error("Database error during record_execution_intent for token %s: %s", clean_token, exc)
+            raise IdempotencyRegistryError(f"Record execution intent failed: {exc}") from exc
+
+    def commit_execution(self, token: str, order_record: Dict[str, Any]) -> Tuple[bool, str]:
+        """Finalize an execution intent into permanent COMMITTED status."""
+        return self.commit(token, order_record)
+
+    def rollback_execution(self, token: str, reason: str = "") -> Tuple[bool, str]:
+        """Roll back an execution intent to ROLLED_BACK if execution failed or was aborted."""
+        clean_token = str(token or "").strip()
+        if not clean_token:
+            return False, "Invalid token: token cannot be empty"
+
+        now_iso = self._now_iso()
+
+        try:
+            with self._get_connection() as conn:
+                cur = conn.execute(
+                    "SELECT status FROM idempotency_records WHERE token = ?",
+                    (clean_token,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return False, f"Rollback rejected: token '{clean_token}' not found"
+
+                if row["status"] in ("RESERVED", "EXECUTING"):
+                    meta_json = json.dumps({"rollback_reason": reason or "unspecified"})
+                    conn.execute(
+                        """
+                        UPDATE idempotency_records
+                        SET status = 'ROLLED_BACK',
+                            updated_at = ?,
+                            metadata_json = ?
+                        WHERE token = ?
+                        """,
+                        (now_iso, meta_json, clean_token),
+                    )
+                    return True, "Execution intent rolled back successfully"
+                return False, f"Cannot roll back token '{clean_token}' with status '{row['status']}'"
+        except sqlite3.DatabaseError as exc:
+            logger.error("Database error during rollback_execution for token %s: %s", clean_token, exc)
+            raise IdempotencyRegistryError(f"Rollback execution failed: {exc}") from exc
+
+    def get_pending_intents(self) -> List[Dict[str, Any]]:
+        """Retrieve all records currently in EXECUTING status for crash recovery reconciliation."""
+        try:
+            with self._get_connection() as conn:
+                cur = conn.execute(
+                    "SELECT * FROM idempotency_records WHERE status = 'EXECUTING'"
+                )
+                return [dict(r) for r in cur.fetchall()]
+        except sqlite3.DatabaseError as exc:
+            logger.error("Database query failed in get_pending_intents: %s", exc)
+            return []
+
+    # -------------------------------------------------------------------------
+    # WAL Checkpoint & Backup Management (Phase 3.31)
+    # -------------------------------------------------------------------------
+
+    def checkpoint(self, mode: str = "TRUNCATE") -> Tuple[int, int, int]:
+        """Execute a WAL checkpoint on the database.
+        
+        Args:
+            mode: Checkpoint mode ('PASSIVE', 'FULL', 'RESTART', 'TRUNCATE')
+        Returns:
+            Tuple[int, int, int]: (busy, log_frames, checkpointed_frames)
+        """
+        clean_mode = (mode or "TRUNCATE").strip().upper()
+        if clean_mode not in {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
+            raise ValueError(f"Invalid WAL checkpoint mode: {mode}")
+
+        try:
+            with self._get_connection() as conn:
+                cur = conn.execute(f"PRAGMA wal_checkpoint({clean_mode});")
+                row = cur.fetchone()
+                busy, log_frames, checkpointed = int(row[0]), int(row[1]), int(row[2])
+                logger.info(
+                    "WAL checkpoint (%s) completed: busy=%d, log=%d, checkpointed=%d",
+                    clean_mode, busy, log_frames, checkpointed,
+                )
+                return busy, log_frames, checkpointed
+        except sqlite3.DatabaseError as exc:
+            logger.error("WAL checkpoint failed (%s): %s", clean_mode, exc)
+            raise IdempotencyRegistryError(f"Checkpoint failed: {exc}") from exc
+
+    def backup_to_file(self, target_path: Union[str, Path]) -> None:
+        """Safely back up the active SQLite database using SQLite's Online Backup API.
+        
+        Flushes WAL frames and creates a self-contained, crash-consistent copy.
+        """
+        dest_path = Path(target_path)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        if dest_path.resolve() == self.db_path.resolve():
+            raise IdempotencyRegistryError("Target backup path cannot be identical to active database path")
+
+        try:
+            with self._get_connection() as src_conn:
+                dest_conn = sqlite3.connect(str(dest_path), timeout=10.0)
+                try:
+                    src_conn.backup(dest_conn)
+                finally:
+                    dest_conn.close()
+            logger.info("Durable idempotency registry safely backed up to %s via Online Backup API", dest_path)
+        except sqlite3.DatabaseError as exc:
+            logger.error("Failed to backup registry to %s: %s", dest_path, exc)
+            raise IdempotencyRegistryError(f"Backup failed: {exc}") from exc
 
     def sync_historical_keys(
         self,
