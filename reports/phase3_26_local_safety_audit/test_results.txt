@@ -1,0 +1,20 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0 -- C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collecting ... collected 10 items
+
+tests/test_phase3_26_safety_audits.py::test_audit1_normal_reservation_and_commit PASSED [ 10%]
+tests/test_phase3_26_safety_audits.py::test_audit1_stale_worker_preempted_by_worker_b PASSED [ 20%]
+tests/test_phase3_26_safety_audits.py::test_audit1_ttl_parameter_coupling_defect PASSED [ 30%]
+tests/test_phase3_26_safety_audits.py::test_audit1_uncontended_expired_lease_commit_defect PASSED [ 40%]
+tests/test_phase3_26_safety_audits.py::test_audit1_release_after_exception PASSED [ 50%]
+tests/test_phase3_26_safety_audits.py::test_audit2_in_memory_duplicate_rejection PASSED [ 60%]
+tests/test_phase3_26_safety_audits.py::test_audit2_idempotency_lost_across_restart_vulnerability PASSED [ 70%]
+tests/test_phase3_26_safety_audits.py::test_audit2_state_file_lacks_idempotency_field PASSED [ 80%]
+tests/test_phase3_26_safety_audits.py::test_audit3_multiprocess_concurrency_limitation PASSED [ 90%]
+tests/test_phase3_26_safety_audits.py::test_audit3_feed_out_of_order_stream_analysis PASSED [100%]
+
+============================= 10 passed in 12.97s =============================

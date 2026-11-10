@@ -78,9 +78,10 @@ class BlockTradingImportsMetaFinder:
         return None
 
 
-# Install dynamic import guard into sys.meta_path if not present
-if not any(isinstance(finder, BlockTradingImportsMetaFinder) for finder in sys.meta_path):
-    sys.meta_path.insert(0, BlockTradingImportsMetaFinder())
+def install_import_guard() -> None:
+    """Install dynamic import guard into sys.meta_path if not already active."""
+    if not any(isinstance(finder, BlockTradingImportsMetaFinder) for finder in sys.meta_path):
+        sys.meta_path.insert(0, BlockTradingImportsMetaFinder())
 
 
 # Configure Logging
@@ -192,6 +193,9 @@ def assert_runtime_safety_invariants() -> Dict[str, Any]:
     api_secret = os.getenv("DELTA_API_SECRET", "")
     if api_key or api_secret:
         logger.warning("API credentials present in environment; observer will NOT access private endpoints.")
+
+    # 4. Install dynamic import guard to intercept any subsequent dynamic imports
+    install_import_guard()
 
     logger.info("Pre-Flight Safety Verification: ALL CHECKS PASSED.")
     return {

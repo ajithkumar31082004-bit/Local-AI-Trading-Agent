@@ -131,11 +131,22 @@ def test_private_endpoint_detection_raises_safety_violation():
 def test_dynamic_import_block_hook():
     """Verify sys.meta_path hook prevents dynamic importing of trading modules."""
     import importlib
-    with pytest.raises(SafetyViolation, match="Dynamic import of trading/execution module strictly blocked"):
-        importlib.import_module("services.delta_paper_broker")
+    from scripts.stage1_readonly_market_monitor import install_import_guard, BlockTradingImportsMetaFinder
+    install_import_guard()
+    saved_modules = {
+        k: sys.modules.pop(k)
+        for k in ["services.delta_paper_broker", "strategy.arbitrator"]
+        if k in sys.modules
+    }
+    try:
+        with pytest.raises(SafetyViolation, match="Dynamic import of trading/execution module strictly blocked"):
+            importlib.import_module("services.delta_paper_broker")
 
-    with pytest.raises(SafetyViolation, match="Dynamic import of trading/execution module strictly blocked"):
-        importlib.import_module("strategy.arbitrator")
+        with pytest.raises(SafetyViolation, match="Dynamic import of trading/execution module strictly blocked"):
+            importlib.import_module("strategy.arbitrator")
+    finally:
+        sys.meta_path = [f for f in sys.meta_path if not isinstance(f, BlockTradingImportsMetaFinder)]
+        sys.modules.update(saved_modules)
 
 
 # =============================================================================
