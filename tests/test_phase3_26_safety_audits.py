@@ -120,18 +120,15 @@ def test_audit1_ttl_parameter_coupling_defect(tmp_path):
     time.sleep(0.15)  # Worker A's 0.1s lease is now expired
 
     # Worker B arrives with standard 30s TTL.
-    # Defect: Worker B is blocked because broker checks 0.15s against Worker B's 30s!
+    # Remediated: Worker B can acquire slot because Worker A's 0.1s lease expired
     reserved_b, msg_b, _ = broker.reserve_order_slot("KEY_B", "ORB", "SHORT", "XAUTUSD", ttl_seconds=30.0)
-    assert reserved_b is False, "Documents defect: Worker B cannot preempt expired Worker A due to parameter coupling"
-    assert "currently reserved" in msg_b
+    assert reserved_b is True, "Remediation verified: Worker B acquires slot once Worker A expires"
 
 
 def test_audit1_uncontended_expired_lease_commit_defect(tmp_path):
     """Scenario 3: Audit whether commit_order_reservation enforces TTL when uncontended.
     
-    FINDING: In current delta_paper_broker.py, commit_order_reservation() does NOT check
-    whether the reservation has expired past its TTL if no other worker has called
-    reserve_order_slot() to clear it!
+    REMEDIATION: commit_order_reservation() now enforces TTL even when uncontended.
     """
     state_file = tmp_path / "broker_state.json"
     broker = DeltaPaperBroker(state_file=str(state_file), initial_equity=10000.0)
@@ -148,16 +145,9 @@ def test_audit1_uncontended_expired_lease_commit_defect(tmp_path):
     # Worker takes 0.2s (lease expired)
     time.sleep(0.2)
 
-    # In current implementation, commit succeeds because commit_order_reservation
-    # only checks token equality, NOT lease expiration!
+    # Remediated: commit is rejected because reservation expired past TTL
     committed = broker.commit_order_reservation(token, {"order_id": "ORD_SLOW"})
-    
-    # Audit verification: This confirms the lack of TTL check on commit path
-    has_commit_ttl_guard = False
-    now_epoch = datetime.now(timezone.utc).timestamp()
-    res_time = float(broker._pending_reservation.get("timestamp_epoch", 0.0)) if broker._pending_reservation else 0.0
-    # In current broker: committed is True because it lacked TTL check
-    assert committed is True  # Documents existing behavior / vulnerability
+    assert committed is False, "Remediation verified: uncontended expired commit is rejected"
 
 
 def test_audit1_release_after_exception(tmp_path):
@@ -255,12 +245,12 @@ def test_audit2_idempotency_lost_across_restart_vulnerability(tmp_path):
     b2 = DeltaPaperBroker(state_file=str(state_file), initial_equity=10000.0)
     
     # Inspect b2 in-memory idempotency cache:
-    # VULNERABILITY CONFIRMATION: _processed_idempotency_keys is EMPTY on restart!
+    # REMEDIATION VERIFICATION: _processed_idempotency_keys is persisted across restarts!
     is_idempotency_cached = "KEY_REPLAY" in b2._processed_idempotency_keys
-    assert is_idempotency_cached is False, "Documents defect: idempotency cache is lost on restart"
+    assert is_idempotency_cached is True, "Remediation verified: idempotency cache survives restart"
 
-    # Therefore, resubmitting KEY_REPLAY opens a duplicate trade!
-    ok2, _, _ = b2.open_simulated_trade(
+    # Therefore, resubmitting KEY_REPLAY is safely REJECTED!
+    ok2, msg2, _ = b2.open_simulated_trade(
         symbol="XAUTUSD",
         direction="LONG",
         entry_price=4000.0,
@@ -270,7 +260,8 @@ def test_audit2_idempotency_lost_across_restart_vulnerability(tmp_path):
         strategy_name="VWAP_EMA",
         idempotency_key="KEY_REPLAY",
     )
-    assert ok2 is True, "Confirmed vulnerability: Duplicate order executed after restart!"
+    assert ok2 is False, "Remediation verified: Duplicate order rejected after restart!"
+    assert "Duplicate order" in msg2
 
 
 def test_audit2_state_file_lacks_idempotency_field(tmp_path):
@@ -293,7 +284,7 @@ def test_audit2_state_file_lacks_idempotency_field(tmp_path):
 
     assert "open_position" in data
     assert "closed_trades" in data
-    assert "processed_idempotency_keys" not in data, "Defect: idempotency records not in persistent schema"
+    assert "processed_idempotency_keys" in data, "Remediation verified: idempotency records in persistent schema"
 
 
 # =============================================================================
@@ -301,13 +292,7 @@ def test_audit2_state_file_lacks_idempotency_field(tmp_path):
 # =============================================================================
 
 def test_audit3_multiprocess_concurrency_limitation(tmp_path):
-    """Audit 3.1: Demonstrate threading.Lock() cannot guard across separate OS processes.
-    
-    FINDING: DeltaPaperBroker uses self._lock = threading.Lock().
-    When two separate OS processes run concurrently against the same state_file,
-    neither process sees the other's in-memory _pending_reservation!
-    Both processes can reserve the slot simultaneously.
-    """
+    """Audit 3.1: Demonstrate OS-level lock prevents concurrent process reservation."""
     import subprocess
     state_file = str(tmp_path / "mp_state.json")
     
@@ -336,38 +321,27 @@ print(json.dumps({{'reserved': reserved, 'token': token}}))
     res1 = json.loads(p1.stdout.strip().splitlines()[-1])
     res2 = json.loads(p2.stdout.strip().splitlines()[-1])
 
-    # Both independent processes succeed in reserving because in-memory locks are not shared across processes!
+    # With OS locking and disk state reload, P1 acquires and P2 is locked out!
     assert res1["reserved"] is True
-    assert res2["reserved"] is True, "Confirmed finding: multi-process isolation requires OS-level file locking (fcntl/flock)"
+    assert res2["reserved"] is False, "Remediation verified: cross-process reservation collision prevented"
 
 
 def test_audit3_feed_out_of_order_stream_analysis():
-    """Audit 3.2: Prove that interleaving v2/ticker and all_trades causes false out-of-order count.
-    
-    FINDING:
-    Stage1MarketObserver uses a SINGLE variable `self.last_tick_ts` shared between:
-    - process_ticker()
-    - process_trade()
-    
-    When ticker snapshot arrives with timestamp T=1000, and trade fill arrives with
-    timestamp T=995, comparing trade T=995 < last_tick_ts T=1000 falsely increments
-    out_of_order_ticks!
-    """
+    """Audit 3.2: Prove that independent channel clocks prevent false out-of-order count."""
     obs = Stage1MarketObserver(duration_seconds=10)
 
-    # Case A: Current shared clock implementation
     # Ticker at T = 1,000,000 us
     obs.process_ticker({"symbol": "XAUTUSD", "timestamp": 1_000_000, "close": "4000.0"})
     assert obs.out_of_order_ticks == 0
 
-    # Trade execution at T = 999,500 us (500us earlier, dispatched concurrently by exchange)
+    # Trade execution at T = 999,500 us (dispatched concurrently by exchange)
     obs.process_trade({"symbol": "XAUTUSD", "timestamp": 999_500, "price": "4000.0", "size": 1})
-    assert obs.out_of_order_ticks == 1, "Proves false out-of-order detection due to cross-channel clock sharing"
+    assert obs.out_of_order_ticks == 0, "Remediation verified: independent stream clock prevents false out-of-order count"
 
     # Ticker at T = 1,000,500 us
     obs.process_ticker({"symbol": "XAUTUSD", "timestamp": 1_000_500, "close": "4000.5"})
-    assert obs.out_of_order_ticks == 1
+    assert obs.out_of_order_ticks == 0
 
     # Trade execution at T = 1,000,200 us
     obs.process_trade({"symbol": "XAUTUSD", "timestamp": 1_000_200, "price": "4000.5", "size": 1})
-    assert obs.out_of_order_ticks == 2, "Confirmed: cross-stream comparison causes false out-of-order count"
+    assert obs.out_of_order_ticks == 0, "Remediation verified: trade stream is monotonic"

@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
+import portalocker
+
 from config.orb_settings import ORBSettings, settings as default_orb_settings
 from risk.position_size_guard import (
     validate_paper_order_lots,
@@ -25,6 +27,63 @@ from risk.position_size_guard import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class CrossProcessReentrantLock:
+    """Thread-safe and cross-OS-process reentrant file lock using portalocker."""
+
+    _instances: Dict[str, "CrossProcessReentrantLock"] = {}
+    _registry_lock = threading.Lock()
+
+    @classmethod
+    def get_lock(cls, lock_file: Path, timeout: float = 10.0) -> "CrossProcessReentrantLock":
+        key = str(lock_file.resolve()).lower() if os.name == "nt" else str(lock_file.resolve())
+        with cls._registry_lock:
+            if key not in cls._instances:
+                cls._instances[key] = cls(lock_file, timeout=timeout)
+            return cls._instances[key]
+
+    def __init__(self, lock_file: Path, timeout: float = 10.0):
+        self.lock_file = lock_file
+        self.timeout = timeout
+        self._thread_lock = threading.RLock()
+        self._portalocker_lock: Optional[portalocker.Lock] = None
+        self._depth = 0
+
+    def acquire(self, timeout: Optional[float] = None) -> bool:
+        t = timeout if timeout is not None else self.timeout
+        self._thread_lock.acquire()
+        try:
+            if self._depth == 0:
+                self.lock_file.parent.mkdir(parents=True, exist_ok=True)
+                self._portalocker_lock = portalocker.Lock(str(self.lock_file), timeout=t)
+                self._portalocker_lock.acquire()
+            self._depth += 1
+            return True
+        except Exception:
+            self._thread_lock.release()
+            raise
+
+    def release(self) -> None:
+        if self._depth <= 0:
+            return
+        self._depth -= 1
+        try:
+            if self._depth == 0:
+                if self._portalocker_lock is not None:
+                    try:
+                        self._portalocker_lock.release()
+                    finally:
+                        self._portalocker_lock = None
+        finally:
+            self._thread_lock.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
 
 
 class PaperSafetyViolation(RuntimeError):
@@ -50,6 +109,7 @@ class DeltaPaperBroker:
         self.initial_equity = float(initial_equity or getattr(self.cfg, "paper_initial_equity", 10000.0))
         self.state_file = Path(state_file) if state_file else (Path(self.cfg.state_path).parent / "paper_account_xautusd.json")
         self._lock = threading.RLock()
+        self._process_lock = CrossProcessReentrantLock.get_lock(self.state_file.with_suffix(".lock"))
 
         # In-memory account state
         self.cash_balance: float = self.initial_equity
@@ -62,12 +122,14 @@ class DeltaPaperBroker:
         self.last_order: Optional[Dict[str, Any]] = None
         self.order_history: List[Dict[str, Any]] = []
 
-        # Concurrency & Idempotency State (Phase 3.25)
+        # Concurrency & Idempotency State (Phase 3.25 & Phase 3.27)
         self._pending_reservation: Optional[Dict[str, Any]] = None
         self._processed_idempotency_keys: Dict[str, Dict[str, Any]] = {}
+        self._reservation_generation: int = 0
 
-        # Load persisted state if exists
-        self._load_state()
+        # Load persisted state if exists under cross-process lock
+        with self._process_lock:
+            self._load_state()
 
     # -------------------------------------------------------------------------
     # Persistence
@@ -75,9 +137,6 @@ class DeltaPaperBroker:
 
     def _load_state(self) -> None:
         """Load persistent paper account state from disk."""
-        # Ensure transient in-flight reservations are cleared on start/restart
-        self._pending_reservation = None
-
         if not self.state_file.exists():
             self._save_state()
             return
@@ -93,12 +152,30 @@ class DeltaPaperBroker:
             self.peak_equity = float(data.get("peak_equity", self.cash_balance))
             self.open_position = data.get("open_position")
             self.closed_trades = data.get("closed_trades", [])
+            self.last_order = data.get("last_order")
+            self._processed_idempotency_keys = data.get("processed_idempotency_keys", {})
+            self._reservation_generation = int(data.get("reservation_generation", 0))
+
+            raw_res = data.get("pending_reservation")
+            if raw_res:
+                res_time = float(raw_res.get("timestamp_epoch", 0.0))
+                res_ttl = float(raw_res.get("ttl_seconds", 30.0))
+                expires_at = float(raw_res.get("expires_at_epoch", res_time + res_ttl))
+                now_epoch = datetime.now(timezone.utc).timestamp()
+                if now_epoch < expires_at:
+                    self._pending_reservation = raw_res
+                else:
+                    self._pending_reservation = None
+            else:
+                self._pending_reservation = None
+
             logger.info(
-                "Loaded persisted paper account state: Balance=$%.2f, Realized P&L=$%.2f, Closed Trades=%d, Open Position=%s",
+                "Loaded persisted paper account state: Balance=$%.2f, Realized P&L=$%.2f, Closed Trades=%d, Open Position=%s, Idempotency Keys=%d",
                 self.cash_balance,
                 self.realized_pnl,
                 len(self.closed_trades),
                 "YES" if self.open_position else "NO",
+                len(self._processed_idempotency_keys),
             )
         except Exception as exc:
             logger.warning("Could not read paper account state file (%s); starting fresh: %s", self.state_file, exc)
@@ -117,6 +194,10 @@ class DeltaPaperBroker:
             "peak_equity": round(self.peak_equity, 4),
             "open_position": self.open_position,
             "closed_trades": self.closed_trades,
+            "pending_reservation": self._pending_reservation,
+            "processed_idempotency_keys": self._processed_idempotency_keys,
+            "reservation_generation": self._reservation_generation,
+            "last_order": self.last_order,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
         temp_file = self.state_file.with_suffix(".tmp")
@@ -129,7 +210,7 @@ class DeltaPaperBroker:
 
     def reset_account(self, starting_equity: Optional[float] = None) -> None:
         """Explicitly reset paper account (only for testing or administrative reset)."""
-        with self._lock:
+        with self._process_lock:
             equity = float(starting_equity or self.initial_equity)
             self.initial_equity = equity
             self.cash_balance = equity
@@ -141,11 +222,12 @@ class DeltaPaperBroker:
             self.closed_trades = []
             self._pending_reservation = None
             self._processed_idempotency_keys = {}
+            self._reservation_generation = 0
             self._save_state()
             logger.info("Paper account reset to $%.2f.", equity)
 
     # -------------------------------------------------------------------------
-    # Atomic Order Slot Reservation & Idempotency (Phase 3.25)
+    # Atomic Order Slot Reservation & Idempotency (Phase 3.25 & 3.27)
     # -------------------------------------------------------------------------
 
     def reserve_order_slot(
@@ -158,71 +240,127 @@ class DeltaPaperBroker:
     ) -> Tuple[bool, str, Optional[str]]:
         """Atomically reserve the single available paper position slot.
 
-        Ensures that concurrent threads/callers cannot race to submit duplicate orders
+        Ensures that concurrent threads/processes cannot race to submit duplicate orders
         before the first order establishes an open position.
         
         Returns:
             Tuple[bool, str, Optional[str]]: (success, message, reservation_token)
         """
-        with self._lock:
+        clean_key = str(idempotency_key or "").strip()
+        if not clean_key:
+            return False, "Invalid idempotency key: key cannot be empty or null", None
+
+        with self._process_lock:
+            self._load_state()
+
             if self.open_position is not None:
                 return False, f"Position already open: {self.open_position['direction']} {self.open_position['lots']} lots {self.open_position['symbol']}", None
 
             # Check if idempotency key was already completed
-            if idempotency_key in self._processed_idempotency_keys:
-                cached = self._processed_idempotency_keys[idempotency_key]
-                return False, f"Duplicate order: idempotency key '{idempotency_key}' already processed with status {cached.get('status', 'COMPLETED')}", None
+            if clean_key in self._processed_idempotency_keys:
+                cached = self._processed_idempotency_keys[clean_key]
+                return False, f"Duplicate order: idempotency key '{clean_key}' already processed with status {cached.get('status', 'COMPLETED')}", None
+
+            now_epoch = datetime.now(timezone.utc).timestamp()
 
             # Check existing in-flight reservation
             if self._pending_reservation is not None:
+                active_key = self._pending_reservation.get("idempotency_key")
                 res_time = float(self._pending_reservation.get("timestamp_epoch", 0.0))
-                now_epoch = datetime.now(timezone.utc).timestamp()
-                if (now_epoch - res_time) < ttl_seconds:
-                    active_key = self._pending_reservation.get("idempotency_key")
+                res_ttl = float(self._pending_reservation.get("ttl_seconds", 30.0))
+                expires_at = float(self._pending_reservation.get("expires_at_epoch", res_time + res_ttl))
+
+                # If same key is requested while in-flight
+                if active_key == clean_key and now_epoch < expires_at:
+                    return False, f"Duplicate order: idempotency key '{clean_key}' already reserved in-flight", None
+
+                if now_epoch < expires_at:
                     return False, f"Order slot currently reserved by in-flight order '{active_key}'", None
                 else:
-                    logger.warning("Clearing expired order reservation (age: %.1fs > %.1fs).", now_epoch - res_time, ttl_seconds)
+                    logger.warning("Clearing expired order reservation (age: %.1fs > %.1fs).", now_epoch - res_time, res_ttl)
                     self._pending_reservation = None
 
-            token = f"RES_{secrets.token_hex(8)}"
+            # Fencing generation increment
+            self._reservation_generation += 1
+            gen = self._reservation_generation
+            token = f"RES_GEN{gen}_{secrets.token_hex(8)}"
+            ttl_val = float(ttl_seconds)
             self._pending_reservation = {
                 "token": token,
-                "idempotency_key": idempotency_key,
+                "generation": gen,
+                "idempotency_key": clean_key,
                 "strategy_name": strategy_name,
                 "direction": direction,
                 "symbol": symbol,
-                "timestamp_epoch": datetime.now(timezone.utc).timestamp(),
-                "timestamp_iso": datetime.now(timezone.utc).isoformat(),
+                "ttl_seconds": ttl_val,
+                "timestamp_epoch": now_epoch,
+                "expires_at_epoch": now_epoch + ttl_val,
+                "timestamp_iso": self._now_iso(),
             }
-            logger.info("Order slot atomically reserved (token=%s, key=%s).", token, idempotency_key)
+            self._save_state()
+            logger.info("Order slot atomically reserved (token=%s, gen=%d, key=%s, ttl=%.1fs).", token, gen, clean_key, ttl_val)
             return True, "Slot reserved successfully", token
 
     def release_order_reservation(self, token: Optional[str], reason: str = "") -> bool:
         """Release an in-flight order reservation if the order failed or was rejected."""
-        with self._lock:
-            if token and self._pending_reservation and self._pending_reservation.get("token") == token:
+        if not token:
+            return False
+        with self._process_lock:
+            if not self._pending_reservation:
+                self._load_state()
+            if self._pending_reservation and self._pending_reservation.get("token") == token:
                 key = self._pending_reservation.get("idempotency_key")
                 self._pending_reservation = None
+                self._save_state()
                 logger.info("Order reservation %s (key=%s) safely released. Reason: %s", token, key, reason or "unspecified")
                 return True
             return False
 
     def commit_order_reservation(self, token: Optional[str], order_record: Dict[str, Any]) -> bool:
         """Commit an in-flight order reservation upon successful simulated order fill."""
-        with self._lock:
-            if token and self._pending_reservation and self._pending_reservation.get("token") == token:
-                key = self._pending_reservation.get("idempotency_key")
-                self._processed_idempotency_keys[key] = {
-                    "token": token,
-                    "order_id": order_record.get("order_id"),
-                    "trade_id": order_record.get("trade_id"),
-                    "status": "FILLED",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-                self._pending_reservation = None
-                logger.info("Order reservation %s committed into idempotency cache.", token)
-                return True
+        if not token:
             return False
+        with self._process_lock:
+            if not self._pending_reservation:
+                self._load_state()
+            if not self._pending_reservation or self._pending_reservation.get("token") != token:
+                logger.warning("Commit rejected: reservation token '%s' not found or preempted.", token)
+                return False
+
+            now_epoch = datetime.now(timezone.utc).timestamp()
+            res_time = float(self._pending_reservation.get("timestamp_epoch", 0.0))
+            res_ttl = float(self._pending_reservation.get("ttl_seconds", 30.0))
+            expires_at = float(self._pending_reservation.get("expires_at_epoch", res_time + res_ttl))
+
+            # Reject commit if reservation has expired past TTL (uncontended case)
+            if now_epoch >= expires_at:
+                logger.error("Order reservation %s expired before commit (age: %.1fs >= %.1fs TTL). Commit rejected.", token, now_epoch - res_time, res_ttl)
+                self._pending_reservation = None
+                self._save_state()
+                return False
+
+            key = self._pending_reservation.get("idempotency_key")
+            gen = self._pending_reservation.get("generation", self._reservation_generation)
+            self._processed_idempotency_keys[key] = {
+                "token": token,
+                "generation": gen,
+                "order_id": order_record.get("order_id"),
+                "trade_id": order_record.get("trade_id"),
+                "status": "FILLED",
+                "timestamp": self._now_iso(),
+            }
+            # Prune if exceeding 1000 entries
+            if len(self._processed_idempotency_keys) > 1000:
+                sorted_keys = sorted(
+                    self._processed_idempotency_keys.items(),
+                    key=lambda item: item[1].get("timestamp", ""),
+                )
+                self._processed_idempotency_keys = dict(sorted_keys[-1000:])
+
+            self._pending_reservation = None
+            self._save_state()
+            logger.info("Order reservation %s (gen=%s) committed into idempotency cache.", token, gen)
+            return True
 
     # -------------------------------------------------------------------------
     # Utilities
@@ -336,7 +474,7 @@ class DeltaPaperBroker:
         else:
             resolved_idemp_key = f"IDEMP_{clean_sym}_{clean_dir}_{self._now_iso()}_{secrets.token_hex(4)}"
 
-        with self._lock:
+        with self._process_lock:
             # 1. Atomic Order Slot Reservation & In-Flight Concurrency Check
             reserved, res_msg, res_token = self.reserve_order_slot(
                 idempotency_key=resolved_idemp_key,
@@ -509,8 +647,17 @@ class DeltaPaperBroker:
                     "signal_reason": signal_reason,
                 }
 
+                # Gated Position Assignment: Commit reservation first and verify result
+                commit_ok = self.commit_order_reservation(res_token, pos)
+                if not commit_ok:
+                    # Roll back in-memory fee and slippage counters on rejected commit
+                    self.total_fees -= entry_fee
+                    self.total_slippage -= slippage_cost
+                    logger.error("[RESERVATION_FENCING_REJECTION] Failed to commit reservation token %s. Aborting trade entry.", res_token)
+                    return False, f"Order reservation commit failed: lease expired or preempted (token={res_token})", None
+
+                # Position assignment occurs ONLY after successful commit validation
                 self.open_position = pos
-                self.commit_order_reservation(res_token, pos)
                 self._save_state()
 
                 msg = (
@@ -534,7 +681,7 @@ class DeltaPaperBroker:
         fill_ratio: float = 1.0,
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """Close current open simulated position (fully or partially), calculate final P&L and friction, and record."""
-        with self._lock:
+        with self._process_lock:
             if self.open_position is None:
                 return False, "No open simulated position to close.", None
 
@@ -734,7 +881,7 @@ class DeltaPaperBroker:
         - TP as passive MAKER limit exit with maker fees and optional penetration requirement.
         - Conservative collision rule: if both SL and TP are touched in the same bar, SL wins.
         """
-        with self._lock:
+        with self._process_lock:
             if self.open_position is None:
                 return None
             pos = dict(self.open_position)
@@ -784,7 +931,7 @@ class DeltaPaperBroker:
             return closed_trade if ok_close else None
 
         # Otherwise update unrealized P&L
-        with self._lock:
+        with self._process_lock:
             if self.open_position is not None:
                 qty = self.open_position["contract_qty"]
                 e_price = self.open_position["entry_price"]
@@ -803,7 +950,7 @@ class DeltaPaperBroker:
 
     def get_account_summary(self) -> Dict[str, Any]:
         """Return comprehensive simulated account summary and performance metrics."""
-        with self._lock:
+        with self._process_lock:
             pos = dict(self.open_position) if self.open_position else None
             unrealized_pnl = float(pos["unrealized_pnl"]) if pos else 0.0
             margin_used = float(pos["margin"]) if pos else 0.0

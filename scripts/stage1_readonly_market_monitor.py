@@ -251,7 +251,11 @@ class Stage1MarketObserver:
         self.valid_ticks = 0
         self.duplicate_ticks = 0
         self.out_of_order_ticks = 0
+        self.ticker_out_of_order_ticks = 0
+        self.trade_out_of_order_ticks = 0
         self.last_tick_ts: Optional[int] = None
+        self.last_ticker_ts: Optional[int] = None
+        self.last_trade_ts: Optional[int] = None
         self._seen_ticks: Set[str] = set()
 
         # Candle Quality Metrics
@@ -561,12 +565,14 @@ class Stage1MarketObserver:
                 if len(self._seen_ticks) > 10000:
                     self._seen_ticks.clear()
 
-            # Check out of order
-            if self.last_tick_ts is not None and ts_epoch_us < self.last_tick_ts:
+            # Check out of order independently per stream clock
+            if self.last_ticker_ts is not None and ts_epoch_us < self.last_ticker_ts:
+                self.ticker_out_of_order_ticks += 1
                 self.out_of_order_ticks += 1
             else:
-                self.last_tick_ts = ts_epoch_us
+                self.last_ticker_ts = ts_epoch_us
 
+            self.last_tick_ts = ts_epoch_us
             self.valid_ticks += 1
 
     def process_trade(self, data: Dict[str, Any]) -> None:
@@ -591,11 +597,14 @@ class Stage1MarketObserver:
                 if len(self._seen_ticks) > 10000:
                     self._seen_ticks.clear()
 
-            if self.last_tick_ts is not None and ts_epoch_us < self.last_tick_ts:
+            # Check out of order independently per stream clock
+            if self.last_trade_ts is not None and ts_epoch_us < self.last_trade_ts:
+                self.trade_out_of_order_ticks += 1
                 self.out_of_order_ticks += 1
             else:
-                self.last_tick_ts = ts_epoch_us
+                self.last_trade_ts = ts_epoch_us
 
+            self.last_tick_ts = ts_epoch_us
             self.valid_ticks += 1
 
     def process_candlestick(self, data: Dict[str, Any]) -> None:
