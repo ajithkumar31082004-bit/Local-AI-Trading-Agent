@@ -1,0 +1,65 @@
+{
+  "audit_phase": "PHASE_3_30_SQLITE_DURABILITY_INDEPENDENT_AUDIT",
+  "audit_date": "2026-11-10T22:15:30+05:30",
+  "lifecycle_steps": [
+    "Step 1: Idempotency-key reservation (SQLite status='RESERVED', token, TTL=10s)",
+    "Step 2: Broker reservation (_pending_reservation recorded in broker JSON state)",
+    "Step 3: Execution-state calculation (sizing validation, fill price, fee & slippage calculation)",
+    "Step 4: SQLite status update (commit_order_reservation() updates status='COMMITTED')",
+    "Step 5: JSON state persistence (open_position=pos, order_history appended, atomic replace)",
+    "Step 6: Order acknowledgement returned to caller"
+  ],
+  "crash_injection_boundaries": [
+    {
+      "boundary_id": "C.1",
+      "boundary_name": "Crash after Step 1 (SQLite RESERVED) before Step 2 (Broker Reservation)",
+      "sqlite_state": "RESERVED with 10s TTL",
+      "json_state": "Unchanged",
+      "cash_equity_state": "Conserved (0 deduction)",
+      "recovery_behavior": "Reservation expires in SQLite after 10s or is released on reboot. Order was never executed.",
+      "phantom_fill_risk": "NONE",
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "C.2",
+      "boundary_name": "Crash after Step 2 (Broker Reservation) before Step 3 (Calculation)",
+      "sqlite_state": "RESERVED",
+      "json_state": "_pending_reservation recorded",
+      "cash_equity_state": "Conserved (0 deduction)",
+      "recovery_behavior": "On restart, reservation token expires. Broker clears pending reservation.",
+      "phantom_fill_risk": "NONE",
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "C.3",
+      "boundary_name": "Crash after Step 3 (Calculation) before Step 4 (SQLite COMMITTED)",
+      "sqlite_state": "RESERVED (uncommitted)",
+      "json_state": "Unchanged",
+      "cash_equity_state": "Conserved (0 deduction)",
+      "recovery_behavior": "Transaction was never committed to SQLite. Key expires. Trade was never executed.",
+      "phantom_fill_risk": "NONE",
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "C.4",
+      "boundary_name": "Crash after Step 4 (SQLite COMMITTED) before Step 5 (JSON open_position save)",
+      "sqlite_state": "COMMITTED (durable)",
+      "json_state": "open_position=None, entry fee deducted by commit_order_reservation()",
+      "cash_equity_state": "Fee deducted, position missing",
+      "recovery_behavior": "Key is permanently marked COMMITTED in SQLite. Caller retry is rejected as duplicate. However, open_position was never persisted in JSON, so position is lost.",
+      "phantom_fill_risk": "HIGH (Partial execution gap)",
+      "verdict": "VULNERABILITY IDENTIFIED",
+      "recommendation": "Set self.open_position = pos prior to commit_order_reservation() so the single state save inside commit_order_reservation() persists both atomically, or unify broker state store into SQLite."
+    },
+    {
+      "boundary_id": "C.5",
+      "boundary_name": "Crash after Step 5 (JSON open_position save) before Step 6 (Caller Ack)",
+      "sqlite_state": "COMMITTED",
+      "json_state": "open_position saved, balance updated",
+      "cash_equity_state": "Conserved and synchronized",
+      "recovery_behavior": "On restart, state is fully restored. If caller resubmits key, broker rejects duplicate order and preserves open position.",
+      "phantom_fill_risk": "NONE",
+      "verdict": "PASS"
+    }
+  ]
+}
