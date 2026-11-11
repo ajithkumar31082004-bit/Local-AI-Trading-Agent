@@ -11,6 +11,7 @@ ENFORCES DATA INTEGRITY INVARIANTS:
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple, Set
+import math
 import pandas as pd
 import logging
 
@@ -57,8 +58,14 @@ class CandleValidator:
         except (ValueError, TypeError) as exc:
             return False, f"Non-numeric OHLCV value: {exc}"
 
+        for val, name in [(o, "Open"), (h, "High"), (l, "Low"), (c, "Close"), (v, "Volume")]:
+            if not math.isfinite(val):
+                return False, f"Non-finite numeric value ({name}={val}) detected in OHLCV candle"
+
         if o <= 0 or h <= 0 or l <= 0 or c <= 0:
             return False, f"Non-positive price in candle: O={o}, H={h}, L={l}, C={c}"
+        if o > 1_000_000.0 or h > 1_000_000.0 or l > 1_000_000.0 or c > 1_000_000.0:
+            return False, f"Extremely large price exceeding 1,000,000 limit: O={o}, H={h}, L={l}, C={c}"
         if v < 0:
             return False, f"Negative volume in candle: V={v}"
         if h < l:
@@ -134,6 +141,13 @@ class CandleValidator:
             epoch = int(ts.timestamp())
         else:
             epoch = int(pd.to_datetime(ts).timestamp())
+
+        if epoch <= 0:
+            return CandleValidationReport(
+                is_valid=False,
+                rejection_reason=f"INVALID_TIMESTAMP: Non-positive candle timestamp: {epoch}",
+                candle_timestamp=str(ts),
+            )
 
         # 4. Duplicate check
         if epoch in self.seen_timestamps:

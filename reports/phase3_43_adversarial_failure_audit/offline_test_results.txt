@@ -1,0 +1,73 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0 -- C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collecting ... collected 36 items
+
+tests/test_phase3_43_adversarial_failure.py::test_simultaneous_stale_feed_and_queue_overflow PASSED [  2%]
+tests/test_phase3_43_adversarial_failure.py::test_simultaneous_memory_limit_and_disk_limit PASSED [  5%]
+tests/test_phase3_43_adversarial_failure.py::test_simultaneous_manual_halt_and_unhandled_exception PASSED [  8%]
+tests/test_phase3_43_adversarial_failure.py::test_simultaneous_max_reconnects_and_duration_expiration PASSED [ 11%]
+tests/test_phase3_43_adversarial_failure.py::test_simultaneous_symbol_mismatch_and_malformed_payload PASSED [ 13%]
+tests/test_phase3_43_adversarial_failure.py::test_cancellation_during_preflight PASSED [ 16%]
+tests/test_phase3_43_adversarial_failure.py::test_cancellation_during_transport_startup PASSED [ 19%]
+tests/test_phase3_43_adversarial_failure.py::test_cancellation_during_data_ingestion PASSED [ 22%]
+tests/test_phase3_43_adversarial_failure.py::test_system_exit_during_tick PASSED [ 25%]
+tests/test_phase3_43_adversarial_failure.py::test_ordinary_exception_during_tick PASSED [ 27%]
+tests/test_phase3_43_adversarial_failure.py::test_memory_budget_boundary[149.9-True] PASSED [ 30%]
+tests/test_phase3_43_adversarial_failure.py::test_memory_budget_boundary[150.0-True] PASSED [ 33%]
+tests/test_phase3_43_adversarial_failure.py::test_memory_budget_boundary[150.1-False] PASSED [ 36%]
+tests/test_phase3_43_adversarial_failure.py::test_disk_budget_boundary[24.9-True] PASSED [ 38%]
+tests/test_phase3_43_adversarial_failure.py::test_disk_budget_boundary[25.0-True] PASSED [ 41%]
+tests/test_phase3_43_adversarial_failure.py::test_disk_budget_boundary[25.1-False] PASSED [ 44%]
+tests/test_phase3_43_adversarial_failure.py::test_queue_exact_and_overflow_boundary PASSED [ 47%]
+tests/test_phase3_43_adversarial_failure.py::test_reconnect_history_bounded_at_100_under_storm PASSED [ 50%]
+tests/test_phase3_43_adversarial_failure.py::test_malicious_payload_unexpected_symbols PASSED [ 52%]
+tests/test_phase3_43_adversarial_failure.py::test_malicious_payload_nan_and_infinity_prices PASSED [ 55%]
+tests/test_phase3_43_adversarial_failure.py::test_malicious_payload_negative_and_zero_prices PASSED [ 58%]
+tests/test_phase3_43_adversarial_failure.py::test_malicious_payload_extremely_large_numbers PASSED [ 61%]
+tests/test_phase3_43_adversarial_failure.py::test_malicious_payload_invalid_timestamps PASSED [ 63%]
+tests/test_phase3_43_adversarial_failure.py::test_malicious_payload_duplicate_and_out_of_order_candles PASSED [ 66%]
+tests/test_phase3_43_adversarial_failure.py::test_malicious_payload_auth_keys_trigger_immediate_stop PASSED [ 69%]
+tests/test_phase3_43_adversarial_failure.py::test_malicious_payload_oversized_payload_rejected PASSED [ 72%]
+tests/test_phase3_43_adversarial_failure.py::test_filesystem_traversal_attack_rejected PASSED [ 75%]
+tests/test_phase3_43_adversarial_failure.py::test_filesystem_forbidden_state_files_protected PASSED [ 77%]
+tests/test_phase3_43_adversarial_failure.py::test_filesystem_save_readiness_report_within_allowed_dir PASSED [ 80%]
+tests/test_phase3_43_adversarial_failure.py::test_filesystem_save_readiness_report_blocks_traversal PASSED [ 83%]
+tests/test_phase3_43_adversarial_failure.py::test_lifecycle_start_called_twice PASSED [ 86%]
+tests/test_phase3_43_adversarial_failure.py::test_lifecycle_stop_called_twice PASSED [ 88%]
+tests/test_phase3_43_adversarial_failure.py::test_lifecycle_stop_before_start PASSED [ 91%]
+tests/test_phase3_43_adversarial_failure.py::test_lifecycle_start_after_stop_permanently_blocked PASSED [ 94%]
+tests/test_phase3_43_adversarial_failure.py::test_isolation_no_order_methods_exist_on_runner PASSED [ 97%]
+tests/test_phase3_43_adversarial_failure.py::test_isolation_block_execution_attempt_raises PASSED [100%]
+
+============================= 36 passed in 3.97s ==============================
+
+-------------------------------------------------------------------------------
+CUMULATIVE SHADOW OBSERVER SUITE (PHASES 3.35 - 3.43):
+============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collected 143 items
+
+tests\test_phase3_35_shadow_validation.py ..............                 [  9%]
+tests\test_phase3_36_independent_shadow_audit.py ..............          [ 19%]
+tests\test_phase3_38_transport_adapter.py .................              [ 31%]
+tests\test_phase3_39_transport_audit.py ...............                  [ 41%]
+tests\test_phase3_40_operational_safety.py ........                      [ 47%]
+tests\test_phase3_41_readiness_plan.py ..........                        [ 54%]
+tests\test_phase3_42_safety_audit.py .............................       [ 74%]
+tests\test_phase3_43_adversarial_failure.py ............................ [ 94%]
+........                                                                 [100%]
+
+============================ 143 passed in 16.04s =============================
+
+-------------------------------------------------------------------------------
+FULL REPOSITORY REGRESSION TEST SUITE (pytest -q):
+578 passed, 4 warnings in 130.57s (0:02:10)
+===============================================================================
+

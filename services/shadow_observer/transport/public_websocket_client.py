@@ -10,6 +10,7 @@ OPERATING CONSTRAINTS:
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime, timezone
 import json
+import math
 import logging
 
 from services.shadow_observer.observer_safety_guard import ShadowObserverSafetyViolation
@@ -173,11 +174,20 @@ class PublicWebSocketClient(ITransportClient):
             logger.warning("Incoming message ignored while client is in state: %s", self.state.value)
             return
 
+        # Defensive check against oversized frames (e.g. payload DOS)
+        if isinstance(raw_message, str) and len(raw_message) > 65536:
+            self.malformed_frames_count += 1
+            logger.warning("Rejected oversized WebSocket frame (%d bytes)", len(raw_message))
+            return
+
         curr_time = now_epoch if now_epoch is not None else datetime.now(timezone.utc).timestamp()
         self.last_heartbeat_time = curr_time
 
         try:
             msg = json.loads(raw_message) if isinstance(raw_message, str) else raw_message
+            if not isinstance(msg, dict):
+                self.malformed_frames_count += 1
+                return
         except Exception:
             self.malformed_frames_count += 1
             logger.warning("Malformed non-JSON WebSocket frame received.")
@@ -200,14 +210,14 @@ class PublicWebSocketClient(ITransportClient):
 
     def _process_ticker_message(self, msg: Dict[str, Any], curr_time: float) -> None:
         """Normalize and emit a public ticker event."""
-        sym = msg.get("symbol", self.config.symbol).upper()
+        sym = str(msg.get("symbol", self.config.symbol)).upper()
         if sym != self.config.symbol:
             logger.debug("Ignored ticker for foreign symbol: %s", sym)
             return
 
         try:
             price = float(msg.get("mark_price", msg.get("close", msg.get("price", 0.0))))
-            if price <= 0:
+            if not math.isfinite(price) or price <= 0 or price > 1_000_000.0:
                 self.malformed_frames_count += 1
                 return
         except (ValueError, TypeError):
@@ -215,7 +225,12 @@ class PublicWebSocketClient(ITransportClient):
             return
 
         ts = msg.get("timestamp")
-        exchange_epoch = float(ts) if ts else None
+        try:
+            exchange_epoch = float(ts) if ts is not None else None
+            if exchange_epoch is not None and (not math.isfinite(exchange_epoch) or exchange_epoch <= 0):
+                exchange_epoch = None
+        except (ValueError, TypeError):
+            exchange_epoch = None
 
         tick = NormalizedTick(
             symbol=sym,
@@ -231,7 +246,11 @@ class PublicWebSocketClient(ITransportClient):
     def _process_candle_message(self, msg: Dict[str, Any], curr_time: float) -> None:
         """Normalize and emit a completed candle event."""
         candle_data = msg.get("candle", msg)
-        sym = candle_data.get("symbol", self.config.symbol).upper()
+        if not isinstance(candle_data, dict):
+            self.malformed_frames_count += 1
+            return
+
+        sym = str(candle_data.get("symbol", self.config.symbol)).upper()
         if sym != self.config.symbol:
             return
 
@@ -243,6 +262,13 @@ class PublicWebSocketClient(ITransportClient):
             v = float(candle_data.get("volume", candle_data.get("v", 0.0)))
             t_start = int(candle_data.get("timestamp", candle_data.get("t", 0)))
         except (ValueError, TypeError):
+            self.malformed_frames_count += 1
+            return
+
+        if not all(math.isfinite(x) and 0 < x <= 1_000_000.0 for x in (o, h, l, c)):
+            self.malformed_frames_count += 1
+            return
+        if not math.isfinite(v) or v < 0 or t_start <= 0:
             self.malformed_frames_count += 1
             return
 

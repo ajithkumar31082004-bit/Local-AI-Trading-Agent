@@ -259,6 +259,10 @@ class ShadowDryRunRunner:
         if self.has_terminated:
             raise ShadowObserverSafetyViolation("SECURITY VIOLATION: Restart after shutdown is prohibited.")
 
+        if self.is_running:
+            logger.warning("Dry run runner is already running; start() ignored.")
+            return False
+
         # 1. Execute all 12 Preflight Safety Gates
         gates_passed, failures = execute_preflight_safety_gates(
             self.config,
@@ -463,3 +467,12 @@ class ShadowDryRunRunner:
                 "restart_prevented": self.has_terminated,
             }
         }
+
+    def save_readiness_report(self, output_path: Optional[Path] = None) -> Path:
+        """Safely write telemetry report to disk inside approved output directory."""
+        dest = output_path or (self.config.output_dir / f"shadow_dry_run_report_{int(self.stop_epoch or time.time())}.json")
+        safe_path = validate_shadow_write_path(dest, allowed_root=self.config.output_dir)
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        report_data = self.generate_readiness_report()
+        safe_path.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
+        return safe_path
