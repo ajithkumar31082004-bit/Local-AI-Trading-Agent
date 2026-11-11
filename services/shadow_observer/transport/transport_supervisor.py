@@ -77,11 +77,15 @@ class TransportSupervisor:
         # 1. Start REST client
         try:
             self.rest_client.connect()
-        except Exception as exc:
-            logger.error("REST connection initialization failed: %s", exc)
-            self.state = ConnectionState.DEGRADED
-            self.reconnect_ctrl.record_failure(f"REST_INIT_FAIL: {exc}", now_epoch=now_epoch)
-            return False
+        except BaseException as exc:
+            self.state = ConnectionState.STOPPED
+            self.stop()
+            if isinstance(exc, Exception):
+                logger.error("REST connection initialization failed: %s", exc)
+                self.state = ConnectionState.DEGRADED
+                self.reconnect_ctrl.record_failure(f"REST_INIT_FAIL: {exc}", now_epoch=now_epoch)
+                return False
+            raise
 
         # 2. Start WebSocket client
         try:
@@ -94,11 +98,15 @@ class TransportSupervisor:
             else:
                 self.state = ConnectionState.DEGRADED
                 return False
-        except Exception as exc:
-            self.state = ConnectionState.DEGRADED
-            can_retry, backoff = self.reconnect_ctrl.record_failure(f"WS_INIT_FAIL: {exc}", now_epoch=now_epoch)
-            logger.error("WebSocket connection failed (can_retry=%s, backoff=%.2fs): %s", can_retry, backoff, exc)
-            return False
+        except BaseException as exc:
+            self.state = ConnectionState.STOPPED
+            self.stop()
+            if isinstance(exc, Exception):
+                self.state = ConnectionState.DEGRADED
+                can_retry, backoff = self.reconnect_ctrl.record_failure(f"WS_INIT_FAIL: {exc}", now_epoch=now_epoch)
+                logger.error("WebSocket connection failed (can_retry=%s, backoff=%.2fs): %s", can_retry, backoff, exc)
+                return False
+            raise
 
     def stop(self) -> None:
         """Gracefully terminate transport and all active connections."""
@@ -172,18 +180,25 @@ class TransportSupervisor:
         """Perform comprehensive health check and update degradation status."""
         curr_time = now_epoch if now_epoch is not None else datetime.now(timezone.utc).timestamp()
 
-        # Check ticker staleness
+        # Check ticker staleness and queue data loss
         is_stale, elapsed = self.reader.is_feed_stale(now_epoch=curr_time)
-        if is_stale and self.state == ConnectionState.CONNECTED:
+        has_data_loss = self.queue_overflow_count > 0
+
+        if (is_stale or has_data_loss) and self.state == ConnectionState.CONNECTED:
             self.state = ConnectionState.DEGRADED
-            logger.warning("Feed became stale (%.1fs elapsed). State degraded.", elapsed)
-        elif not is_stale and self.state == ConnectionState.DEGRADED and self.ws_client.is_connected():
+            reason = f"staleness ({elapsed:.1f}s elapsed)" if is_stale else f"queue overflow ({self.queue_overflow_count} drops)"
+            logger.warning("Feed degraded: %s", reason)
+        elif not is_stale and not has_data_loss and self.state == ConnectionState.DEGRADED and self.ws_client.is_connected():
             self.state = ConnectionState.CONNECTED
             logger.info("Feed recovered. State restored to CONNECTED.")
+
+        is_feed_healthy = (self.state == ConnectionState.CONNECTED) and (not is_stale) and (not has_data_loss)
 
         telemetry = {
             "supervisor_state": self.state.value,
             "is_feed_stale": is_stale,
+            "has_data_loss": has_data_loss,
+            "is_feed_healthy": is_feed_healthy,
             "elapsed_since_last_tick": elapsed,
             "total_ticks_processed": self.total_ticks_processed,
             "total_candles_processed": self.total_candles_processed,
@@ -196,8 +211,14 @@ class TransportSupervisor:
         }
         return telemetry
 
-    def drain_events(self) -> List[Any]:
+    def reset_overflow_counter(self) -> None:
+        """Explicitly reset overflow counter after downstream consumers acknowledge loss."""
+        self.queue_overflow_count = 0
+
+    def drain_events(self, acknowledge_overflow: bool = False) -> List[Any]:
         """Drain and return all queued market data events."""
         events = list(self.event_queue)
         self.event_queue.clear()
+        if acknowledge_overflow:
+            self.queue_overflow_count = 0
         return events
