@@ -95,6 +95,11 @@ class ORBSettings:
     min_completed_15m_bars: int = _int("MIN_COMPLETED_15M_BARS", 50)
     min_completed_5m_bars: int = _int("MIN_COMPLETED_5M_BARS", 150)
 
+    @property
+    def trading_mode(self) -> str:
+        """Backward-compatible alias for mode to satisfy legacy scripts, CI workflows, and UI."""
+        return self.mode
+
 
 def validate_settings(cfg: ORBSettings) -> None:
     """Strictly validate trading mode configuration without silent fallbacks."""

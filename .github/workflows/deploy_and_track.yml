@@ -44,7 +44,8 @@ jobs:
         run: |
           python -c "
           from config.orb_settings import settings
-          assert settings.trading_mode == 'PAPER', 'FATAL: TRADING_MODE must be PAPER'
+          assert settings.mode == 'PAPER', 'FATAL: TRADING_MODE must be PAPER'
+          assert settings.trading_mode == 'PAPER', 'FATAL: TRADING_MODE alias must be PAPER'
           assert settings.live_trading_enabled is False, 'FATAL: LIVE_TRADING_ENABLED must be False'
           print('Safety verification PASSED: Strict PAPER mode enforced.')
           "
