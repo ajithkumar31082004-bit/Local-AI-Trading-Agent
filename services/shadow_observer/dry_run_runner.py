@@ -64,13 +64,21 @@ class DryRunConfig:
     def __post_init__(self):
         if self.symbol != "XAUTUSD":
             raise ShadowObserverSafetyViolation(f"SECURITY VIOLATION: Unsupported symbol: {self.symbol}")
-        if self.max_duration_seconds > 3600.0:
+        if self.max_duration_seconds > 3600.0 or self.max_duration_seconds <= 0:
             raise ShadowObserverSafetyViolation(
                 f"SECURITY VIOLATION: Duration {self.max_duration_seconds}s exceeds 60-minute limit (3600s)."
             )
-        if self.max_message_queue_size > 1000:
+        if self.max_message_queue_size > 1000 or self.max_message_queue_size <= 0:
             raise ShadowObserverSafetyViolation(
                 f"SECURITY VIOLATION: Queue size {self.max_message_queue_size} exceeds max limit (1000)."
+            )
+        if self.max_memory_mb > 150.0 or self.max_memory_mb <= 0:
+            raise ShadowObserverSafetyViolation(
+                f"SECURITY VIOLATION: Memory limit {self.max_memory_mb}MB exceeds max limit (150MB)."
+            )
+        if self.max_disk_mb > 25.0 or self.max_disk_mb <= 0:
+            raise ShadowObserverSafetyViolation(
+                f"SECURITY VIOLATION: Disk limit {self.max_disk_mb}MB exceeds max limit (25MB)."
             )
         if self.restart_policy != "never":
             raise ShadowObserverSafetyViolation(
@@ -83,6 +91,8 @@ def execute_preflight_safety_gates(
     env_file: Optional[Path] = None,
     is_daemon_running_fn: Optional[Callable[[], bool]] = None,
     git_clean_check_fn: Optional[Callable[[], Tuple[bool, str]]] = None,
+    connectivity_probe_fn: Optional[Callable[[], Tuple[bool, str]]] = None,
+    host_headroom_check_fn: Optional[Callable[[], Tuple[bool, str]]] = None,
 ) -> Tuple[bool, List[str]]:
     """Execute all 12 mandatory runtime preflight safety gates.
     
@@ -91,14 +101,21 @@ def execute_preflight_safety_gates(
     """
     failures: List[str] = []
 
-    # Gate 1: Git and commit integrity
-    if git_clean_check_fn:
-        is_clean, err_msg = git_clean_check_fn()
-        if not is_clean:
-            failures.append(f"Gate 1 Failed: Working tree not clean or commit invalid: {err_msg}")
-
-    # Gate 2 & 3: Environment verification
+    # Gate 1: API keys absent (in environment and .env)
     target_env = env_file or (PROJECT_ROOT / ".env")
+    if os.environ.get("DELTA_API_KEY") or os.environ.get("DELTA_API_SECRET"):
+        failures.append("Gate 1 Failed: DELTA_API_KEY or DELTA_API_SECRET found in environment variables.")
+
+    if target_env.exists():
+        content = target_env.read_text(encoding="utf-8")
+        for line in content.splitlines():
+            line = line.strip()
+            if line.startswith("DELTA_API_KEY=") and len(line.split("=", 1)[1].strip().strip('"').strip("'")) > 0:
+                failures.append("Gate 1 Failed: DELTA_API_KEY present in .env file.")
+            elif line.startswith("DELTA_API_SECRET=") and len(line.split("=", 1)[1].strip().strip('"').strip("'")) > 0:
+                failures.append("Gate 1 Failed: DELTA_API_SECRET present in .env file.")
+
+    # Gate 2: Broker namespace isolation & paper-only configuration
     trading_mode = "PAPER"
     live_enabled = "false"
     
@@ -114,52 +131,86 @@ def execute_preflight_safety_gates(
     if trading_mode != "PAPER":
         failures.append(f"Gate 2 Failed: TRADING_MODE is '{trading_mode}', must be 'PAPER'.")
     if live_enabled not in ("false", "0"):
-        failures.append(f"Gate 3 Failed: LIVE_TRADING_ENABLED is '{live_enabled}', must be 'false'.")
+        failures.append(f"Gate 2 Failed: LIVE_TRADING_ENABLED is '{live_enabled}', must be 'false'.")
 
-    # Gate 4: Trading daemon stopped
     if is_daemon_running_fn and is_daemon_running_fn():
-        failures.append("Gate 4 Failed: Trading daemon process is currently running. Must be stopped.")
+        failures.append("Gate 2 Failed: Trading daemon process is currently running. Must be stopped.")
 
-    # Gate 5: Zero broker or order dependency
-    # Static check: ensure position size guard is 1 micro-lot
+    # Check that live broker execution modules are not loaded
+    forbidden_broker_modules = ["execution.broker", "delta_paper_bot", "execution.order_manager", "execution.live_broker"]
+    for mod in forbidden_broker_modules:
+        if mod in sys.modules:
+            failures.append(f"Gate 2 Failed: Broker module '{mod}' is loaded in sys.modules.")
+
     from risk.position_size_guard import APPROVED_MAX_PAPER_LOTS
     if APPROVED_MAX_PAPER_LOTS != 1:
-        failures.append(f"Gate 5 Failed: APPROVED_MAX_PAPER_LOTS is {APPROVED_MAX_PAPER_LOTS}, must be 1.")
+        failures.append(f"Gate 2 Failed: APPROVED_MAX_PAPER_LOTS is {APPROVED_MAX_PAPER_LOTS}, must be 1.")
 
-    # Gate 6: Product is strictly XAUTUSD
+    # Gate 3: Git working-tree cleanliness
+    if git_clean_check_fn:
+        is_clean, err_msg = git_clean_check_fn()
+        if not is_clean:
+            failures.append(f"Gate 3 Failed: Working tree not clean or commit invalid: {err_msg}")
+
+    # Gate 4: Product is strictly XAUTUSD
     if config.symbol != "XAUTUSD":
-        failures.append(f"Gate 6 Failed: Symbol '{config.symbol}' != 'XAUTUSD'.")
+        failures.append(f"Gate 4 Failed: Symbol '{config.symbol}' != 'XAUTUSD'.")
 
-    # Gate 7: Public endpoints allowlisted
+    # Gate 5: Maximum 3,600-second duration
+    if config.max_duration_seconds > 3600.0 or config.max_duration_seconds <= 0:
+        failures.append(f"Gate 5 Failed: Max duration {config.max_duration_seconds}s > 3600s.")
+
+    # Gate 6: Queue maximum 1,000
+    if config.max_message_queue_size > 1000 or config.max_message_queue_size <= 0:
+        failures.append(f"Gate 6 Failed: Max queue size {config.max_message_queue_size} > 1000.")
+
+    # Gate 7: Memory maximum 150 MB
+    if config.max_memory_mb > 150.0 or config.max_memory_mb <= 0:
+        failures.append(f"Gate 7 Failed: Memory limit {config.max_memory_mb}MB exceeds 150MB budget.")
+
+    # Gate 8: Disk maximum 25 MB
+    if config.max_disk_mb > 25.0 or config.max_disk_mb <= 0:
+        failures.append(f"Gate 8 Failed: Disk limit {config.max_disk_mb}MB exceeds 25MB budget.")
+
+    # Gate 9: Restart policy set to "never"
+    if config.restart_policy != "never":
+        failures.append(f"Gate 9 Failed: Restart policy '{config.restart_policy}' != 'never'.")
+
+    # Gate 10: Observer output directory isolated
+    try:
+        resolved_out = config.output_dir.resolve()
+        validate_shadow_write_path(resolved_out / "test_probe.tmp")
+        name_lower = str(resolved_out).lower()
+        if "system32" in name_lower or ("windows" in name_lower and "temp" not in name_lower):
+            raise ShadowObserverSafetyViolation(f"Output path in system directory is prohibited: {resolved_out}")
+    except Exception as exc:
+        failures.append(f"Gate 10 Failed: Output directory isolation violation: {exc}")
+
+    # Gate 11: Outbound connectivity probe behavior (strictly offline-safe)
     try:
         t_cfg = TransportConfig(symbol=config.symbol)
         t_cfg.validate_config()
     except Exception as exc:
-        failures.append(f"Gate 7 Failed: Endpoint validation error: {exc}")
+        failures.append(f"Gate 11 Failed: Endpoint validation error: {exc}")
 
-    # Gate 8: Observer output directory isolated
-    try:
-        safe_out = validate_shadow_write_path(config.output_dir / "test_probe.tmp", allowed_root=config.output_dir)
-    except Exception as exc:
-        failures.append(f"Gate 8 Failed: Output directory isolation violation: {exc}")
+    if connectivity_probe_fn:
+        probe_ok, probe_err = connectivity_probe_fn()
+        if not probe_ok:
+            failures.append(f"Gate 11 Failed: Outbound connectivity probe failed: {probe_err}")
 
-    # Gate 9: Queue and memory bounds
-    if config.max_message_queue_size > 1000:
-        failures.append(f"Gate 9 Failed: Max queue size {config.max_message_queue_size} > 1000.")
-    if config.max_memory_mb > 150.0:
-        failures.append(f"Gate 9 Failed: Memory limit {config.max_memory_mb}MB exceeds 150MB budget.")
-
-    # Gate 10: Automatic timeout <= 60 minutes
-    if config.max_duration_seconds > 3600.0 or config.max_duration_seconds <= 0:
-        failures.append(f"Gate 10 Failed: Max duration {config.max_duration_seconds}s > 3600s.")
-
-    # Gate 11: Human-controlled stop mechanism
-    # Config must allow external stop signal
-    # (always verified by runner design)
-
-    # Gate 12: No automatic restart
-    if config.restart_policy != "never":
-        failures.append(f"Gate 12 Failed: Restart policy '{config.restart_policy}' != 'never'.")
+    # Gate 12: Host resource headroom
+    if host_headroom_check_fn:
+        headroom_ok, headroom_err = host_headroom_check_fn()
+        if not headroom_ok:
+            failures.append(f"Gate 12 Failed: Host resource headroom check failed: {headroom_err}")
+    else:
+        try:
+            total, used, free = shutil.disk_usage(config.output_dir.resolve().anchor or str(config.output_dir.resolve()))
+            free_gb = free / (1024 ** 3)
+            if free_gb < 1.0:
+                failures.append(f"Gate 12 Failed: Insufficient free disk space ({free_gb:.2f} GB free, minimum 1.0 GB required).")
+        except Exception as exc:
+            logger.debug("Host disk check error: %s", exc)
 
     all_passed = len(failures) == 0
     return all_passed, failures
@@ -196,6 +247,8 @@ class ShadowDryRunRunner:
         self.shutdown_reason: Optional[str] = None
         self.stop_requested: bool = False
         self.has_terminated: bool = False
+        self.detected_forbidden_key: Optional[str] = None
+        self.detected_symbol_mismatch: Optional[str] = None
 
         # Metric accumulators
         self.peak_memory_mb: float = 0.0
@@ -234,6 +287,17 @@ class ShadowDryRunRunner:
         self.stop_requested = True
         self.stop(reason)
 
+    def validate_payload_safety(self, payload: Any) -> bool:
+        """Scan raw message payload for forbidden authentication keys or private endpoints."""
+        as_str = json.dumps(payload).lower() if isinstance(payload, (dict, list)) else str(payload).lower()
+        forbidden_keys = ["api-key", "delta-signature", "delta-timestamp", "private_key", "secret", "authorization", "api_key"]
+        for key in forbidden_keys:
+            if key in as_str:
+                self.detected_forbidden_key = key
+                self.stop(f"PRIVATE_KEY_IN_PAYLOAD: Sensitive auth keyword '{key}' detected in payload.")
+                return False
+        return True
+
     def evaluate_stop_conditions(self, now_epoch: Optional[float] = None) -> Tuple[bool, Optional[str]]:
         """Evaluate all 10 automatic stop conditions at the current time.
         
@@ -247,11 +311,7 @@ class ShadowDryRunRunner:
         if elapsed >= self.config.max_duration_seconds:
             return True, f"MAX_DURATION_REACHED: Observation completed 60 minutes ({elapsed:.1f}s)."
 
-        # Condition 2: Human Stop Requested
-        if self.stop_requested:
-            return True, "HUMAN_STOP_SIGNAL: Stop requested by operator."
-
-        # Condition 3: Feed Stale
+        # Condition 2: Feed Stale
         if self.supervisor.reader.last_ticker_time is not None:
             is_stale, stale_sec = self.supervisor.reader.is_feed_stale(now_epoch=curr_time)
         else:
@@ -261,13 +321,19 @@ class ShadowDryRunRunner:
         if is_stale:
             return True, f"STALE_FEED: No ticker update received for {stale_sec:.1f}s (threshold {self.config.stale_feed_threshold_seconds}s)."
 
-        # Condition 4: Queue Overflow Occurred
+        # Condition 3: Queue Overflow Occurred
         if self.supervisor.queue_overflow_count > 0:
             return True, f"QUEUE_OVERFLOW: Event queue overflowed ({self.supervisor.queue_overflow_count} events dropped)."
 
-        # Condition 5: Product Identity Validation Failed
+        # Condition 4: Symbol Mismatch
         if self.config.symbol != "XAUTUSD":
-            return True, f"PRODUCT_IDENTITY_VIOLATION: Symbol '{self.config.symbol}' != 'XAUTUSD'."
+            return True, f"SYMBOL_MISMATCH: Symbol '{self.config.symbol}' != 'XAUTUSD'."
+        if self.detected_symbol_mismatch:
+            return True, f"SYMBOL_MISMATCH: Foreign symbol detected in feed: '{self.detected_symbol_mismatch}'"
+
+        # Condition 5: Private Key / Sensitive Auth Token Detected
+        if self.detected_forbidden_key:
+            return True, f"PRIVATE_KEY_IN_PAYLOAD: Sensitive keyword '{self.detected_forbidden_key}' detected in payload."
 
         # Condition 6: Memory Exceeded
         mem = self.memory_check_fn()
@@ -281,7 +347,11 @@ class ShadowDryRunRunner:
         if disk > self.config.max_disk_mb:
             return True, f"DISK_BUDGET_EXCEEDED: Disk usage {disk:.2f}MB exceeds limit of {self.config.max_disk_mb}MB."
 
-        # Condition 8: Supervisor Degraded Beyond Stale/Drop
+        # Condition 8: Human Operator Manual Halt
+        if self.stop_requested:
+            return True, "MANUAL_HALT: Stop requested by operator."
+
+        # Condition 9: Max Reconnects Exceeded
         if self.supervisor.state == ConnectionState.DEGRADED and self.supervisor.reconnect_ctrl.consecutive_failures >= 5:
             return True, "MAX_RECONNECTS_EXCEEDED: Transport failed 5 consecutive reconnect attempts."
 
@@ -296,14 +366,21 @@ class ShadowDryRunRunner:
         if not self.is_running:
             return False
 
-        curr_time = now_epoch if now_epoch is not None else self.time_fn()
-        should_stop, reason = self.evaluate_stop_conditions(now_epoch=curr_time)
+        try:
+            curr_time = now_epoch if now_epoch is not None else self.time_fn()
+            should_stop, reason = self.evaluate_stop_conditions(now_epoch=curr_time)
 
-        if should_stop:
-            self.stop(reason or "AUTOMATIC_STOP_CONDITION_MET")
-            return False
+            if should_stop:
+                self.stop(reason or "AUTOMATIC_STOP_CONDITION_MET")
+                return False
 
-        return True
+            return True
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                self.stop("MANUAL_HALT: Process signal received")
+            else:
+                self.stop(f"UNHANDLED_EXCEPTION: {type(exc).__name__}: {exc}")
+            raise
 
     def stop(self, reason: str = "NORMAL_SHUTDOWN") -> None:
         """Execute graceful shutdown sequence with zero order execution."""
@@ -312,8 +389,11 @@ class ShadowDryRunRunner:
 
         self.is_running = False
         self.has_terminated = True
-        self.stop_epoch = self.time_fn()
         self.shutdown_reason = reason
+        try:
+            self.stop_epoch = self.time_fn()
+        except BaseException:
+            self.stop_epoch = None
 
         logger.info("Stopping ShadowDryRunRunner: %s", reason)
 
