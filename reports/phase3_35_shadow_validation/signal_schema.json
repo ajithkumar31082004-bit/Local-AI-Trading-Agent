@@ -1,0 +1,131 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ShadowEvaluationEvent",
+  "description": "Standard schema for hypothetical strategy signal events produced by the Read-Only Shadow Observer.",
+  "type": "object",
+  "required": [
+    "label",
+    "is_order",
+    "event_id",
+    "timestamp_utc",
+    "timestamp_ist",
+    "instrument",
+    "candle_timeframe",
+    "market_regime",
+    "regime_confidence",
+    "is_warming_up",
+    "winning_strategy",
+    "winning_signal",
+    "risk_reward_ratio",
+    "signal_quality_score",
+    "diagnostic_code",
+    "sub_strategy_signals"
+  ],
+  "properties": {
+    "label": {
+      "type": "string",
+      "enum": ["HYPOTHETICAL — NOT AN ORDER"],
+      "description": "Mandatory prominent legal and operational disclaimer."
+    },
+    "is_order": {
+      "type": "boolean",
+      "enum": [false],
+      "description": "Hard invariant indicating that this record does NOT represent an order."
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^SHADOW_EVT_[0-9]{6}$",
+      "description": "Unique sequential event identifier."
+    },
+    "timestamp_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of evaluation."
+    },
+    "timestamp_ist": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 Asia/Kolkata timestamp of evaluation."
+    },
+    "instrument": {
+      "type": "string",
+      "enum": ["XAUTUSD"],
+      "description": "Trading pair evaluated."
+    },
+    "candle_timeframe": {
+      "type": "string",
+      "enum": ["5m", "15m"],
+      "description": "Base candle aggregation interval."
+    },
+    "market_regime": {
+      "type": "string",
+      "description": "Classification from Market Regime Detector (e.g., TRENDING_BULL, TRENDING_BEAR, RANGING, UNCERTAIN, VOLATILE_BREAKOUT)."
+    },
+    "regime_confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Confidence score of the market regime classification."
+    },
+    "is_warming_up": {
+      "type": "boolean",
+      "description": "Flag indicating if indicator history is still warming up."
+    },
+    "winning_strategy": {
+      "type": "string",
+      "description": "Name of the winning strategy selected by arbitration."
+    },
+    "winning_signal": {
+      "type": "string",
+      "enum": ["BUY", "SELL", "NO_SIGNAL"],
+      "description": "Hypothetical signal outcome."
+    },
+    "entry_reference_price": {
+      "type": ["number", "null"],
+      "description": "Hypothetical entry price level calculated by strategy."
+    },
+    "hypothetical_sl": {
+      "type": ["number", "null"],
+      "description": "Hypothetical stop-loss level."
+    },
+    "hypothetical_tp": {
+      "type": ["number", "null"],
+      "description": "Hypothetical take-profit level."
+    },
+    "risk_reward_ratio": {
+      "type": "number",
+      "description": "Planned hypothetical risk/reward multiple."
+    },
+    "signal_quality_score": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Composite score based on volume, trend alignment, and momentum."
+    },
+    "rejection_reason": {
+      "type": ["string", "null"],
+      "description": "Explicit reason why no signal was generated or why signal was rejected."
+    },
+    "diagnostic_code": {
+      "type": "string",
+      "description": "Short programmatic diagnostic tag (e.g. OK, WARMING_UP, REGIME_UNCERTAIN, FLAT_EMA_SLOPE)."
+    },
+    "sub_strategy_signals": {
+      "type": "object",
+      "description": "Map of independent signal evaluations for all 6 individual strategies.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "direction": {"type": "string"},
+          "entry": {"type": ["number", "null"]},
+          "sl": {"type": ["number", "null"]},
+          "tp": {"type": ["number", "null"]},
+          "r_multiple": {"type": "number"},
+          "quality_score": {"type": "number"},
+          "diagnostic_code": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      }
+    }
+  }
+}
