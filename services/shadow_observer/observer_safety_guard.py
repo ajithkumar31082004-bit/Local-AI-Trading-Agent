@@ -49,9 +49,11 @@ def validate_shadow_write_path(target_path: Union[str, Path], allowed_root: Opti
     """
     path = Path(target_path).resolve()
     
-    # 1. Deny forbidden filenames
+    # 1. Deny forbidden filenames (case-insensitive)
+    name_lower = path.name.lower()
     for forbidden in FORBIDDEN_WRITE_TARGETS:
-        if path.name == forbidden or path.name.startswith(forbidden):
+        forbidden_lower = forbidden.lower()
+        if name_lower == forbidden_lower or name_lower.startswith(forbidden_lower):
             msg = f"SECURITY VIOLATION: Observer attempted to write to protected state file: {path.name}"
             logger.critical(msg)
             raise ShadowObserverSafetyViolation(msg)

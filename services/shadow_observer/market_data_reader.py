@@ -69,7 +69,8 @@ class PublicMarketDataReader:
                 if self.last_ticker_time is not None and tick_epoch < self.last_ticker_time:
                     self.out_of_order_count += 1
                     logger.warning("Out of order ticker tick: %f < %f", tick_epoch, self.last_ticker_time)
-                self.last_ticker_time = tick_epoch
+                else:
+                    self.last_ticker_time = tick_epoch
             except Exception:
                 self.last_ticker_time = curr_time
         else:
