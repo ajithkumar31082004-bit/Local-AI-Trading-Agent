@@ -26,6 +26,11 @@ from .market_data_reader import (
 from .shadow_report import (
     ShadowReportGenerator,
 )
+from .dry_run_runner import (
+    DryRunConfig,
+    execute_preflight_safety_gates,
+    ShadowDryRunRunner,
+)
 
 __all__ = [
     "ShadowObserverSafetyViolation",
@@ -42,5 +47,8 @@ __all__ = [
     "PUBLIC_WS_URL",
     "TARGET_INSTRUMENT",
     "ShadowReportGenerator",
+    "DryRunConfig",
+    "execute_preflight_safety_gates",
+    "ShadowDryRunRunner",
 ]
 
