@@ -64,6 +64,7 @@ class TransportSupervisor:
         self.total_ticks_processed: int = 0
         self.total_candles_processed: int = 0
         self.total_candles_rejected: int = 0
+        self.queue_overflow_count: int = 0
 
     def start(self, now_epoch: Optional[float] = None) -> bool:
         """Initialize transport components and establish connections."""
@@ -120,6 +121,13 @@ class TransportSupervisor:
     def on_tick_received(self, tick: NormalizedTick) -> None:
         """Callback for incoming public ticker ticks."""
         self.total_ticks_processed += 1
+        if len(self.event_queue) >= self.config.max_message_queue_size:
+            self.queue_overflow_count += 1
+            if self.queue_overflow_count == 1 or self.queue_overflow_count % 100 == 0:
+                logger.warning(
+                    "Event queue overflow (capacity %d). Oldest event dropped. Total drops: %d",
+                    self.config.max_message_queue_size, self.queue_overflow_count
+                )
         self.event_queue.append(tick)
 
         # Ingest into existing market data reader
@@ -150,6 +158,13 @@ class TransportSupervisor:
 
         # 2. Buffer validated completed candle
         self.reader.ingest_completed_candle(candle_dict)
+        if len(self.event_queue) >= self.config.max_message_queue_size:
+            self.queue_overflow_count += 1
+            if self.queue_overflow_count == 1 or self.queue_overflow_count % 100 == 0:
+                logger.warning(
+                    "Event queue overflow (capacity %d). Oldest event dropped. Total drops: %d",
+                    self.config.max_message_queue_size, self.queue_overflow_count
+                )
         self.event_queue.append(candle)
         return True, None
 
@@ -174,6 +189,7 @@ class TransportSupervisor:
             "total_candles_processed": self.total_candles_processed,
             "total_candles_rejected": self.total_candles_rejected,
             "queue_depth": len(self.event_queue),
+            "queue_overflow_count": self.queue_overflow_count,
             "reconnect_telemetry": self.reconnect_ctrl.get_telemetry(),
             "ws_state": self.ws_client.get_state().value,
             "rest_state": self.rest_client.get_state().value,

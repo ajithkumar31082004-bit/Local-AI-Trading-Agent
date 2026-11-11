@@ -93,7 +93,7 @@ class PublicWebSocketClient(ITransportClient):
             self._send_subscription()
             return True
 
-        except Exception as exc:
+        except (Exception, BaseException) as exc:
             self.state = ConnectionState.DISCONNECTED
             self.disconnect_reason = f"Connection failed: {exc}"
             logger.error("Failed to connect WebSocket: %s", exc)
