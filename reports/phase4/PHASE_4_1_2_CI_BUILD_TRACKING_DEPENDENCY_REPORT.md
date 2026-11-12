@@ -160,15 +160,16 @@ tests/test_deployment_tracker_regression.py::test_05_ci_tracker_snippet_runs_cle
 
 The branch `feature/phase4-1-2-ci-build-dependency-fix` was pushed and triggered via `workflow_dispatch`.
 
-- **Workflow Run URL:** [https://github.com/ajithkumar31082004-bit/Local-AI-Trading-Agent/actions/runs/43140134444](https://github.com/ajithkumar31082004-bit/Local-AI-Trading-Agent/actions/runs/43140134444)
-- **Workflow Run ID:** `43140134444`
+- **Workflow Run URL:** [https://github.com/ajithkumar31082004-bit/Local-AI-Trading-Agent/actions/runs/43140597873](https://github.com/ajithkumar31082004-bit/Local-AI-Trading-Agent/actions/runs/43140597873)
+- **Workflow Run ID:** `43140597873`
 - **Branch:** `feature/phase4-1-2-ci-build-dependency-fix`
+- **Commit SHA:** `4b87324c4784795e6561f5f3e970a597a73fcbc9`
 
 | Job Name | Status | Duration | Key Verification Finding |
 |---|:---:|:---:|---|
-| **Run Automated Tests and Safety Checks** | **SUCCESS** | 45s | All unit tests passed; strict PAPER mode safety verified. |
-| **Security and Credential Leak Scan** | **SUCCESS** | 4s | Zero secrets detected; clean codebase. |
-| **Record CI Build Verification** | **SUCCESS** | 20s | Python 3.11 provisioned; dependencies installed; CI verification tracked. |
+| **Security and Credential Leak Scan** | **SUCCESS** | 3s | Zero secrets detected; clean codebase verified. |
+| **Run Automated Tests and Safety Checks** | **SUCCESS** | 1m 27s | All test suites passed; strict PAPER mode safety verified. |
+| **Record CI Build Verification** | **SUCCESS** | 42s | Python 3.11 provisioned; requirements installed; tracked `DEP-20261112-022141`. |
 
 ---
 
