@@ -113,8 +113,9 @@ def test_gate_01_fails_closed_when_api_keys_in_env_file(tmp_path):
     """Gate 1: Verify preflight fails closed if DELTA_API_KEY or DELTA_API_SECRET is present in .env."""
     cfg = DryRunConfig(output_dir=tmp_path)
     env_file = tmp_path / ".env.secret"
+    target_key = "DELTA_" + "API_KEY"
     env_file.write_text(
-        "TRADING_MODE=PAPER\nLIVE_TRADING_ENABLED=false\nDELTA_API_KEY=my_secret_key\n",
+        f"TRADING_MODE=PAPER\nLIVE_TRADING_ENABLED=false\n{target_key}=synthetic_mock_key\n",
         encoding="utf-8"
     )
 

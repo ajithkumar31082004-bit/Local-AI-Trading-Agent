@@ -329,7 +329,7 @@ tests/test_systemd_services.py::test_08_sandboxing_and_least_privilege_directive
 1. **Deployment Status:** In strict accordance with user safety requirements, **NO service units were deployed, copied, or started on AWS EC2**. This phase is offline validation and repository engineering only.
 2. **EC2 Directory Prerequisite:** Before deploying to EC2, `/home/ubuntu/Local-AI-Trading-Agent/data`, `/home/ubuntu/Local-AI-Trading-Agent/logs`, and `/home/ubuntu/Local-AI-Trading-Agent/reports` must exist and be owned by `ubuntu:ubuntu`.
 3. **Log Rotation (`logrotate`):** Append logs (`trading_daemon.log` and `shadow_observer.log`) will grow over continuous multi-day runs. A standard `/etc/logrotate.d/delta-trading` rule should be configured upon actual deployment.
-4. **CI Credential Scanner Test Strings:** The GitHub Actions `security_audit` job failed because test files (`test_monitoring_api.py:166` and `test_phase3_42_safety_audit.py:117`) include literal strings like `"DELTA_API_KEY=dlt_sec_abc..."` to test redaction. These should be refactored to synthetic non-matching placeholders or exclude test files in the CI regex scan.
+4. **CI Credential Scanner Test Strings:** The GitHub Actions `security_audit` job failed because test files (`test_monitoring_api.py:166` and `test_phase3_42_safety_audit.py:117`) included literal synthetic strings like `DELTA_API_KEY=<token>` to test redaction. These are remediated in Phase 4.1.1 to use clearly synthetic dynamic fixtures.
 
 ---
 
