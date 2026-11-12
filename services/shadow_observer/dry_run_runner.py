@@ -476,3 +476,71 @@ class ShadowDryRunRunner:
         report_data = self.generate_readiness_report()
         safe_path.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
         return safe_path
+
+
+def main() -> None:
+    """CLI entry point for standalone execution of ShadowDryRunRunner."""
+    import argparse
+    import signal
+
+    parser = argparse.ArgumentParser(
+        description="Read-Only Shadow Observer for XAUTUSD on Delta Exchange India."
+    )
+    parser.add_argument(
+        "--symbol",
+        default="XAUTUSD",
+        help="Target trading instrument symbol (default: XAUTUSD).",
+    )
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=3600.0,
+        help="Observation duration in seconds (default: 3600.0, max: 3600.0).",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=1.0,
+        help="Supervision tick interval in seconds (default: 1.0).",
+    )
+    args = parser.parse_args()
+
+    cfg = DryRunConfig(symbol=args.symbol, max_duration_seconds=args.duration)
+    runner = ShadowDryRunRunner(config=cfg)
+
+    def handle_signal(sig, frame):
+        logger.info("Signal %s received; gracefully shutting down shadow observer...", sig)
+        runner.request_stop("SIGNAL_RECEIVED")
+        try:
+            report_file = runner.save_readiness_report()
+            logger.info("Saved readiness report on signal shutdown: %s", report_file)
+        except Exception as exc:
+            logger.warning("Could not save readiness report during signal shutdown: %s", exc)
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    logger.info("Starting ShadowDryRunRunner for %s (duration: %.0fs)...", args.symbol, args.duration)
+    if not runner.start():
+        logger.error("ShadowDryRunRunner failed preflight gates.")
+        sys.exit(1)
+
+    try:
+        while runner.is_running:
+            runner.tick()
+            time.sleep(args.poll_interval)
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received.")
+    finally:
+        runner.stop("SHUTDOWN_LOOP_EXIT")
+        try:
+            report_file = runner.save_readiness_report()
+            logger.info("Final readiness report saved to: %s", report_file)
+        except Exception as exc:
+            logger.warning("Could not save final readiness report: %s", exc)
+
+
+if __name__ == "__main__":
+    main()
+

@@ -1,0 +1,59 @@
+[Unit]
+Description=Delta Exchange India Paper Trading Daemon (XAUTUSD Perpetual Futures)
+Documentation=https://github.com/ajithkumar31082004-bit/Local-AI-Trading-Agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/Local-AI-Trading-Agent
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/ubuntu/Local-AI-Trading-Agent/.env
+
+# Strict Pre-Start Safety Gate: Refuses to start if TRADING_MODE is not PAPER or LIVE_TRADING_ENABLED is true
+ExecStartPre=/home/ubuntu/Local-AI-Trading-Agent/.venv/bin/python -c "\
+import os, sys; \
+from config.orb_settings import settings; \
+assert settings.mode == 'PAPER', 'FATAL: TRADING_MODE must be PAPER'; \
+assert settings.trading_mode == 'PAPER', 'FATAL: trading_mode alias must be PAPER'; \
+assert settings.live_trading_enabled is False, 'FATAL: LIVE_TRADING_ENABLED must be False'; \
+assert os.getenv('TRADING_MODE', 'PAPER') == 'PAPER', 'FATAL: Environment TRADING_MODE != PAPER'; \
+assert os.getenv('LIVE_TRADING_ENABLED', 'false').lower() == 'false', 'FATAL: Environment LIVE_TRADING_ENABLED is true'; \
+print('Pre-start safety verification PASSED: Strict PAPER mode enforced.')"
+
+# Production Entry Point: Continuous paper trading runloop
+ExecStart=/home/ubuntu/Local-AI-Trading-Agent/.venv/bin/python cli.py paper-live --strategy PORTFOLIO
+
+# Graceful Shutdown: Sends SIGINT so bot.stop() cleanly closes WebSockets and persists simulated state
+KillSignal=SIGINT
+TimeoutStopSec=30
+FinalKillSignal=SIGKILL
+
+# Controlled Restart Limits: On-failure restart with 10s backoff, bounded to 3 restarts per 300s window
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=append:/home/ubuntu/Local-AI-Trading-Agent/data/trading_daemon.log
+StandardError=append:/home/ubuntu/Local-AI-Trading-Agent/data/trading_daemon.log
+
+# Security Sandboxing & Least Privilege Restrictions
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/Local-AI-Trading-Agent/data /home/ubuntu/Local-AI-Trading-Agent/logs
+ReadOnlyPaths=/home/ubuntu/Local-AI-Trading-Agent
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
