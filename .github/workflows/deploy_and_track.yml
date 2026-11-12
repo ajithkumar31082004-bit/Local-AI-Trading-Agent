@@ -30,9 +30,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install fastapi uvicorn httpx pytest
+          python -m pip install --upgrade --only-binary :all: pip==24.3.1
+          pip install -r requirements.txt --only-binary :all:
 
       - name: Run Core Test Suite
         run: |
@@ -96,8 +95,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install --upgrade --only-binary :all: pip==24.3.1
+          pip install -r requirements.txt --only-binary :all:
 
       - name: Record CI Verification
         run: |

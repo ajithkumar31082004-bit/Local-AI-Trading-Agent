@@ -23,6 +23,7 @@ import threading
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import re
 from typing import Dict, Any, List, Optional, Tuple, Set
 from urllib.parse import urlparse
 
@@ -34,7 +35,11 @@ if sys.prefix == getattr(sys, "base_prefix", sys.prefix):
     venv_py_nix = PROJECT_ROOT / ".venv" / "bin" / "python3"
     venv_py = venv_py_win if sys.platform == "win32" else venv_py_nix
     if venv_py.exists() and sys.executable != str(venv_py):
-        os.execv(str(venv_py), [str(venv_py)] + sys.argv)
+        # Sanitize arguments strictly to prevent command-line argument injection
+        safe_arg_pattern = re.compile(r"^[a-zA-Z0-9_\-\./:=]+$")
+        clean_args = [arg for arg in sys.argv[1:] if safe_arg_pattern.match(arg)]
+        current_script = str(Path(__file__).resolve())
+        os.execv(str(venv_py), [str(venv_py), current_script] + clean_args)
 
 import requests
 import websockets

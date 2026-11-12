@@ -5,6 +5,7 @@ from config.orb_settings import ORBSettings
 from strategy.arbitrator import arbitrate_strategies, evaluate_arbitrated_portfolio
 from strategy.orb_ema_volume import Signal
 from regime.market_regime import MarketRegime
+from tests.fixtures.synthetic_market_data import create_synthetic_bearish_continuation_df
 
 
 def make_cfg(**kwargs):
@@ -28,25 +29,7 @@ def make_cfg(**kwargs):
 def test_arbitrator_selects_best_signal():
     """In a strong bearish move with pullback, arbitrator selects the highest quality eligible signal."""
     cfg = make_cfg(session_start="09:00", session_end="23:30")
-    idx = pd.date_range("2026-10-30 07:00", periods=160, freq="5min", tz="Asia/Kolkata")
-    closes = [4100.0 - (i * 0.8) for i in range(160)]
-    opens = [c + 0.5 for c in closes]
-    highs = [c + 2.0 for c in closes]
-    lows = [c - 2.0 for c in closes]
-    vols = [100000.0] * 160
-
-    # Pullback near end
-    closes[156] = closes[155] + 5.0
-    highs[156] = closes[156] + 4.0
-
-    # Bar 159 bearish continuation
-    opens[159] = closes[158] + 1.0
-    highs[159] = opens[159] + 3.0
-    closes[159] = opens[159] - 4.0
-    lows[159] = closes[159] - 0.5
-    vols[159] = 180000.0
-
-    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols}, index=idx)
+    df = create_synthetic_bearish_continuation_df(continuation_vol=180000.0)
     arb_res = arbitrate_strategies(df, cfg)
 
     assert arb_res.regime_result.regime == MarketRegime.TRENDING_BEARISH
