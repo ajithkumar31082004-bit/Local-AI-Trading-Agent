@@ -1,5 +1,6 @@
 """Deterministic lot sizing with official contract specifications, trading costs, leverage, and crash-persistent daily risk guard."""
 import logging
+import os
 import tempfile
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -186,12 +187,41 @@ class DailyRiskState:
         return data
 
     def _save_unlocked(self, state: Dict[str, Any]) -> None:
-        """Write state atomically via a tmp file within the same directory."""
-        tmp = self.path.parent / f"{self.path.name}.tmp"
-        if not tmp.parent.samefile(self.path.parent):
-            raise ValueError(f"Refusing to write state file outside allowed directory: {tmp}")
-        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        tmp.replace(self.path)
+        """Write state atomically via a securely created temp file in the same directory."""
+        if self.path.is_symlink():
+            raise ValueError(f"Refusing to write state to symlink: {self.path}")
+
+        parent_dir = self.path.parent
+        parent_dir.mkdir(parents=True, exist_ok=True)
+
+        tmp_path: Optional[Path] = None
+        try:
+            # Secure temporary file creation with restrictive mode (0o600 on POSIX via mkstemp)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=parent_dir,
+                prefix=f"{self.path.stem}_",
+                suffix=".tmp",
+                delete=False,
+                encoding="utf-8",
+            ) as tf:
+                tmp_path = Path(tf.name)
+                json.dump(state, tf, indent=2)
+                tf.flush()
+                os.fsync(tf.fileno())
+
+            if os.name == "posix":
+                os.chmod(tmp_path, 0o600)
+
+            # Atomic replacement within same filesystem directory
+            tmp_path.replace(self.path)
+        except Exception:
+            if tmp_path is not None and tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+            raise
 
     def _can_trade_unlocked(self, state: Dict[str, Any], now: Optional[datetime] = None) -> Tuple[bool, str]:
         if state["realized_pnl"] <= -abs(self.cfg.daily_loss_limit_pct) / 100.0:

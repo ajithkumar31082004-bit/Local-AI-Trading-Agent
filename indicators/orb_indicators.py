@@ -111,8 +111,8 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> 
     pos_dm_smooth = pd.Series(pos_dm, index=close.index).ewm(alpha=alpha, adjust=False, min_periods=period).mean()
     neg_dm_smooth = pd.Series(neg_dm, index=close.index).ewm(alpha=alpha, adjust=False, min_periods=period).mean()
     
-    pos_di = 100.0 * (pos_dm_smooth / (tr_smooth + 1e-12))
-    neg_di = 100.0 * (neg_dm_smooth / (tr_smooth + 1e-12))
+    pos_di = 100.0 * (pos_dm_smooth / tr_smooth.add(1e-12))
+    neg_di = 100.0 * (neg_dm_smooth / tr_smooth.add(1e-12))
     
     dx = 100.0 * (pos_di - neg_di).abs() / (pos_di + neg_di + 1e-12)
     return dx.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
