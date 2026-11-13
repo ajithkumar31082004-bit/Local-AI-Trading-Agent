@@ -1,0 +1,142 @@
+================================================================================
+PHASE 3.39 INDEPENDENT TRANSPORT CODE AUDIT — TEST EXECUTION RESULTS
+================================================================================
+Date: 2026-11-11
+Repository: ajithkumar31082004-bit/Local-AI-Trading-Agent
+Branch: feature/phase3-39-independent-transport-audit
+Base Commit: 6f94e95
+Environment: Local Windows Offline / Python 3.13.14 / pytest 9.1.1
+Mode: STRICT READ-ONLY SHADOW / OFFLINE MOCKED ONLY
+
+--------------------------------------------------------------------------------
+1. PHASE 3.39 INDEPENDENT ADVERSARIAL TRANSPORT AUDIT TESTS (15 TESTS)
+--------------------------------------------------------------------------------
+Command: .venv\Scripts\python -m pytest tests/test_phase3_39_transport_audit.py -v
+
+============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0 -- C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collecting ... collected 15 items
+
+tests/test_phase3_39_transport_audit.py::test_01_all_six_lifecycle_states_and_transitions PASSED [  6%]
+tests/test_phase3_39_transport_audit.py::test_02_duplicate_connection_guards PASSED [ 13%]
+tests/test_phase3_39_transport_audit.py::test_03_connection_timeout_and_refusal_cleanup PASSED [ 20%]
+tests/test_phase3_39_transport_audit.py::test_04_reconnect_controller_math_and_bounds PASSED [ 26%]
+tests/test_phase3_39_transport_audit.py::test_05_cancellation_during_connection_and_streaming PASSED [ 33%]
+tests/test_phase3_39_transport_audit.py::test_06_socket_closure_after_exceptions PASSED [ 40%]
+tests/test_phase3_39_transport_audit.py::test_07_repeated_start_stop_cycles PASSED [ 46%]
+tests/test_phase3_39_transport_audit.py::test_08_bounded_queue_and_observable_overflow PASSED [ 53%]
+tests/test_phase3_39_transport_audit.py::test_09_bounded_reconnect_history PASSED [ 60%]
+tests/test_phase3_39_transport_audit.py::test_10_logging_flood_protection PASSED [ 66%]
+tests/test_phase3_39_transport_audit.py::test_11_ast_isolation_and_zero_credentials PASSED [ 73%]
+tests/test_phase3_39_transport_audit.py::test_12_strict_product_identity PASSED [ 80%]
+tests/test_phase3_39_transport_audit.py::test_13_separate_exchange_and_receipt_timestamps PASSED [ 86%]
+tests/test_phase3_39_transport_audit.py::test_14_malformed_incomplete_and_stale_events PASSED [ 93%]
+tests/test_phase3_39_transport_audit.py::test_15_safety_invariants_and_historical_ledger PASSED [100%]
+
+============================= 15 passed in 3.12s ==============================
+
+--------------------------------------------------------------------------------
+2. COMBINED SHADOW OBSERVER TEST SUITES (60 TESTS)
+--------------------------------------------------------------------------------
+Command: .venv\Scripts\python -m pytest tests/test_phase3_35_shadow_validation.py tests/test_phase3_36_independent_shadow_audit.py tests/test_phase3_38_transport_adapter.py tests/test_phase3_39_transport_audit.py -v
+
+============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0 -- C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collecting ... collected 60 items
+
+tests/test_phase3_35_shadow_validation.py::test_1_strategy_registry_discovery PASSED [  1%]
+tests/test_phase3_35_shadow_validation.py::test_2_completed_candle_validation_and_incomplete_rejection PASSED [  3%]
+tests/test_phase3_35_shadow_validation.py::test_3_duplicate_candle_rejection PASSED [  5%]
+tests/test_phase3_35_shadow_validation.py::test_4_out_of_order_timestamp_detection PASSED [  6%]
+tests/test_phase3_35_shadow_validation.py::test_5_stale_ticker_detection PASSED [  8%]
+tests/test_phase3_35_shadow_validation.py::test_6_missing_candle_gap_detection PASSED [ 10%]
+tests/test_phase3_35_shadow_validation.py::test_7_signal_generation_synthetic_data PASSED [ 11%]
+tests/test_phase3_35_shadow_validation.py::test_8_rejection_reason_recording PASSED [ 13%]
+tests/test_phase3_35_shadow_validation.py::test_9_recorder_restart_and_persistence PASSED [ 15%]
+tests/test_phase3_35_shadow_validation.py::test_10_output_file_integrity_and_schema PASSED [ 16%]
+tests/test_phase3_35_shadow_validation.py::test_11_broker_import_isolation PASSED [ 18%]
+tests/test_phase3_35_shadow_validation.py::test_12_zero_broker_state_mutation PASSED [ 20%]
+tests/test_phase3_35_shadow_validation.py::test_13_no_order_endpoint_access PASSED [ 21%]
+tests/test_phase3_35_shadow_validation.py::test_14_no_private_credential_access_and_path_enforcement PASSED [ 23%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_01_malicious_path_traversal PASSED [ 25%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_02_directory_escape_protection PASSED [ 26%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_03_in_progress_candle_rejection_boundary PASSED [ 28%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_04_future_candle_rejection PASSED [ 30%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_05_monotonicity_and_duplicate_rejection PASSED [ 31%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_06_extreme_candle_gaps PASSED [ 33%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_07_corrupted_ohlcv_structures PASSED [ 35%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_08_empty_and_warmup_handling PASSED [ 36%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_09_full_ast_dependency_and_callgraph_isolation PASSED [ 38%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_10_invariant_schema_purity PASSED [ 40%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_11_multi_threaded_concurrency_stress PASSED [ 41%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_12_environment_safety_tripwire PASSED [ 43%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_13_historical_production_trade_record_intact PASSED [ 45%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_14_market_data_staleness_and_out_of_order PASSED [ 46%]
+tests/test_phase3_38_transport_adapter.py::test_01_transport_config_validation_and_safety PASSED [ 48%]
+tests/test_phase3_38_transport_adapter.py::test_02_successful_mocked_connection PASSED [ 50%]
+tests/test_phase3_38_transport_adapter.py::test_03_connection_timeout_handling PASSED [ 51%]
+tests/test_phase3_38_transport_adapter.py::test_04_connection_refusal_and_error_tracking PASSED [ 53%]
+tests/test_phase3_38_transport_adapter.py::test_05_reconnect_backoff_and_jitter PASSED [ 55%]
+tests/test_phase3_38_transport_adapter.py::test_06_maximum_retry_bound_behavior PASSED [ 56%]
+tests/test_phase3_38_transport_adapter.py::test_07_duplicate_connection_prevention PASSED [ 58%]
+tests/test_phase3_38_transport_adapter.py::test_08_duplicate_and_out_of_order_market_events PASSED [ 60%]
+tests/test_phase3_38_transport_adapter.py::test_09_malformed_market_data_messages PASSED [ 61%]
+tests/test_phase3_38_transport_adapter.py::test_10_foreign_product_symbol_rejection PASSED [ 63%]
+tests/test_phase3_38_transport_adapter.py::test_11_stale_feed_detection_and_degradation PASSED [ 65%]
+tests/test_phase3_38_transport_adapter.py::test_12_graceful_shutdown PASSED [ 66%]
+tests/test_phase3_38_transport_adapter.py::test_13_socket_closure_after_errors PASSED [ 68%]
+tests/test_phase3_38_transport_adapter.py::test_14_no_private_credential_access PASSED [ 70%]
+tests/test_phase3_38_transport_adapter.py::test_15_no_order_endpoint_access PASSED [ 71%]
+tests/test_phase3_38_transport_adapter.py::test_16_zero_broker_import_or_state_mutation PASSED [ 73%]
+tests/test_phase3_38_transport_adapter.py::test_17_zero_subprocess_creation PASSED [ 75%]
+tests/test_phase3_39_transport_audit.py::test_01_all_six_lifecycle_states_and_transitions PASSED [ 76%]
+tests/test_phase3_39_transport_audit.py::test_02_duplicate_connection_guards PASSED [ 78%]
+tests/test_phase3_39_transport_audit.py::test_03_connection_timeout_and_refusal_cleanup PASSED [ 80%]
+tests/test_phase3_39_transport_audit.py::test_04_reconnect_controller_math_and_bounds PASSED [ 81%]
+tests/test_phase3_39_transport_audit.py::test_05_cancellation_during_connection_and_streaming PASSED [ 83%]
+tests/test_phase3_39_transport_audit.py::test_06_socket_closure_after_exceptions PASSED [ 85%]
+tests/test_phase3_39_transport_audit.py::test_07_repeated_start_stop_cycles PASSED [ 86%]
+tests/test_phase3_39_transport_audit.py::test_08_bounded_queue_and_observable_overflow PASSED [ 88%]
+tests/test_phase3_39_transport_audit.py::test_09_bounded_reconnect_history PASSED [ 90%]
+tests/test_phase3_39_transport_audit.py::test_10_logging_flood_protection PASSED [ 91%]
+tests/test_phase3_39_transport_audit.py::test_11_ast_isolation_and_zero_credentials PASSED [ 93%]
+tests/test_phase3_39_transport_audit.py::test_12_strict_product_identity PASSED [ 95%]
+tests/test_phase3_39_transport_audit.py::test_13_separate_exchange_and_receipt_timestamps PASSED [ 96%]
+tests/test_phase3_39_transport_audit.py::test_14_malformed_incomplete_and_stale_events PASSED [ 98%]
+tests/test_phase3_39_transport_audit.py::test_15_safety_invariants_and_historical_ledger PASSED [100%]
+
+============================= 60 passed in 17.49s =============================
+
+--------------------------------------------------------------------------------
+3. FULL REPOSITORY REGRESSION TEST SUITE (495 TESTS)
+--------------------------------------------------------------------------------
+Command: .venv\Scripts\python -m pytest -q
+
+........................................................................ [ 14%]
+........................................................................ [ 29%]
+........................................................................ [ 43%]
+........................................................................ [ 58%]
+........................................................................ [ 72%]
+........................................................................ [ 87%]
+...............................................................          [100%]
+============================== warnings summary ===============================
+tests/test_paper_broker.py::test_buy_and_sell_cycle
+tests/test_paper_broker.py::test_account_reset
+  C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_paper_broker.py::test_buy_and_sell_cycle
+tests/test_paper_broker.py::test_account_reset
+  C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+495 passed, 4 warnings in 121.26s (0:02:01)

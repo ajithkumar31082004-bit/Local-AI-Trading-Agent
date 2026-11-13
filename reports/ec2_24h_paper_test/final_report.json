@@ -1,0 +1,43 @@
+{
+  "metadata": {
+    "test_id": "EC2_24H_FORWARD_TEST_20261104_165531",
+    "target_duration_seconds": 5,
+    "actual_elapsed_seconds": 0.0,
+    "actual_elapsed_hours": 0.0,
+    "start_time_utc": "2026-11-04T16:55:31.605476+00:00",
+    "start_time_ist": "2026-11-04T22:25:31.605476+00:00",
+    "end_time_utc": "2026-11-04T16:55:37.579422+00:00",
+    "end_time_ist": "2026-11-04T22:25:37.579422+00:00",
+    "completed": true,
+    "run_count": 1,
+    "symbol": "XAUTUSD",
+    "product_id": 131253,
+    "exchange": "Delta Exchange India",
+    "execution_mode": "STRICTLY PAPER"
+  },
+  "safety_audit": {
+    "real_orders_submitted": 0,
+    "private_endpoints_called": 0,
+    "live_trading_enabled": false,
+    "mode": "PAPER"
+  },
+  "performance": {
+    "initial_equity": 10000.0,
+    "final_equity": 10000.0,
+    "final_cash": 10000.0,
+    "realized_pnl": 0.0,
+    "unrealized_pnl": 0.0,
+    "net_pnl": 0.0,
+    "total_fees": 0.0,
+    "total_slippage": 0.0,
+    "peak_equity": 10000.0,
+    "max_drawdown_cash": 0.0,
+    "max_drawdown_pct": 0.0,
+    "total_trades": 0,
+    "winning_trades": 0,
+    "losing_trades": 0,
+    "win_rate_pct": 0.0,
+    "profit_factor": 0.0
+  },
+  "trades": []
+}

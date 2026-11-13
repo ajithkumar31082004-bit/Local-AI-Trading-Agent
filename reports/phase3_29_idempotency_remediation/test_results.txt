@@ -1,0 +1,52 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0 -- C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collecting ... collected 12 items
+
+tests/test_phase3_29_idempotency_remediation.py::test_1_duplicate_key_same_process PASSED [  8%]
+tests/test_phase3_29_idempotency_remediation.py::test_2_duplicate_key_after_restart PASSED [ 16%]
+tests/test_phase3_29_idempotency_remediation.py::test_3_replay_after_1005_keys_pruning PASSED [ 25%]
+tests/test_phase3_29_idempotency_remediation.py::test_4_replay_after_10000_unique_keys PASSED [ 33%]
+tests/test_phase3_29_idempotency_remediation.py::test_5_duplicate_key_after_trade_closed PASSED [ 41%]
+tests/test_phase3_29_idempotency_remediation.py::test_6_concurrent_processes_same_key PASSED [ 50%]
+tests/test_phase3_29_idempotency_remediation.py::test_7_crash_during_idempotency_persistence PASSED [ 58%]
+tests/test_phase3_29_idempotency_remediation.py::test_8_crash_after_persistence_before_ack PASSED [ 66%]
+tests/test_phase3_29_idempotency_remediation.py::test_9_corrupt_database_recovery PASSED [ 75%]
+tests/test_phase3_29_idempotency_remediation.py::test_10_recovery_without_duplicate_execution PASSED [ 83%]
+tests/test_phase3_29_idempotency_remediation.py::test_11_position_sizing_guard_unchanged PASSED [ 91%]
+tests/test_phase3_29_idempotency_remediation.py::test_12_historical_incident_record_intact PASSED [100%]
+
+============================= 12 passed in 12.11s =============================
+
+PHASE 3.28 AUDIT SUITE RE-RUN:
+tests/test_phase3_28_independent_audit.py::test_audit_a_pruning_drops_old_keys PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_a_pruned_key_replay_vulnerability PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_b_simultaneous_reservation_across_processes PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_b_simultaneous_open_trade_across_processes PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_b_simultaneous_close_across_processes PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_b_concurrent_equity_persistence PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_b_recovery_after_process_crash_while_locked PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_c_atomic_state_replacement PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_c_corrupt_state_recovery PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_c_state_data_consistency PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_d_expired_reservation_commit_rejected PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_d_stale_worker_commit_after_generation_advance_rejected PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_d_duplicate_commit_rejected PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_d_commit_after_release_rejected PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_d_commit_following_process_restart PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_e_position_size_guard_rejection PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_e_broker_rejects_oversized_orders PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_e_live_trading_hard_barrier PASSED
+tests/test_phase3_28_independent_audit.py::test_audit_e_historical_484_lot_incident_intact PASSED
+19 passed in 24.82s
+
+FULL REPOSITORY REGRESSION SUITE:
+============================== warnings summary ===============================
+tests/test_paper_broker.py::test_buy_and_sell_cycle
+tests/test_paper_broker.py::test_account_reset
+  C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+386 passed, 4 warnings in 111.25s (0:01:51)

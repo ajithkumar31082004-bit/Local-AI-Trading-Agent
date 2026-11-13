@@ -30,11 +30,25 @@ Pipfile.lock
 # Environments & secrets
 .env
 .env.local
+*.pem
+*.key
 
 # Databases & local persistent storage
-data/*.db
+data/scratch/
+*.db
 data/*.sqlite
 data/*.sqlite3
+data/*.json
+data/*.lock
+data/*.html
+data/*.csv
+!data/multi_strategy_backtest_summary.csv
+!data/multi_strategy_all_trades.csv
+!data/v2_multi_strategy_backtest_summary.csv
+!data/v2_multi_strategy_all_trades.csv
+!data/phase1_trades_audit_with_excursions.csv
+!data/phase2_feature_discrimination.csv
+scratch/
 *.db
 *.sqlite
 
@@ -56,3 +70,8 @@ htmlcov/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Android & Gradle
+.gradle/
+*.apk
+*.aab

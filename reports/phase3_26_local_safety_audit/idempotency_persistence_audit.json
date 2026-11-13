@@ -1,0 +1,60 @@
+{
+  "audit_name": "Audit 2: Idempotency Persistence & Crash Recovery",
+  "phase": "Phase 3.26",
+  "target_file": "services/delta_paper_broker.py",
+  "inspected_methods": [
+    "__init__",
+    "_save_state",
+    "_load_state",
+    "open_simulated_trade"
+  ],
+  "timestamp_utc": "2026-11-10T15:27:00Z",
+  "verdict": "FAIL",
+  "severity": "HIGH",
+  "findings": [
+    {
+      "id": "AUDIT-2-IN-MEMORY-ONLY-IDEMPOTENCY",
+      "severity": "CRITICAL",
+      "title": "Idempotency Records Missing from Persistent Schema",
+      "description": "_processed_idempotency_keys is stored solely in volatile RAM as an in-memory dictionary (self._processed_idempotency_keys: Dict[str, Dict[str, Any]] = {}). Neither _save_state() nor _load_state() serializes or restores this collection.",
+      "code_location": "services/delta_paper_broker.py:126, 755-780, 800-845",
+      "impact": "On process termination, crash, or daemon restart, the entire idempotency cache is wiped out. Once any active position is closed, replayed strategy signals with previously used idempotency keys will bypass deduplication and execute duplicate trades.",
+      "test_proof": "tests/test_phase3_26_safety_audits.py::test_audit2_idempotency_lost_across_restart_vulnerability"
+    },
+    {
+      "id": "AUDIT-2-SCHEMA-OMISSION",
+      "severity": "HIGH",
+      "title": "State File Schema Excludes Idempotency Tracking",
+      "description": "Inspection of state.json generated on disk confirms presence of 'open_position', 'closed_trades', and 'balance', but zero keys or metadata relating to processed order tokens or idempotency signatures.",
+      "code_location": "services/delta_paper_broker.py:755-780",
+      "impact": "Cold restarts cannot reconstruct duplicate-prevention state from persistent storage.",
+      "test_proof": "tests/test_phase3_26_safety_audits.py::test_audit2_state_file_lacks_idempotency_field"
+    },
+    {
+      "id": "AUDIT-2-ATOMICITY-EVALUATION",
+      "severity": "LOW",
+      "title": "Single-Process Atomic State Persistence",
+      "description": "_save_state() writes serialized data to a temporary file in the same directory and executes os.replace() to the target state file. Within a single operating system process, state writes are atomic and crash-resilient against half-written files, but lack the necessary idempotency metadata.",
+      "code_location": "services/delta_paper_broker.py:770-785",
+      "impact": "No data corruption observed on single process write; deficiency is strictly schema omission.",
+      "test_proof": "Verified in test_state_persistence_and_recovery and file system inspection"
+    }
+  ],
+  "test_scenarios": [
+    {
+      "scenario": "In-memory duplicate rejection within single process lifecycle",
+      "result": "PASSED",
+      "test": "test_audit2_in_memory_duplicate_rejection"
+    },
+    {
+      "scenario": "Idempotency lost across process restart / reload vulnerability",
+      "result": "PASSED",
+      "test": "test_audit2_idempotency_lost_across_restart_vulnerability"
+    },
+    {
+      "scenario": "Persistent state file lacks idempotency schema fields",
+      "result": "PASSED",
+      "test": "test_audit2_state_file_lacks_idempotency_field"
+    }
+  ]
+}

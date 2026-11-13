@@ -1,0 +1,20 @@
+{
+  "phase": "PHASE_3_31_BROKER_CONSISTENCY_REMEDIATION",
+  "audit_date": "2026-11-10T22:38:55+05:30",
+  "root_cause_analysis": {
+    "issue": "Windows file lock conflict ([WinError 32]) during corrupt database auto-recovery",
+    "mechanism": "sqlite3.Connection object was not explicitly closed when PRAGMA journal_mode=WAL or table DDL failed during database initialization. The open OS file handle prevented os.replace() from isolating the corrupted database."
+  },
+  "remediation_implemented": {
+    "connection_factory": "try...except block in _get_connection() invokes conn.close() on any pragma error",
+    "init_db_lifecycle": "Explicit conn.close() and gc.collect() in except block prior to self.db_path.replace(corrupt_backup)",
+    "isolation_verified": true,
+    "corrupt_backup_format": "{dbname}.corrupt.{timestamp}"
+  },
+  "fail_closed_compliance": {
+    "requirement": "If complete idempotency history cannot be established, broker must fail closed.",
+    "condition_1_state_exists": "If state file exists with historical trades, clean DB is built and history is repopulated via sync_historical_keys(). Verified PASS.",
+    "condition_2_state_lost": "If state file is missing or has zero history, broker raises IdempotencyRegistryError and fails closed. Verified PASS."
+  },
+  "verdict": "PASS"
+}

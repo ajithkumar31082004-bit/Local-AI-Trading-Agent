@@ -1,0 +1,35 @@
+[Unit]
+Description=Delta Exchange India Paper Trading Agent - Read-Only Monitoring API (Hardened)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/Local-AI-Trading-Agent
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/ubuntu/Local-AI-Trading-Agent/.env.monitoring
+ExecStart=/home/ubuntu/Local-AI-Trading-Agent/.venv/bin/uvicorn services.monitoring_api:app --host 127.0.0.1 --port 8088 --workers 1
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/ubuntu/Local-AI-Trading-Agent/data/monitoring_api.log
+StandardError=append:/home/ubuntu/Local-AI-Trading-Agent/data/monitoring_api.log
+
+# Security Sandboxing & Least Privilege Restrictions
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/Local-AI-Trading-Agent/data/monitoring_api.log
+ReadOnlyPaths=/home/ubuntu/Local-AI-Trading-Agent
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

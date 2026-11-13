@@ -1,0 +1,35 @@
+{
+  "audit_phase": "PHASE_3_30_SQLITE_DURABILITY_INDEPENDENT_AUDIT",
+  "audit_date": "2026-11-10T22:15:00+05:30",
+  "repository": "ajithkumar31082004-bit/Local-AI-Trading-Agent",
+  "branch": "feature/phase3-30-sqlite-durability-audit",
+  "base_commit": "12b97c8",
+  "instrument": "XAUTUSD",
+  "mode": "STRICT PAPER ONLY",
+  "sqlite_settings": {
+    "file_path": "data/*.idempotency.db",
+    "journal_mode": "WAL",
+    "synchronous": 1,
+    "synchronous_name": "NORMAL",
+    "busy_timeout_ms": 10000,
+    "isolation_level": "DEFERRED",
+    "row_factory": "sqlite3.Row"
+  },
+  "durability_evaluation": {
+    "process_crash_safe": true,
+    "os_crash_safe": false,
+    "power_loss_safe": false,
+    "fsync_on_commit": false,
+    "analysis": "Under PRAGMA synchronous = NORMAL, SQLite flushes dirty pages to the OS page cache on commit but does not invoke fsync() on every transaction. In the event of process crash or unhandled exception, data is preserved by the OS. However, if the host experiences power failure, hypervisor crash, or hard kernel panic, uncheckpointed WAL frames in OS buffers can be lost.",
+    "recommendation": "Switch to PRAGMA synchronous = FULL (or EXTRA). In a paper trading daemon with single-lot order frequency (~1 order per candle bar), the 1-5ms fsync latency is negligible and guarantees crash-consistency against power failure."
+  },
+  "wal_checkpoint_evaluation": {
+    "configured_in_code": false,
+    "passive_checkpoint": "Default SQLite behavior (every 1000 pages / ~4MB)",
+    "explicit_checkpoint_on_close": false,
+    "explicit_checkpoint_on_backup": false,
+    "risk": "A naive file copy backup of .idempotency.db without copying .db-wal and .db-shm will result in an unreadable or empty database.",
+    "recommendation": "Implement an explicit broker shutdown handler and backup method executing PRAGMA wal_checkpoint(TRUNCATE)."
+  },
+  "verdict": "CONDITIONAL PASS"
+}

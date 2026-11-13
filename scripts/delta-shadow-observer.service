@@ -1,0 +1,60 @@
+[Unit]
+Description=Delta Exchange India Shadow Observer (Read-Only Public Telemetry & Strategy Evaluation)
+Documentation=https://github.com/ajithkumar31082004-bit/Local-AI-Trading-Agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/Local-AI-Trading-Agent
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/ubuntu/Local-AI-Trading-Agent/.env
+
+# Pre-Start Safety Gate: Verify read-only observer isolation and absence of order placement capability
+ExecStartPre=/home/ubuntu/Local-AI-Trading-Agent/.venv/bin/python -c "\
+import os, sys; \
+from services.shadow_observer.observer_safety_guard import verify_observer_isolation; \
+from services.shadow_observer.dry_run_runner import ShadowDryRunRunner; \
+verify_observer_isolation(); \
+runner = ShadowDryRunRunner(); \
+assert not hasattr(runner, 'place_order'), 'FATAL: Shadow runner has order placement capability'; \
+assert not hasattr(runner, 'submit_order'), 'FATAL: Shadow runner has order submission capability'; \
+assert os.getenv('LIVE_TRADING_ENABLED', 'false').lower() == 'false', 'FATAL: LIVE_TRADING_ENABLED is true'; \
+print('Pre-start verification PASSED: Strict read-only observer isolation verified.')"
+
+# Production Entry Point: Dedicated read-only shadow observer runner
+ExecStart=/home/ubuntu/Local-AI-Trading-Agent/.venv/bin/python scripts/run_shadow_observer.py
+
+# Graceful Shutdown: Sends SIGTERM so runner gracefully closes public streams and writes telemetry report
+KillSignal=SIGTERM
+TimeoutStopSec=30
+FinalKillSignal=SIGKILL
+
+# Controlled Restart Limits: On-failure restart with 10s backoff, bounded to 3 restarts per 300s window
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=append:/home/ubuntu/Local-AI-Trading-Agent/data/shadow_observer.log
+StandardError=append:/home/ubuntu/Local-AI-Trading-Agent/data/shadow_observer.log
+
+# Security Sandboxing & Least Privilege Restrictions
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/Local-AI-Trading-Agent/data /home/ubuntu/Local-AI-Trading-Agent/reports
+ReadOnlyPaths=/home/ubuntu/Local-AI-Trading-Agent
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+{
+  "audit_phase": "PHASE_3_30_SQLITE_DURABILITY_INDEPENDENT_AUDIT",
+  "audit_date": "2026-11-10T22:15:45+05:30",
+  "backup_restore_tests": [
+    {
+      "test_name": "sqlite_online_backup_api",
+      "method": "conn.backup(dest_conn)",
+      "records_expected": 5,
+      "records_recovered": 5,
+      "uncheckpointed_wal_captured": true,
+      "status": "PASS",
+      "notes": "SQLite online backup API safely flushes WAL pages into the target backup database without blocking concurrent readers or writers."
+    },
+    {
+      "test_name": "naive_file_copy_backup",
+      "method": "shutil.copy2(idempotency.db) only (omitting -wal and -shm)",
+      "result": "CORRUPT_OR_EMPTY_BACKUP",
+      "error_observed": "sqlite3.OperationalError: no such table: idempotency_records",
+      "records_recovered": 0,
+      "status": "VULNERABILITY CONFIRMED",
+      "notes": "In WAL mode, committed pages reside in the -wal file until a checkpoint occurs. A naive file copy of the .db file alone misses all uncheckpointed transactions and schema modifications."
+    },
+    {
+      "test_name": "restore_to_new_directory",
+      "method": "Restoration of both JSON state and idempotency SQLite database to an isolated new directory",
+      "replayed_key_rejected": true,
+      "rejection_message": "Order rejected: idempotency key already executed in durable registry",
+      "status": "PASS",
+      "notes": "Restored broker preserves deduplication history and prevents key replays in a fresh operating directory."
+    }
+  ],
+  "recommendations": [
+    "Never back up .idempotency.db via raw file copy while the trading daemon is active unless conn.backup() is used.",
+    "If file-based snapshots are required, execute PRAGMA wal_checkpoint(TRUNCATE) immediately prior to snapshotting."
+  ]
+}

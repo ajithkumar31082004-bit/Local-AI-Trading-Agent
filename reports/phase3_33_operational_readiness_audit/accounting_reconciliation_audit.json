@@ -1,0 +1,41 @@
+{
+  "audit_phase": "3.33",
+  "audit_name": "Accounting Reconciliation & Forensic Ledger Audit",
+  "timestamp": "2026-11-10T23:23:30Z",
+  "verdict": "PASS",
+  "financial_conservation_principles": {
+    "cash_conservation": {
+      "formula": "post_trade_cash == initial_equity + net_pnl",
+      "verified_by_test": "test_paper_broker_cash_conservation_no_double_deduction",
+      "status": "EXACT_CONSERVATION"
+    },
+    "entry_fee_treatment": {
+      "entry_outflow": "entry_fee + entry_gst",
+      "exit_restoration": "On close, net_pnl formula already subtracts allocated entry fee. The broker adjusts cash by adding allocated entry fee back, ensuring entry fee is deducted exactly once across the full round-trip.",
+      "double_deduction_detected": false,
+      "status": "CORRECT"
+    },
+    "slippage_and_spread": {
+      "treatment": "Slippage is modeled as price deviation in fill price; not deducted as separate cash fee from wallet.",
+      "double_counting_detected": false,
+      "regime_multiplier_applied": true,
+      "status": "CORRECT"
+    },
+    "discrete_lot_rounding": {
+      "contract_size_xaut": 0.001,
+      "rounding_rule": "math.floor for discrete micro-lot exit quantities",
+      "fractional_micro_lots_allowed": false,
+      "status": "CORRECT"
+    },
+    "historical_incident_preservation": {
+      "incident_id": "PAPER_20261105_101000_LONG",
+      "lots": 484,
+      "contract_qty": 0.484,
+      "net_pnl": -7.9472,
+      "cash_balance": 9992.0528,
+      "file_path": "data/paper_forward_24h_state.json",
+      "tampering_detected": false,
+      "status": "PRESERVED_INTACT"
+    }
+  }
+}

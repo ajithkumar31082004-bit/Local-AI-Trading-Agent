@@ -1,0 +1,116 @@
+{
+  "phase": "PHASE_3_31_BROKER_CONSISTENCY_REMEDIATION",
+  "audit_date": "2026-11-10T22:38:00+05:30",
+  "crash_recovery_matrix": [
+    {
+      "boundary_id": "1",
+      "boundary_name": "Crash Before Reservation",
+      "sqlite_state": "Empty / No record",
+      "json_state": "Pre-execution state",
+      "cash_conserved": true,
+      "phantom_position": false,
+      "recovery_action": "None required",
+      "same_key_retry_safe": true,
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "2",
+      "boundary_name": "Crash After Reservation (Before Intent)",
+      "sqlite_state": "status='RESERVED', TTL=30s",
+      "json_state": "pending_reservation recorded",
+      "cash_conserved": true,
+      "phantom_position": false,
+      "recovery_action": "Lease TTL expires or cleared on startup",
+      "same_key_retry_safe": true,
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "3",
+      "boundary_name": "Crash Before Durable Execution Intent",
+      "sqlite_state": "status='RESERVED'",
+      "json_state": "pending_reservation recorded, cash unmodified",
+      "cash_conserved": true,
+      "phantom_position": false,
+      "recovery_action": "Lease TTL expires, no intent to recover",
+      "same_key_retry_safe": true,
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "4",
+      "boundary_name": "Crash After Execution Intent (Before JSON Persistence)",
+      "sqlite_state": "status='EXECUTING', intent_payload recorded",
+      "json_state": "open_position=None, cash_balance unmodified",
+      "cash_conserved": true,
+      "phantom_position": false,
+      "recovery_action": "Roll-Back: Intent transitioned to ROLLED_BACK in SQLite; cash preserved",
+      "same_key_retry_safe": true,
+      "verdict": "PASS (CRITICAL GAP REMEDIATED)"
+    },
+    {
+      "boundary_id": "5",
+      "boundary_name": "Crash During JSON Persistence",
+      "sqlite_state": "status='EXECUTING'",
+      "json_state": "Atomic replace not executed; pre-crash file intact",
+      "cash_conserved": true,
+      "phantom_position": false,
+      "recovery_action": "Roll-Back: Intent transitioned to ROLLED_BACK in SQLite",
+      "same_key_retry_safe": true,
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "6",
+      "boundary_name": "Crash After JSON Persistence (Before SQLite Commit)",
+      "sqlite_state": "status='EXECUTING'",
+      "json_state": "open_position=pos, cash_balance decremented",
+      "cash_conserved": true,
+      "phantom_position": false,
+      "recovery_action": "Roll-Forward: Detected position in JSON; completed transition to COMMITTED",
+      "same_key_retry_safe": true,
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "7",
+      "boundary_name": "Crash During Idempotency Commit",
+      "sqlite_state": "status='EXECUTING' (transaction rolled back)",
+      "json_state": "open_position=pos, cash_balance decremented",
+      "cash_conserved": true,
+      "phantom_position": false,
+      "recovery_action": "Roll-Forward: Re-executed commit_execution() on startup",
+      "same_key_retry_safe": true,
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "8",
+      "boundary_name": "Crash After Idempotency Commit (Before Ack)",
+      "sqlite_state": "status='COMMITTED'",
+      "json_state": "open_position=pos, cash_balance decremented",
+      "cash_conserved": true,
+      "phantom_position": false,
+      "recovery_action": "State fully loaded; duplicate check rejects retry and reports filled",
+      "same_key_retry_safe": true,
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "9",
+      "boundary_name": "Crash Before Acknowledgement",
+      "sqlite_state": "status='COMMITTED'",
+      "json_state": "open_position=pos, cash_balance decremented",
+      "cash_conserved": true,
+      "phantom_position": false,
+      "recovery_action": "Duplicate check blocks replay, preserves existing position",
+      "same_key_retry_safe": true,
+      "verdict": "PASS"
+    },
+    {
+      "boundary_id": "10",
+      "boundary_name": "Crash During Recovery Process",
+      "sqlite_state": "status='ROLLED_BACK' or 'COMMITTED'",
+      "json_state": "Consistent with recovered state",
+      "cash_conserved": true,
+      "phantom_position": false,
+      "recovery_action": "Idempotent recovery logic produces identical state on restart",
+      "same_key_retry_safe": true,
+      "verdict": "PASS"
+    }
+  ]
+}

@@ -24,12 +24,20 @@ class DeltaExchangeClient:
     ):
         self.api_key = api_key or settings.delta_exchange_api_key
         self.api_secret = api_secret or settings.delta_exchange_api_secret
-        self.base_url = (base_url or settings.delta_exchange_base_url).rstrip("/")
+        base = (base_url or settings.delta_exchange_base_url).rstrip("/")
+        if base == "https://india.delta.exchange":
+            base = "https://api.india.delta.exchange"
+        self.base_url = base
         self.enabled = enabled if enabled is not None else settings.delta_exchange_enabled
 
-    def _generate_signature(self, method: str, path: str, timestamp: str, payload: str = "") -> str:
-        """Create HMAC-SHA256 signature required by Delta Exchange."""
-        message = method.upper() + timestamp + path + payload
+    def _generate_signature(self, method: str, path: str, timestamp: str, payload: str = "", query_string: str = "") -> str:
+        """Create HMAC-SHA256 signature required by Delta Exchange.
+
+        According to official Delta Exchange v2 API docs:
+        signature_data = method.upper() + timestamp + path + query_string + payload
+        """
+        qs = query_string if (not query_string or query_string.startswith("?")) else f"?{query_string}"
+        message = method.upper() + timestamp + path + qs + payload
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
             message.encode("utf-8"),
@@ -37,7 +45,7 @@ class DeltaExchangeClient:
         ).hexdigest()
         return signature
 
-    def _get_headers(self, method: str, path: str, payload: str = "") -> Dict[str, str]:
+    def _get_headers(self, method: str, path: str, payload: str = "", query_string: str = "") -> Dict[str, str]:
         timestamp = str(int(time.time()))
         headers = {
             "Content-Type": "application/json",
@@ -47,7 +55,7 @@ class DeltaExchangeClient:
         if self.api_key and self.api_secret:
             headers["api-key"] = self.api_key
             headers["timestamp"] = timestamp
-            headers["signature"] = self._generate_signature(method, path, timestamp, payload)
+            headers["signature"] = self._generate_signature(method, path, timestamp, payload, query_string)
         return headers
 
     def check_connection(self) -> Dict[str, Any]:
@@ -65,8 +73,8 @@ class DeltaExchangeClient:
                     alt_res = requests.get(f"{alt_url}/v2/products", timeout=5)
                     if alt_res.status_code == 200:
                         self.base_url = alt_url
-                except Exception:
-                    pass
+                except Exception as alt_err:  # noqa: BLE001
+                    logger.debug("Delta Exchange fallback URL also unreachable: %s", alt_err)
         except Exception as e:
             return {"available": False, "authenticated": False, "error": f"Cannot reach Delta Exchange at {self.base_url}: {e}"}
 
@@ -107,7 +115,7 @@ class DeltaExchangeClient:
             if res.status_code == 200:
                 return res.json().get("result", [])
             return []
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Error fetching Delta wallet balances: %s", e)
             return []
 
@@ -126,3 +134,71 @@ class DeltaExchangeClient:
         except Exception as e:
             logger.warning("Error fetching Delta ticker for %s: %s", symbol, e)
             return None
+
+    def get_order_by_client_id(self, client_order_id: str) -> Dict[str, Any]:
+        """Look up order on Delta Exchange by client order ID."""
+        if not self.api_key or not self.api_secret:
+            return {"success": False, "error": "API credentials missing."}
+        path = f"/v2/orders/client_order_id/{client_order_id}"
+        headers = self._get_headers("GET", path)
+        try:
+            res = requests.get(f"{self.base_url}{path}", headers=headers, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                return {"success": True, "result": data.get("result"), "status_code": res.status_code}
+            return {
+                "success": False,
+                "error": f"Order lookup failed with HTTP {res.status_code}: {res.text[:120]}",
+                "status_code": res.status_code,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "status_code": 0}
+
+    def cancel_order(self, order_id: str, product_id: int) -> Dict[str, Any]:
+        """Cancel a single open order on Delta Exchange by order ID."""
+        if not self.api_key or not self.api_secret:
+            return {"success": False, "error": "API credentials missing."}
+        import json
+        path = "/v2/orders"
+        try:
+            oid_val = int(order_id)
+        except (ValueError, TypeError):
+            oid_val = order_id
+        payload_dict = {"id": oid_val, "product_id": int(product_id)}
+        compact_payload = json.dumps(payload_dict, separators=(",", ":"))
+        headers = self._get_headers("DELETE", path, payload=compact_payload)
+        try:
+            res = requests.delete(f"{self.base_url}{path}", data=compact_payload, headers=headers, timeout=5)
+            if res.status_code in (200, 204):
+                data = res.json() if res.text else {}
+                return {"success": True, "result": data.get("result"), "status_code": res.status_code}
+            return {
+                "success": False,
+                "error": f"Cancel order failed with HTTP {res.status_code}: {res.text[:120]}",
+                "status_code": res.status_code,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "status_code": 0}
+
+    def cancel_all_orders(self, product_id: Optional[int] = None) -> Dict[str, Any]:
+        """Emergency cancellation of open orders on Delta Exchange."""
+        if not self.api_key or not self.api_secret:
+            return {"success": False, "error": "API credentials missing."}
+        import json
+        path = "/v2/orders/all"
+        payload_dict = {"product_id": product_id} if product_id else {}
+        compact_payload = json.dumps(payload_dict, separators=(",", ":"))
+        headers = self._get_headers("DELETE", path, payload=compact_payload)
+        try:
+            res = requests.delete(f"{self.base_url}{path}", data=compact_payload, headers=headers, timeout=5)
+            if res.status_code in (200, 204):
+                data = res.json() if res.text else {}
+                return {"success": True, "result": data.get("result"), "status_code": res.status_code}
+            return {
+                "success": False,
+                "error": f"Cancel all orders failed with HTTP {res.status_code}: {res.text[:120]}",
+                "status_code": res.status_code,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "status_code": 0}
+

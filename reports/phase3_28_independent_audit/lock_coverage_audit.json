@@ -1,0 +1,88 @@
+{
+  "audit_area": "Audit B — Cross-Process Lock Coverage Across All State Mutations",
+  "audit_target": "services/delta_paper_broker.py",
+  "lock_implementation": {
+    "class": "CrossProcessReentrantLock",
+    "mechanism": "portalocker.Lock (exclusive OS file lock on state_file.with_suffix('.lock')) with thread re-entrancy tracking",
+    "default_timeout_seconds": 10.0
+  },
+  "mutation_methods_audit": [
+    {
+      "method": "reserve_order_slot",
+      "protected_by_lock": true,
+      "reloads_state_under_lock": true,
+      "persists_state_under_lock": true,
+      "mutated_fields": ["_reservation_generation", "_pending_reservation"]
+    },
+    {
+      "method": "release_order_reservation",
+      "protected_by_lock": true,
+      "reloads_state_under_lock": true,
+      "persists_state_under_lock": true,
+      "mutated_fields": ["_pending_reservation"]
+    },
+    {
+      "method": "commit_order_reservation",
+      "protected_by_lock": true,
+      "reloads_state_under_lock": true,
+      "persists_state_under_lock": true,
+      "mutated_fields": ["_processed_idempotency_keys", "_pending_reservation"]
+    },
+    {
+      "method": "open_simulated_trade",
+      "protected_by_lock": true,
+      "reloads_state_under_lock": true,
+      "persists_state_under_lock": true,
+      "mutated_fields": ["open_position", "cash", "_processed_idempotency_keys", "_pending_reservation"]
+    },
+    {
+      "method": "close_simulated_trade",
+      "protected_by_lock": true,
+      "reloads_state_under_lock": true,
+      "persists_state_under_lock": true,
+      "mutated_fields": ["open_position", "closed_trades", "cash", "equity", "daily_stats"]
+    },
+    {
+      "method": "update_unrealized_pnl",
+      "protected_by_lock": true,
+      "reloads_state_under_lock": true,
+      "persists_state_under_lock": true,
+      "mutated_fields": ["open_position", "equity"]
+    },
+    {
+      "method": "reset_account",
+      "protected_by_lock": true,
+      "reloads_state_under_lock": false,
+      "persists_state_under_lock": true,
+      "mutated_fields": ["cash", "equity", "initial_equity", "open_position", "closed_trades", "_pending_reservation", "_processed_idempotency_keys", "_reservation_generation"]
+    }
+  ],
+  "multi_process_race_tests": {
+    "simultaneous_reservation": {
+      "test": "test_audit_b_simultaneous_reservation_across_processes",
+      "processes": 2,
+      "result": "PASSED (1 reserved successfully, 1 rejected with slot in-flight / position error)"
+    },
+    "simultaneous_open_trade": {
+      "test": "test_audit_b_simultaneous_open_trade_across_processes",
+      "processes": 2,
+      "result": "PASSED (1 trade opened successfully, 1 rejected with slot reservation conflict)"
+    },
+    "simultaneous_close_trade": {
+      "test": "test_audit_b_simultaneous_close_across_processes",
+      "processes": 2,
+      "result": "PASSED (1 close executed with PnL, 1 rejected with 'Position not open')"
+    },
+    "concurrent_equity_persistence": {
+      "test": "test_audit_b_concurrent_equity_persistence",
+      "processes": 5,
+      "result": "PASSED (Initial $10,000.0 + 5 x $10 = Exactly $10,050.0 cash conserved without race clobber)"
+    },
+    "crash_recovery_while_locked": {
+      "test": "test_audit_b_recovery_after_process_crash_while_locked",
+      "result": "PASSED (Worker crashed via os._exit(1) while holding lock; survivor process immediately acquired lock and operated cleanly)"
+    }
+  },
+  "unprotected_paths_identified": [],
+  "audit_verdict": "PASS"
+}

@@ -1,0 +1,1 @@
+"""SQLite journaling for signals and skipped setups."""
