@@ -29,17 +29,25 @@ from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Auto-activate repository .venv if invoked with system Python
+# Auto-activate repository .venv site-packages if invoked with system Python
 if sys.prefix == getattr(sys, "base_prefix", sys.prefix):
-    venv_py_win = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
-    venv_py_nix = PROJECT_ROOT / ".venv" / "bin" / "python3"
-    venv_py = venv_py_win if sys.platform == "win32" else venv_py_nix
-    if venv_py.exists() and sys.executable != str(venv_py):
-        # Sanitize arguments strictly to prevent command-line argument injection
-        safe_arg_pattern = re.compile(r"^[a-zA-Z0-9_\-\./:=]+$")
-        clean_args = [arg for arg in sys.argv[1:] if safe_arg_pattern.match(arg)]
-        current_script = str(Path(__file__).resolve())
-        os.execv(str(venv_py), [str(venv_py), current_script] + clean_args)
+    import site
+    venv_site_win = (PROJECT_ROOT / ".venv" / "Lib" / "site-packages").resolve()
+    if venv_site_win.exists():
+        site.addsitedir(str(venv_site_win))
+        if str(venv_site_win) in sys.path:
+            sys.path.remove(str(venv_site_win))
+        sys.path.insert(0, str(venv_site_win))
+    else:
+        venv_lib = PROJECT_ROOT / ".venv" / "lib"
+        if venv_lib.exists():
+            for py_dir in venv_lib.glob("python*"):
+                posix_site = (py_dir / "site-packages").resolve()
+                if posix_site.exists():
+                    site.addsitedir(str(posix_site))
+                    if str(posix_site) in sys.path:
+                        sys.path.remove(str(posix_site))
+                    sys.path.insert(0, str(posix_site))
 
 import requests
 import websockets
