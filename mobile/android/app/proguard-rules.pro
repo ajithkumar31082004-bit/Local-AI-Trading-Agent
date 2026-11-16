@@ -7,8 +7,16 @@
 }
 
 # Preserve serialized JSON data classes
+-keep class com.antigravity.tradingmonitor.data.model.** { *; }
+-keepclassmembers class com.antigravity.tradingmonitor.data.model.** { *; }
 -keepclassmembers class * {
     @com.google.gson.annotations.SerializedName <fields>;
+}
+
+# Preserve Retrofit API interfaces
+-keep interface com.antigravity.tradingmonitor.data.api.** { *; }
+-keepclassmembers,allowobfuscation interface * {
+    @retrofit2.http.* <methods>;
 }
 
 # Android Jetpack Compose

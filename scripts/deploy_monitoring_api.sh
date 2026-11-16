@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Hardened deployment script for Read-Only Monitoring API on EC2.
-# STRICT SAFETY: Does NOT touch delta-paper-trading.service or delta-paper-dashboard.service!
+# STRICT SAFETY: Does NOT touch delta-trading-daemon.service or delta-shadow-observer.service!
 # Binds strictly to 127.0.0.1:8088 (No public unencrypted HTTP exposure).
 
 set -Eeuo pipefail
@@ -29,11 +29,11 @@ else
     chmod 600 "$ENV_MONITORING"
 fi
 
-# 2. Verify FastAPI & Uvicorn dependencies in .venv; install only if missing (never upgrades)
+# 2. Verify FastAPI, Uvicorn & Portalocker dependencies in .venv; install from pinned lockfile if missing
 echo "Verifying Python dependencies..."
-if ! "$REPO_DIR/.venv/bin/python" -c "import fastapi, httpx, uvicorn" 2>/dev/null; then
-    echo "One or more packages missing; installing (--no-upgrade)..."
-    "$REPO_DIR/.venv/bin/pip" install --quiet fastapi httpx uvicorn
+if ! "$REPO_DIR/.venv/bin/python" -c "import fastapi, httpx, uvicorn, portalocker" 2>/dev/null; then
+    echo "One or more packages missing; installing from pinned requirements.txt..."
+    "$REPO_DIR/.venv/bin/pip" install --quiet -r "$REPO_DIR/requirements.txt"
 fi
 
 # 3. Ensure logging target file exists with restricted owner-only permissions
@@ -65,14 +65,16 @@ fi
 echo "Health probe PASSED (200 OK)"
 echo ""
 
-# 7. Record official EC2 deployment record
+# 7. Record official EC2 deployment record with dynamic git metadata
 CURRENT_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
+CURRENT_BRANCH=$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)
+CURRENT_AUTHOR=$(git -C "$REPO_DIR" log -1 --format=%an)
 "$REPO_DIR/.venv/bin/python" -c "
 from services.deployment_tracker import record_deployment
 record_deployment(
     commit_sha='${CURRENT_SHA}',
-    branch='feature/strategy-intelligence-v2',
-    author='ajithkumar31082004-bit',
+    branch='${CURRENT_BRANCH}',
+    author='${CURRENT_AUTHOR}',
     environment='EC2',
     status='SUCCESS',
     tests_passed=True,

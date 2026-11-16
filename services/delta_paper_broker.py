@@ -17,7 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Union
 
-import portalocker
+try:
+    import portalocker
+except ImportError:
+    portalocker = None
 
 from config.orb_settings import ORBSettings, settings as default_orb_settings
 from risk.position_size_guard import (
@@ -27,6 +30,11 @@ from risk.position_size_guard import (
     APPROVED_MAX_PAPER_LOTS,
 )
 from services.idempotency_registry import DurableIdempotencyRegistry, IdempotencyRegistryError
+try:
+    from services.governance_supervisor import GovernanceSupervisor, GovernanceContainmentError
+except ImportError:
+    GovernanceSupervisor = None
+    GovernanceContainmentError = RuntimeError
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +66,24 @@ class CrossProcessReentrantLock:
         try:
             if self._depth == 0:
                 self.lock_file.parent.mkdir(parents=True, exist_ok=True)
-                self._portalocker_lock = portalocker.Lock(str(self.lock_file), timeout=t)
-                self._portalocker_lock.acquire()
+                if portalocker is not None:
+                    self._portalocker_lock = portalocker.Lock(str(self.lock_file), timeout=t)
+                    self._portalocker_lock.acquire()
+                else:
+                    # Fail closed in production: in-process RLock cannot coordinate cross-process access.
+                    # Strictly restricted to active pytest execution (PYTEST_CURRENT_TEST).
+                    # Generic flags such as TEST_RUNNER or CI_TEST_MODE are rejected to prevent bypass.
+                    is_pytest = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+                    if not is_pytest:
+                        raise RuntimeError(
+                            "FATAL: portalocker is required for cross-process state safety in production "
+                            "trading execution. Failing closed to prevent multi-process state corruption. "
+                            "Install verified dependencies via 'pip install -r requirements.txt'."
+                        )
+                    logger.warning(
+                        "portalocker not installed; falling back to threading.RLock strictly for "
+                        "active pytest unit test execution."
+                    )
             self._depth += 1
             return True
         except Exception:
@@ -102,11 +126,18 @@ class DeltaPaperBroker:
         state_file: Optional[Path] = None,
         initial_equity: Optional[float] = None,
         idempotency_db_path: Optional[Union[str, Path]] = None,
+        gov_supervisor: Optional[Any] = None,
     ):
         self.cfg = cfg or default_orb_settings
+        self.gov_supervisor = gov_supervisor
 
         # Hard safety verification
         if getattr(self.cfg, "mode", "PAPER") == "LIVE" and not getattr(self.cfg, "live_trading_enabled", False):
+            if self.gov_supervisor:
+                try:
+                    self.gov_supervisor.record_incident("LIVE_ORDER_ATTEMPT", {"source": "broker_init_live_mode"}, severity="FATAL")
+                except Exception:
+                    pass
             raise PaperSafetyViolation("CRITICAL: Live trading requested in paper broker context.")
 
         self.initial_equity = float(initial_equity or getattr(self.cfg, "paper_initial_equity", 10000.0))
@@ -492,10 +523,19 @@ class DeltaPaperBroker:
     # -------------------------------------------------------------------------
 
     def execute_live_order(self, *args, **kwargs) -> Any:
-        """Strictly blocks any live exchange order call."""
+        """Strictly blocks any live exchange order call and engages Tier 0 containment."""
+        if self.gov_supervisor:
+            try:
+                self.gov_supervisor.record_incident(
+                    "LIVE_ORDER_ATTEMPT",
+                    details={"args": str(args), "kwargs": str(kwargs), "source": "DeltaPaperBroker.execute_live_order"},
+                    severity="FATAL",
+                )
+            except Exception:
+                pass
         raise PaperSafetyViolation(
             "CRITICAL SECURITY VIOLATION: execute_live_order was invoked on DeltaPaperBroker. "
-            "Real order submission is strictly prohibited in PAPER mode."
+            "Real order submission is strictly prohibited in PAPER mode. Tier 0 containment engaged."
         )
 
     # -------------------------------------------------------------------------
@@ -557,6 +597,11 @@ class DeltaPaperBroker:
         clean_dir = direction.strip().upper()
         clean_sym = symbol.strip().upper()
         order_kind = order_type.strip().upper()
+
+        # Tier 0 Governance Circuit Breaker Check
+        if self.gov_supervisor and self.gov_supervisor.has_active_breach():
+            logger.critical("Order rejected: Tier 0 governance circuit breaker active containment.")
+            return False, "GOVERNANCE_CONTAINMENT: Active governance breach detected in ledger. Execution halted.", None
 
         if clean_dir not in {"LONG", "SHORT"}:
             return False, f"Invalid direction: '{clean_dir}'", None

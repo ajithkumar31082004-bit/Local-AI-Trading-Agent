@@ -175,3 +175,18 @@
 2026-11-07 03:25:16 [INFO] Stage1Observer (PID:31552): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/stage1_summary.json
 2026-11-07 03:25:16 [INFO] Stage1Observer (PID:31552): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/stage1_candle_health.csv (12 records)
 2026-11-07 03:25:16 [INFO] Stage1Observer (PID:31552): Saved /home/ubuntu/Local-AI-Trading-Agent/reports/stage1_readonly/STAGE1_READONLY_REPORT.md
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): Executing Pre-Flight Safety Verification...
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): Pre-Flight Safety Verification: ALL CHECKS PASSED.
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): Executing Pre-Flight Safety Verification...
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): Executing Pre-Flight Safety Verification...
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): Executing Pre-Flight Safety Verification...
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): 5m Candle Finalized: 05:30:00 IST | Close: $4005.00 | Vol: 10.00
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): 5m Candle Finalized: 05:30:00 IST | Close: $4005.00 | Vol: 10.00
+2026-11-14 16:34:57 [WARNING] Stage1Observer (PID:25228): Candle gap detected: 600s (2 missing 5m candles between 300 and 1200)
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): 5m Candle Finalized: 05:35:00 IST | Close: $4012.00 | Vol: 15.00
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): Saved C:\Users\ajith\AppData\Local\Temp\pytest-of-ajith\pytest-317\test_output_artifacts_generati0\stage1_test_output\stage1_summary.json
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): Saved C:\Users\ajith\AppData\Local\Temp\pytest-of-ajith\pytest-317\test_output_artifacts_generati0\stage1_test_output\stage1_candle_health.csv (0 records)
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): Saved C:\Users\ajith\AppData\Local\Temp\pytest-of-ajith\pytest-317\test_output_artifacts_generati0\stage1_test_output\STAGE1_READONLY_REPORT.md
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): Executing Pre-Flight Safety Verification...
+2026-11-14 16:34:57 [WARNING] Stage1Observer (PID:25228): Stale feed detected: No public update for 75.0s (interval count: 1)
+2026-11-14 16:34:57 [INFO] Stage1Observer (PID:25228): REST fallback query successful: XAUTUSD reachable (total REST events: 1).

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/strategy-intelligence-v2
+      - feature/phase4-1-2-ci-build-dependency-fix
       - main
   workflow_dispatch:
     inputs:
@@ -31,13 +32,16 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade --only-binary :all: pip==24.3.1
-          pip install -r requirements.txt --only-binary :all:
+          pip install -r requirements.txt --require-hashes --only-binary :all:
 
       - name: Run Core Test Suite
         run: |
           pytest tests/test_dashboard_state_consistency.py \
                  tests/test_paper_trade_accounting.py \
-                 tests/test_monitoring_api.py -v
+                 tests/test_deployment_tracker_regression.py \
+                 tests/test_ci_security_scanner_regression.py \
+                 tests/test_monitoring_api.py \
+                 tests/test_phase4_7_forward_analytics.py -v
 
       - name: Verify Strict PAPER Trading Safety
         run: |
@@ -96,7 +100,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade --only-binary :all: pip==24.3.1
-          pip install -r requirements.txt --only-binary :all:
+          pip install -r requirements.txt --require-hashes --only-binary :all:
 
       - name: Record CI Verification
         run: |

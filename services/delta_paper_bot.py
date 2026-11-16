@@ -13,7 +13,10 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from config.orb_settings import ORBSettings, settings as default_orb_settings
-from market_data.delta_live_feed import DeltaLiveMarketDataFeed
+try:
+    from market_data.delta_live_feed import DeltaLiveMarketDataFeed
+except ImportError:
+    DeltaLiveMarketDataFeed = None
 from services.delta_paper_broker import DeltaPaperBroker, PaperSafetyViolation
 from strategy.arbitrator import arbitrate_strategies, ArbitrationResult
 from strategy.orb_ema_volume import evaluate_orb, Signal
@@ -25,7 +28,10 @@ from risk.position_size_guard import (
     PositionSizeViolation,
     APPROVED_MAX_PAPER_LOTS,
 )
-from journal.orb_journal import ORBJournal
+try:
+    from journal.orb_journal import ORBJournal
+except ImportError:
+    ORBJournal = None
 
 logger = logging.getLogger(__name__)
 
@@ -49,19 +55,31 @@ class DeltaPaperBot:
         cfg: Optional[ORBSettings] = None,
         feed: Optional[DeltaLiveMarketDataFeed] = None,
         broker: Optional[DeltaPaperBroker] = None,
+        gov_supervisor: Optional[Any] = None,
     ):
         self.cfg = cfg or default_orb_settings
+        self.gov_supervisor = gov_supervisor or getattr(broker, "gov_supervisor", None)
 
-        # Hard safety validation
-        if self.cfg.mode != "PAPER":
-            raise PaperSafetyViolation(f"DeltaPaperBot requires mode='PAPER', got '{self.cfg.mode}'. Refusing to run.")
-        if getattr(self.cfg, "live_trading_enabled", False):
-            raise PaperSafetyViolation("CRITICAL: LIVE_TRADING_ENABLED is true. DeltaPaperBot enforces simulated trading only.")
+        # Hard safety validation & Tier 0 containment
+        if self.cfg.mode != "PAPER" or getattr(self.cfg, "live_trading_enabled", False):
+            if self.gov_supervisor:
+                try:
+                    self.gov_supervisor.record_incident(
+                        "LIVE_ORDER_ATTEMPT",
+                        details={"mode": getattr(self.cfg, "mode", None), "live_trading_enabled": getattr(self.cfg, "live_trading_enabled", False), "source": "DeltaPaperBot.__init__"},
+                        severity="FATAL",
+                    )
+                except Exception:
+                    pass
+            if self.cfg.mode != "PAPER":
+                raise PaperSafetyViolation(f"DeltaPaperBot requires mode='PAPER', got '{self.cfg.mode}'. Refusing to run.")
+            if getattr(self.cfg, "live_trading_enabled", False):
+                raise PaperSafetyViolation("CRITICAL: LIVE_TRADING_ENABLED is true. DeltaPaperBot enforces simulated trading only.")
 
-        self.feed = feed or DeltaLiveMarketDataFeed(cfg=self.cfg)
-        self.broker = broker or DeltaPaperBroker(cfg=self.cfg)
+        self.feed = feed or (DeltaLiveMarketDataFeed(cfg=self.cfg) if DeltaLiveMarketDataFeed else None)
+        self.broker = broker or DeltaPaperBroker(cfg=self.cfg, gov_supervisor=self.gov_supervisor)
         self.risk_state = DailyRiskState(path=self.cfg.state_path, cfg=self.cfg)
-        self.journal = ORBJournal(path=self.cfg.journal_path)
+        self.journal = (ORBJournal(path=self.cfg.journal_path) if ORBJournal else None)
 
         self._lock = threading.RLock()
         self._is_running = False

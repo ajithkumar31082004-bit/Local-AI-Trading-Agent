@@ -33,6 +33,7 @@ class MarketRegime(str, Enum):
     TRENDING_BEARISH = "TRENDING_BEARISH"
     RANGING = "RANGING"
     VOLATILE_BREAKOUT = "VOLATILE_BREAKOUT"
+    SHOCK_CRASH = "SHOCK_CRASH"
     UNCERTAIN = "UNCERTAIN"
 
 
@@ -138,6 +139,7 @@ def detect_market_regime(
     c_5m = float(curr_5m["Close"])
     h_5m = float(curr_5m["High"])
     l_5m = float(curr_5m["Low"])
+    o_5m = float(curr_5m["Open"])
     vol_5m = float(curr_5m["Volume"])
     vol_avg_5m = float(curr_5m["Vol_Avg20"]) if pd.notna(curr_5m["Vol_Avg20"]) else 1.0
     atr_5m = float(curr_5m["ATR14"]) if pd.notna(curr_5m["ATR14"]) else 2.0
@@ -170,6 +172,21 @@ def detect_market_regime(
     }
 
     # 5. REGIME CLASSIFICATION RULES
+
+    # 0. SHOCK_CRASH Check (Absolute Priority)
+    candle_range_5m = h_5m - l_5m
+    range_atr_ratio = candle_range_5m / max(atr_5m, 1e-6)
+    price_15m_ago = float(df_5m["Close"].iloc[-4]) if len(df_5m) >= 4 else float(df_5m["Close"].iloc[0])
+    pct_change_15m = (c_5m - price_15m_ago) / max(price_15m_ago, 1e-6)
+    if (range_atr_ratio >= 3.0 and c_5m < o_5m) or pct_change_15m <= -0.015:
+        return RegimeDetectionResult(
+            regime=MarketRegime.SHOCK_CRASH,
+            confidence=0.99,
+            allowed_strategies=[],
+            disallowed_strategies=["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP"],
+            rationale="SHOCK_CRASH detected: extreme price collapse or candle range expansion (> 3.0x ATR). All new order entries blocked.",
+            metrics=metrics,
+        )
 
     # A. VOLATILE_BREAKOUT Check
     # Triggers on sharp volatility expansion (> 1.35x ATR SMA or > 1.4x Bandwidth), volume expansion, and range breakout

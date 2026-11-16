@@ -53,16 +53,25 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
     # 1. Market Regime Evaluation
     regime_res = detect_market_regime(frame, cfg)
 
-    # If regime is UNCERTAIN, block all trades immediately without computing sub-strategies
-    if regime_res.regime == MarketRegime.UNCERTAIN or regime_res.confidence < 0.60:
+    # If regime is SHOCK_CRASH, UNCERTAIN, or confidence < 0.60, block all trades immediately
+    regime_val = getattr(regime_res.regime, "value", str(regime_res.regime))
+    is_shock = regime_val == "SHOCK_CRASH"
+    is_uncertain = regime_val in {"UNCERTAIN", "UNKNOWN"}
+
+    if is_shock or is_uncertain or regime_res.confidence < 0.60:
         is_warming_up = "WARMING_UP" in regime_res.rationale or regime_res.metrics.get("readiness", {}).get("state") == "WARMING_UP"
-        decision_code = "SYSTEM_WARMING_UP" if is_warming_up else "REGIME_UNCERTAIN"
-        diagnostic_code = "WARMING_UP" if is_warming_up else "REGIME_UNCERTAIN"
-        reason_msg = (
-            f"NO TRADE: system warming up ({regime_res.rationale}). All strategies blocked until indicators are ready."
-            if is_warming_up
-            else f"NO TRADE: market regime is UNCERTAIN ({regime_res.rationale}). All strategies blocked for capital preservation."
-        )
+        if is_shock:
+            decision_code = "SHOCK_CRASH_BLOCKED"
+            diagnostic_code = "SHOCK_CRASH_BLOCKED"
+            reason_msg = f"NO TRADE: market regime is SHOCK_CRASH ({regime_res.rationale}). All strategy entries blocked."
+        elif is_warming_up:
+            decision_code = "SYSTEM_WARMING_UP"
+            diagnostic_code = "WARMING_UP"
+            reason_msg = f"NO TRADE: system warming up ({regime_res.rationale}). All strategies blocked until indicators are ready."
+        else:
+            decision_code = "REGIME_UNCERTAIN"
+            diagnostic_code = "REGIME_UNCERTAIN"
+            reason_msg = f"NO TRADE: market regime is UNCERTAIN ({regime_res.rationale}). All strategies blocked for capital preservation."
 
         all_strat_names = ["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP"]
         dummy_signals = {
@@ -104,8 +113,8 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
         )
 
     # 2. Evaluate only strategies allowed by the identified regime
-    # Phase 3 mandate: BB_RSI_MEAN_REVERSION is kept disabled in the portfolio until positive expectancy is demonstrated
-    disabled_in_portfolio = {"BB_RSI_MEAN_REVERSION"}
+    # Phase 4.7: Full multi-strategy ensemble active; regime gating filters eligibility
+    disabled_in_portfolio = set()
 
     eval_dispatch = {
         "ORB": evaluate_orb,

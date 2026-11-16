@@ -59,10 +59,11 @@ def test_01_job3_provisions_python_and_dependencies_before_execution():
     assert setup_step.get("with", {}).get("python-version") == "3.11"
     assert setup_step.get("with", {}).get("cache") == "pip"
 
-    # Verify installation command
+    # Verify installation command and cryptographic hash verification
     install_step = steps[install_idx]
     install_run = install_step.get("run", "")
     assert "pip install -r requirements.txt" in install_run
+    assert "--require-hashes" in install_run, "Supply chain security requires --require-hashes enforcement"
 
 
 # =============================================================================
@@ -77,13 +78,22 @@ def test_02_all_three_ci_jobs_remain_configured_and_ordered():
     jobs = workflow.get("jobs", {})
     assert set(jobs.keys()) == {"test_and_validate", "security_audit", "ci_build_tracking"}
 
-    # Verify test_and_validate has strict PAPER safety verification
+    # Verify test_and_validate has strict PAPER safety verification and hash-checked dependency install
     t_and_v_steps = jobs["test_and_validate"].get("steps", [])
     assert any("Verify Strict PAPER Trading Safety" in s.get("name", "") for s in t_and_v_steps)
+    t_and_v_install = next(s.get("run", "") for s in t_and_v_steps if "Install Dependencies" in s.get("name", ""))
+    assert "pip install -r requirements.txt" in t_and_v_install
+    assert "--require-hashes" in t_and_v_install
 
     # Verify security_audit has leak scan
     sec_steps = jobs["security_audit"].get("steps", [])
     assert any("Scan for Leaked Secrets" in s.get("name", "") for s in sec_steps)
+
+    # Verify ci_build_tracking has hash-checked dependency install
+    ci_track_steps = jobs["ci_build_tracking"].get("steps", [])
+    ci_track_install = next(s.get("run", "") for s in ci_track_steps if "Install Dependencies" in s.get("name", ""))
+    assert "pip install -r requirements.txt" in ci_track_install
+    assert "--require-hashes" in ci_track_install
 
 
 def test_03_zero_secrets_in_workflow_file():

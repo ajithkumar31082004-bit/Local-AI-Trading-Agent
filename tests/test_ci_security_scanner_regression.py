@@ -10,6 +10,9 @@ VERIFIES:
 
 import os
 import re
+
+# Ensure safe mock monitoring key is available if monitoring_api is imported
+os.environ["MONITORING_API_KEY"] = "ci_mock_monitoring_key_32bytes_value_testing_only"
 from pathlib import Path
 import pytest
 

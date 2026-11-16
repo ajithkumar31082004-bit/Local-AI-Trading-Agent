@@ -17,7 +17,7 @@ EnvironmentFile=-/home/ubuntu/Local-AI-Trading-Agent/.env
 
 # Strict Pre-Start Safety Gate: Refuses to start if TRADING_MODE is not PAPER or LIVE_TRADING_ENABLED is true
 ExecStartPre=/home/ubuntu/Local-AI-Trading-Agent/.venv/bin/python -c "\
-import os, sys; \
+import os, sys, portalocker; \
 from config.orb_settings import settings; \
 assert settings.mode == 'PAPER', 'FATAL: TRADING_MODE must be PAPER'; \
 assert settings.trading_mode == 'PAPER', 'FATAL: trading_mode alias must be PAPER'; \

@@ -20,6 +20,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -42,15 +43,41 @@ LOGS_DIR = BASE_DIR / "logs"
 STATE_FILE_24H = DATA_DIR / "paper_forward_24h_state.json"
 BENCHMARK_14D_CSV = DATA_DIR / "forward_test_14d_trades.csv"
 DEPLOYMENTS_FILE = DATA_DIR / "deployments.json"
-SERVICE_LOG_FILE = DATA_DIR / "paper_trading_service.log"
+SERVICE_LOG_FILE = DATA_DIR / "trading_daemon.log"
+FALLBACK_LOG_FILE = DATA_DIR / "paper_trading_service.log"
 
-# Security Configuration
+# Security Configuration (Strict Fail-Closed Enforcement)
 DEFAULT_SECRET = "delta_paper_monitor_sec_key_2026_xaut"
-API_KEY = os.getenv("MONITORING_API_KEY", DEFAULT_SECRET)
+MIN_KEY_LENGTH = 32
+API_KEY = os.getenv("MONITORING_API_KEY", "").strip()
+if not API_KEY or API_KEY == DEFAULT_SECRET or len(API_KEY) < MIN_KEY_LENGTH:
+    logger.critical(
+        "FATAL: MONITORING_API_KEY is missing, uses the insecure default, or has insufficient entropy (< %d chars).",
+        MIN_KEY_LENGTH,
+    )
+    raise RuntimeError(
+        f"Monitoring API cannot start without a secure API key (minimum {MIN_KEY_LENGTH} characters)."
+    )
 
-# Rate Limiter: In-memory sliding window
-RATE_LIMIT_PER_MINUTE = int(os.getenv("MONITORING_RATE_LIMIT", "60"))
+# Rate Limiter: In-memory sliding window with thread safety and memory bounds
+def _get_validated_rate_limit() -> int:
+    """Validate MONITORING_RATE_LIMIT environment variable. Defaults to 60 req/min."""
+    raw = os.getenv("MONITORING_RATE_LIMIT", "60").strip()
+    try:
+        val = int(raw)
+        if 1 <= val <= 10000:
+            return val
+        logger.warning("MONITORING_RATE_LIMIT %d out of bounds (1-10000). Falling back to 60.", val)
+        return 60
+    except (ValueError, TypeError):
+        logger.warning("Invalid MONITORING_RATE_LIMIT '%s'. Falling back to 60.", raw)
+        return 60
+
+
+RATE_LIMIT_PER_MINUTE = _get_validated_rate_limit()
 _request_counts: Dict[str, List[float]] = defaultdict(list)
+_rate_limit_lock = threading.Lock()
+MAX_TRACKED_IPS = 500
 
 # Sensitive Patterns for Redaction
 REDACTION_RULES = [
@@ -95,21 +122,10 @@ def verify_monitoring_auth(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Security(security),
 ) -> str:
-    """Verify Bearer token or X-API-Key header with constant-time comparison."""
+    """Verify Bearer token or X-API-Key header with constant-time comparison and thread-safe rate limiting."""
     client_ip = request.client.host if request.client else "unknown"
 
-    # Enforce Rate Limiting
-    now = time.time()
-    cutoff = now - 60.0
-    _request_counts[client_ip] = [t for t in _request_counts[client_ip] if t > cutoff]
-    if len(_request_counts[client_ip]) >= RATE_LIMIT_PER_MINUTE:
-        logger.warning("Rate limit exceeded for IP: %s", client_ip)
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Maximum 60 requests per minute.",
-        )
-    _request_counts[client_ip].append(now)
-
+    # Authenticate first; only count request against rate limit after token validation
     token = None
     if credentials:
         token = credentials.credentials
@@ -123,6 +139,34 @@ def verify_monitoring_auth(
             detail="Invalid or missing monitoring authentication token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Enforce Rate Limiting (only for authenticated requests)
+    now = time.time()
+    cutoff = now - 60.0
+    limit = _get_validated_rate_limit()
+
+    with _rate_limit_lock:
+        # Guarantee memory bound: if client_ip is new and dictionary is at capacity (>= MAX_TRACKED_IPS),
+        # evict stale or oldest entries BEFORE inserting new key so size NEVER exceeds MAX_TRACKED_IPS.
+        if client_ip not in _request_counts and len(_request_counts) >= MAX_TRACKED_IPS:
+            stale_ips = [ip for ip, timestamps in _request_counts.items() if not timestamps or timestamps[-1] <= cutoff]
+            for ip in stale_ips:
+                del _request_counts[ip]
+            if len(_request_counts) >= MAX_TRACKED_IPS:
+                excess = len(_request_counts) - MAX_TRACKED_IPS + 1
+                sorted_ips = sorted(_request_counts.items(), key=lambda item: item[1][-1] if item[1] else 0)
+                for ip, _ in sorted_ips[:excess]:
+                    del _request_counts[ip]
+
+        _request_counts[client_ip] = [t for t in _request_counts[client_ip] if t > cutoff]
+        if len(_request_counts[client_ip]) >= limit:
+            logger.warning("Rate limit exceeded for IP: %s (limit: %d/min)", client_ip, limit)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Rate limit exceeded. Maximum {limit} requests per minute.",
+            )
+        _request_counts[client_ip].append(now)
+
     return token
 
 
@@ -135,12 +179,23 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
+# CORS Configuration (Restricted to Explicit Trusted Origins, Credentials Disabled by Default)
+raw_origins = os.getenv("MONITORING_ALLOWED_ORIGINS", "http://127.0.0.1,http://localhost").strip()
+ALLOWED_ORIGINS = [orig.strip() for orig in raw_origins.split(",") if orig.strip()]
+if any(orig == "*" for orig in ALLOWED_ORIGINS):
+    logger.critical("FATAL: Wildcard origin '*' is strictly forbidden in MONITORING_ALLOWED_ORIGINS.")
+    raise ValueError("CORS wildcard '*' is strictly forbidden for security compliance.")
+
+ALLOW_CREDENTIALS = os.getenv("MONITORING_ALLOW_CREDENTIALS", "false").lower() in ("true", "1", "yes")
+if ALLOW_CREDENTIALS and any(orig == "*" for orig in ALLOWED_ORIGINS):
+    raise ValueError("CORS wildcard '*' with credentials allowed is strictly prohibited.")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=ALLOW_CREDENTIALS,
     allow_methods=["GET"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "X-API-Key", "Content-Type"],
 )
 
 
@@ -157,18 +212,19 @@ class HealthResponse(BaseModel):
 
 
 class SystemStatusResponse(BaseModel):
-    hostname: str
-    uptime_seconds: float
-    cpu_percent: float
-    memory_total_mb: float
-    memory_used_mb: float
-    memory_free_mb: float
-    memory_percent: float
-    disk_total_gb: float
-    disk_used_gb: float
-    disk_free_gb: float
-    disk_percent: float
-    load_averages: List[float]
+    hostname: Optional[str] = None
+    uptime_seconds: Optional[float] = None
+    cpu_percent: Optional[float] = None  # Measured from /proc/stat delta (None when unavailable)
+    memory_total_mb: Optional[float] = None
+    memory_used_mb: Optional[float] = None
+    memory_free_mb: Optional[float] = None
+    memory_percent: Optional[float] = None
+    disk_total_gb: Optional[float] = None
+    disk_used_gb: Optional[float] = None
+    disk_free_gb: Optional[float] = None
+    disk_percent: Optional[float] = None
+    load_averages: Optional[List[float]] = None
+    telemetry_available: bool = True
     timestamp: str
 
 
@@ -189,48 +245,51 @@ class ServicesResponse(BaseModel):
 
 
 class TradingStatusResponse(BaseModel):
-    symbol: str
-    trading_mode: str
-    live_trading_enabled: bool
-    live_trading_acknowledged: str
-    ws_connected: bool
-    runner_ready: bool
-    current_price: Optional[float]
-    market_regime: str
-    ticks_ingested: int
-    completed_5m_bars: int
-    completed_15m_bars: int
-    last_candle_timestamp: Optional[str]
-    daily_trade_count: int
-    max_daily_trades: int
-    daily_risk_guard_active: bool
-    last_updated: str
+    symbol: str = "XAUTUSD"
+    trading_mode: str = "PAPER"
+    live_trading_enabled: bool = False
+    live_trading_acknowledged: str = "NO"
+    ws_connected: bool = False
+    runner_ready: bool = False
+    systemd_active: bool = False
+    current_price: Optional[float] = None
+    market_regime: str = "UNKNOWN"
+    ticks_ingested: int = 0
+    completed_5m_bars: int = 0
+    completed_15m_bars: int = 0
+    last_candle_timestamp: Optional[str] = None
+    daily_trade_count: Optional[int] = None
+    max_daily_trades: int = 1
+    daily_risk_guard_active: Optional[bool] = None
+    state_available: bool = True
+    last_updated: Optional[str] = None
 
 
 class AccountResponse(BaseModel):
-    symbol: str
-    initial_equity: float
-    cash_balance: float
-    current_equity: float
-    realized_pnl: float
-    unrealized_pnl: float
-    total_fees: float
-    total_slippage: float
-    peak_equity: float
-    open_position: Optional[Dict[str, Any]]
-    last_updated: str
+    symbol: str = "XAUTUSD"
+    initial_equity: Optional[float] = None
+    cash_balance: Optional[float] = None
+    current_equity: Optional[float] = None
+    realized_pnl: Optional[float] = None
+    unrealized_pnl: Optional[float] = None
+    total_fees: Optional[float] = None
+    total_slippage: Optional[float] = None
+    peak_equity: Optional[float] = None
+    open_position: Optional[Dict[str, Any]] = None
+    last_updated: Optional[str] = None
 
 
 class GitStatusResponse(BaseModel):
-    branch: str
-    ec2_commit_sha: str
-    remote_commit_sha: Optional[str]
-    in_sync: bool
-    is_clean: bool
-    latest_commit_message: str
-    latest_commit_author: str
-    latest_commit_date: str
-    uncommitted_files_count: int
+    branch: Optional[str] = None
+    ec2_commit_sha: Optional[str] = None
+    remote_commit_sha: Optional[str] = None
+    in_sync: Optional[bool] = None
+    is_clean: Optional[bool] = None
+    sync_upstream_reference: str = "@{u} (cached remote tracking ref; requires network fetch to update)"
+    latest_commit_message: Optional[str] = None
+    latest_commit_author: Optional[str] = None
+    latest_commit_date: Optional[str] = None
+    uncommitted_files_count: int = 0
 
 
 class DeploymentRecord(BaseModel):
@@ -250,7 +309,14 @@ class DeploymentRecord(BaseModel):
 # ---------------------------------------------------------------------------
 def _get_systemd_status(service_name: str) -> ServiceItem:
     """Read systemd status using systemctl or fallback to mock/proc."""
-    desc = "Paper Trading Service" if "trading" in service_name else "Streamlit Dashboard"
+    if "trading-daemon" in service_name:
+        desc = "Delta Exchange Paper Trading Daemon"
+    elif "shadow-observer" in service_name:
+        desc = "Delta Exchange Shadow Observer"
+    elif "monitoring-api" in service_name:
+        desc = "Delta Monitoring REST API"
+    else:
+        desc = service_name
     try:
         res = subprocess.run(
             ["systemctl", "show", service_name, "--property=ActiveState,SubState,MainPID,NRestarts"],
@@ -321,13 +387,16 @@ def get_health() -> HealthResponse:
 
 @app.get("/api/ec2/status", response_model=SystemStatusResponse)
 def get_ec2_status(token: str = Depends(verify_monitoring_auth)) -> SystemStatusResponse:
-    """Return CPU, Memory, and Disk usage metrics of the EC2 instance."""
+    """Return CPU, Memory, and Disk usage metrics of the EC2 instance without fabricated defaults."""
     import platform
-    hostname = platform.node() or "ip-172-31-4-192"
+    hostname = platform.node() or None
+    telemetry_available = False
 
-    # Memory info via /proc/meminfo or shutil
-    mem_total = 1024.0
-    mem_free = 512.0
+    # Memory info via /proc/meminfo (no fabricated defaults)
+    mem_total: Optional[float] = None
+    mem_free: Optional[float] = None
+    mem_used: Optional[float] = None
+    mem_pct: Optional[float] = None
     if Path("/proc/meminfo").exists():
         try:
             meminfo = {}
@@ -338,59 +407,106 @@ def get_ec2_status(token: str = Depends(verify_monitoring_auth)) -> SystemStatus
                         k = parts[0].strip()
                         v = parts[1].strip().split()[0]
                         meminfo[k] = float(v) / 1024.0  # MB
-            mem_total = meminfo.get("MemTotal", 1024.0)
-            mem_free = meminfo.get("MemAvailable", meminfo.get("MemFree", 512.0))
+            if "MemTotal" in meminfo:
+                mem_total = round(meminfo["MemTotal"], 1)
+                mem_free = round(meminfo.get("MemAvailable", meminfo.get("MemFree", 0.0)), 1)
+                mem_used = round(mem_total - mem_free, 1)
+                mem_pct = round((mem_used / mem_total) * 100.0, 1) if mem_total > 0 else 0.0
+                telemetry_available = True
         except Exception:
             pass
 
-    mem_used = mem_total - mem_free
-    mem_pct = round((mem_used / mem_total) * 100.0, 1) if mem_total > 0 else 0.0
-
     # Disk info
-    total_d, used_d, free_d = shutil.disk_usage("/")
-    disk_total_gb = round(total_d / (1024**3), 2)
-    disk_used_gb = round(used_d / (1024**3), 2)
-    disk_free_gb = round(free_d / (1024**3), 2)
-    disk_pct = round((used_d / total_d) * 100.0, 1)
+    disk_total_gb: Optional[float] = None
+    disk_used_gb: Optional[float] = None
+    disk_free_gb: Optional[float] = None
+    disk_pct: Optional[float] = None
+    try:
+        total_d, used_d, free_d = shutil.disk_usage("/")
+        disk_total_gb = round(total_d / (1024**3), 2)
+        disk_used_gb = round(used_d / (1024**3), 2)
+        disk_free_gb = round(free_d / (1024**3), 2)
+        disk_pct = round((used_d / total_d) * 100.0, 1) if total_d > 0 else 0.0
+    except Exception:
+        pass
 
-    # Uptime & Load Averages
-    uptime_sec = 0.0
-    loads = [0.0, 0.0, 0.0]
+    # Uptime & Load Averages (None when unavailable)
+    uptime_sec: Optional[float] = None
     if Path("/proc/uptime").exists():
         try:
             with open("/proc/uptime", "r") as f:
-                uptime_sec = float(f.read().split()[0])
+                uptime_sec = round(float(f.read().split()[0]), 1)
+                telemetry_available = True
         except Exception:
             pass
+
+    loads: Optional[List[float]] = None
     if hasattr(os, "getloadavg"):
         try:
             loads = [round(x, 2) for x in os.getloadavg()]
         except Exception:
             pass
 
+    # CPU: read /proc/stat for true utilisation (accounting for idle and iowait; excluding guest double-count)
+    cpu_percent: Optional[float] = None
+    if Path("/proc/stat").exists():
+        try:
+            def _read_cpu_times() -> tuple[int, int]:
+                with open("/proc/stat", "r") as f:
+                    line = f.readline()  # first line: "cpu  user nice system idle iowait irq softirq steal guest guest_nice"
+                vals = [int(x) for x in line.split()[1:]]
+                user = vals[0] if len(vals) > 0 else 0
+                nice = vals[1] if len(vals) > 1 else 0
+                system = vals[2] if len(vals) > 2 else 0
+                idle = vals[3] if len(vals) > 3 else 0
+                iowait = vals[4] if len(vals) > 4 else 0
+                irq = vals[5] if len(vals) > 5 else 0
+                softirq = vals[6] if len(vals) > 6 else 0
+                steal = vals[7] if len(vals) > 7 else 0
+                # Accounting: idle_all includes idle and iowait
+                idle_all = idle + iowait
+                # Total includes user, nice, system, irq, softirq, steal, idle_all
+                # Guest and guest_nice are already accounted for in user and nice; do not add again
+                total = user + nice + system + irq + softirq + steal + idle_all
+                return idle_all, total
+
+            idle0, total0 = _read_cpu_times()
+            time.sleep(0.1)
+            idle1, total1 = _read_cpu_times()
+            delta_total = total1 - total0
+            delta_idle = idle1 - idle0
+            if delta_total > 0:
+                raw_pct = (1.0 - (delta_idle / delta_total)) * 100.0
+                cpu_percent = round(max(0.0, min(100.0, raw_pct)), 1)
+                telemetry_available = True
+        except Exception:
+            pass
+
     return SystemStatusResponse(
         hostname=hostname,
         uptime_seconds=uptime_sec,
-        cpu_percent=round(loads[0] * 10.0, 1) if loads else 5.0,
-        memory_total_mb=round(mem_total, 1),
-        memory_used_mb=round(mem_used, 1),
-        memory_free_mb=round(mem_free, 1),
+        cpu_percent=cpu_percent,
+        memory_total_mb=mem_total,
+        memory_used_mb=mem_used,
+        memory_free_mb=mem_free,
         memory_percent=mem_pct,
         disk_total_gb=disk_total_gb,
         disk_used_gb=disk_used_gb,
         disk_free_gb=disk_free_gb,
         disk_percent=disk_pct,
         load_averages=loads,
+        telemetry_available=telemetry_available,
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
 
 @app.get("/api/services", response_model=ServicesResponse)
 def get_services(token: str = Depends(verify_monitoring_auth)) -> ServicesResponse:
-    """Return status of delta trading and dashboard systemd services."""
+    """Return status of delta trading daemon, shadow observer, and monitoring API systemd services."""
     services = [
-        _get_systemd_status("delta-paper-trading.service"),
-        _get_systemd_status("delta-paper-dashboard.service"),
+        _get_systemd_status("delta-trading-daemon.service"),
+        _get_systemd_status("delta-shadow-observer.service"),
+        _get_systemd_status("delta-monitoring-api.service"),
     ]
     return ServicesResponse(
         services=services,
@@ -400,20 +516,32 @@ def get_services(token: str = Depends(verify_monitoring_auth)) -> ServicesRespon
 
 @app.get("/api/trading/status", response_model=TradingStatusResponse)
 def get_trading_status(token: str = Depends(verify_monitoring_auth)) -> TradingStatusResponse:
-    """Return live paper runner telemetry parsed from state and logs."""
+    """Return live paper runner telemetry parsed from state and logs (no fabricated fallbacks)."""
     state = _load_24h_state()
+    state_available = bool(state)
 
     # Parse last log line for live tick and candle telemetry
     ticks = 0
     bars_5m = 0
     bars_15m = 0
-    price = 4090.0
-    regime = "TRENDING_BULLISH"
-    ws_ok = True
+    price: Optional[float] = None
+    regime = "UNKNOWN"
+    ws_ok = False
+    runner_ready = False
+    systemd_active = False
 
+    active_log = None
     if SERVICE_LOG_FILE.exists():
+        active_log = SERVICE_LOG_FILE
+    elif FALLBACK_LOG_FILE.exists():
+        active_log = FALLBACK_LOG_FILE
+
+    now_utc = datetime.now(timezone.utc)
+    now_ts = now_utc.timestamp()
+
+    if active_log:
         try:
-            with open(SERVICE_LOG_FILE, "r", encoding="utf-8") as f:
+            with open(active_log, "r", encoding="utf-8") as f:
                 lines = f.readlines()[-30:]
                 for line in reversed(lines):
                     if "Ticks:" in line and "Price:" in line:
@@ -432,13 +560,59 @@ def get_trading_status(token: str = Depends(verify_monitoring_auth)) -> TradingS
                             bars_15m = int(m_15m.group(1))
                         if m_reg:
                             regime = m_reg.group(1)
-                        break
-        except Exception:
-            pass
 
-    closed_trades = state.get("closed_trades", [])
-    open_pos = state.get("open_position")
-    daily_count = len(closed_trades) + (1 if open_pos else 0)
+                        # Finding B: Check log timestamp freshness (must be within last 60 seconds)
+                        ts_match = re.search(r"(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})", line)
+                        log_fresh = False
+                        if ts_match:
+                            try:
+                                dt_parsed = datetime.fromisoformat(ts_match.group(1).replace(" ", "T")).replace(tzinfo=timezone.utc)
+                                if abs(now_ts - dt_parsed.timestamp()) <= 60.0:
+                                    log_fresh = True
+                            except Exception:
+                                pass
+
+                        # WebSocket connected requires fresh ticks/heartbeat, not historical lines
+                        if log_fresh and (ticks > 0 or "WebSocket connected" in line):
+                            ws_ok = True
+
+                        # Runner ready requires confirmed initialization (fresh log heartbeat or explicit runner_ready state)
+                        if log_fresh or state.get("runner_ready") is True:
+                            runner_ready = True
+                        break
+        except Exception as exc:
+            logger.warning("Error reading %s: %s", active_log, exc)
+
+    # Check systemd status for delta-trading-daemon
+    try:
+        svc_item = _get_systemd_status("delta-trading-daemon.service")
+        systemd_active = svc_item.active
+        # Distinguish process activity from application initialization:
+        # Active systemd unit only marks runner_ready if runner state confirms initialization
+        if svc_item.active and (state.get("runner_ready") is True or runner_ready):
+            runner_ready = True
+    except Exception:
+        pass
+
+    daily_count: Optional[int] = None
+    daily_guard: Optional[bool] = None
+
+    if state_available:
+        closed_trades = state.get("closed_trades", [])
+        open_pos = state.get("open_position")
+
+        # Finding E: Filter closed trades strictly by today's UTC trading-session date using entry_time
+        today_utc = now_utc.strftime("%Y-%m-%d")
+        daily_closed = []
+        for tr in closed_trades:
+            entry_ts = str(tr.get("entry_time") or tr.get("timestamp") or "")
+            if not entry_ts and "exit_time" in tr:
+                entry_ts = str(tr.get("exit_time", ""))
+            if entry_ts.startswith(today_utc):
+                daily_closed.append(tr)
+
+        daily_count = len(daily_closed) + (1 if open_pos else 0)
+        daily_guard = daily_count >= 1
 
     return TradingStatusResponse(
         symbol=state.get("symbol", "XAUTUSD"),
@@ -446,7 +620,8 @@ def get_trading_status(token: str = Depends(verify_monitoring_auth)) -> TradingS
         live_trading_enabled=False,
         live_trading_acknowledged="NO",
         ws_connected=ws_ok,
-        runner_ready=True,
+        runner_ready=runner_ready,
+        systemd_active=systemd_active,
         current_price=price,
         market_regime=regime,
         ticks_ingested=ticks,
@@ -455,25 +630,35 @@ def get_trading_status(token: str = Depends(verify_monitoring_auth)) -> TradingS
         last_candle_timestamp=state.get("last_updated"),
         daily_trade_count=daily_count,
         max_daily_trades=1,
-        daily_risk_guard_active=daily_count >= 1,
-        last_updated=state.get("last_updated", datetime.now(timezone.utc).isoformat()),
+        daily_risk_guard_active=daily_guard,
+        state_available=state_available,
+        last_updated=state.get("last_updated"),
     )
 
 
 @app.get("/api/trading/account", response_model=AccountResponse)
 def get_account_state(token: str = Depends(verify_monitoring_auth)) -> AccountResponse:
-    """Return account cash balance, equity, and P&L breakdown."""
+    """Return account cash balance, equity, and P&L breakdown without fabricated defaults."""
     state = _load_24h_state()
-    cash = state.get("cash_balance", 9992.0528)
-    initial_eq = state.get("initial_equity", 10000.0)
-    realized = state.get("realized_pnl", -7.9472)
-    unrealized = 0.0
-
+    cash = state.get("cash_balance")
+    initial_eq = state.get("initial_equity")
+    realized = state.get("realized_pnl")
     open_pos = state.get("open_position")
-    if open_pos:
-        unrealized = open_pos.get("unrealized_pnl", 0.0)
 
-    current_eq = round(cash + unrealized, 4)
+    unrealized: Optional[float] = None
+    if open_pos:
+        # Finding C: Missing unrealized P&L on open position must remain None, never assumed 0.0
+        unrealized = open_pos.get("unrealized_pnl")
+    elif state:
+        unrealized = 0.0
+
+    current_eq: Optional[float] = None
+    if cash is not None:
+        if open_pos and unrealized is None:
+            # Cannot calculate current equity without knowing open position's unrealized P&L
+            current_eq = None
+        else:
+            current_eq = round(cash + (unrealized if unrealized is not None else 0.0), 4)
 
     return AccountResponse(
         symbol=state.get("symbol", "XAUTUSD"),
@@ -482,11 +667,11 @@ def get_account_state(token: str = Depends(verify_monitoring_auth)) -> AccountRe
         current_equity=current_eq,
         realized_pnl=realized,
         unrealized_pnl=unrealized,
-        total_fees=state.get("total_fees", 1.1954),
-        total_slippage=state.get("total_slippage", 0.7984),
-        peak_equity=state.get("peak_equity", 10984.4728),
+        total_fees=state.get("total_fees"),
+        total_slippage=state.get("total_slippage"),
+        peak_equity=state.get("peak_equity"),
         open_position=open_pos,
-        last_updated=state.get("last_updated", datetime.now(timezone.utc).isoformat()),
+        last_updated=state.get("last_updated"),
     )
 
 
@@ -496,22 +681,49 @@ def get_trades(token: str = Depends(verify_monitoring_auth)) -> Dict[str, Any]:
     state = _load_24h_state()
     active_closed = state.get("closed_trades", [])
 
-    # Enrich active trades with clear dual gross P&L fields
+    # Enrich active trades with clear dual gross P&L fields without fabricated constants
     enriched_active = []
     for tr in active_closed:
-        entry_f = tr.get("entry_price", 4127.90)
-        exit_f = tr.get("exit_price", 4113.95)
-        trig = tr.get("trigger_price", 4114.7696)
-        qty = tr.get("contract_qty", 0.484)
-        sig_gross = tr.get("gross_pnl", -5.9534)
-        fill_gross = round((exit_f - entry_f) * qty, 4)
-        price_impact = tr.get("slippage", 0.7984)
+        entry_f = tr.get("entry_price")
+        exit_f = tr.get("exit_price")
+        qty = tr.get("contract_qty")
+        sig_gross = tr.get("gross_pnl")
+        price_impact = tr.get("slippage")
+
+        # Compute fill-side gross P&L correctly accounting for trade direction and contract multiplier.
+        # Delta Exchange XAUTUSD: 1 lot = 1 USD notional per point; direction = side ("BUY"/"SELL").
+        # gross_pnl_fill = direction_sign × (exit - entry) × qty × contract_multiplier
+        fill_gross = None
+        if exit_f is not None and entry_f is not None and qty is not None:
+            side_raw = str(tr.get("side", tr.get("direction", ""))).strip().upper()
+            if any(s in side_raw for s in ("BUY", "LONG")):
+                direction_sign = 1.0
+            elif any(s in side_raw for s in ("SELL", "SHORT")):
+                direction_sign = -1.0
+            else:
+                direction_sign = None  # Unknown or missing direction
+
+            raw_mult = tr.get("contract_multiplier")
+            contract_multiplier = None
+            if raw_mult is not None:
+                try:
+                    parsed_mult = float(raw_mult)
+                    if parsed_mult > 0:
+                        contract_multiplier = parsed_mult
+                except (ValueError, TypeError):
+                    contract_multiplier = None
+
+            # Finding C: Only compute fill gross if BOTH direction and multiplier are explicitly valid
+            if direction_sign is not None and contract_multiplier is not None:
+                fill_gross = round(direction_sign * (exit_f - entry_f) * qty * contract_multiplier, 4)
+            else:
+                fill_gross = None
 
         enriched_tr = dict(tr)
         enriched_tr["gross_pnl_signal"] = sig_gross
         enriched_tr["gross_pnl_fill"] = fill_gross
         enriched_tr["price_impact"] = price_impact
-        enriched_tr["net_pnl"] = tr.get("net_pnl", -7.9472)
+        enriched_tr["net_pnl"] = tr.get("net_pnl")
         enriched_active.append(enriched_tr)
 
     # Historical 14-day benchmark summary (strictly isolated)
@@ -539,47 +751,62 @@ def get_trades(token: str = Depends(verify_monitoring_auth)) -> Dict[str, Any]:
 
 @app.get("/api/git/status", response_model=GitStatusResponse)
 def get_git_status(token: str = Depends(verify_monitoring_auth)) -> GitStatusResponse:
-    """Return current branch, commit SHA, and parity comparison."""
-    branch = "feature/strategy-intelligence-v2"
-    ec2_sha = "c8dec34cfa3330f8157e7c2c3b390249d59c07af"
-    author = "ajithkumar31082004-bit"
-    date_str = "2026-11-05"
-    msg = "feat(phase3-final): discrete partial fill engine, look-ahead bias audit, and Phase 3 final report"
+    """Return current branch, commit SHA, and verified parity comparison against remote tracking branch."""
+    branch: Optional[str] = None
+    ec2_sha: Optional[str] = None
+    remote_sha: Optional[str] = None
+    in_sync: Optional[bool] = None
+    is_clean: Optional[bool] = None
+    msg: Optional[str] = None
+    author: Optional[str] = None
+    date_str: Optional[str] = None
     uncommitted = 0
 
     try:
         # Get current branch
-        b_res = subprocess.run(["git", "--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, cwd=BASE_DIR)
+        b_res = subprocess.run(["git", "--no-optional-locks", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, cwd=BASE_DIR, timeout=5.0)
         if b_res.returncode == 0 and b_res.stdout.strip():
             branch = b_res.stdout.strip()
 
         # Get local commit SHA
-        sha_res = subprocess.run(["git", "--no-optional-locks", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=BASE_DIR)
+        sha_res = subprocess.run(["git", "--no-optional-locks", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=BASE_DIR, timeout=5.0)
         if sha_res.returncode == 0 and sha_res.stdout.strip():
             ec2_sha = sha_res.stdout.strip()
 
+        # Get remote upstream tracking commit SHA (only if tracking branch exists)
+        remote_res = subprocess.run(["git", "--no-optional-locks", "rev-parse", "@{u}"], capture_output=True, text=True, cwd=BASE_DIR, timeout=5.0)
+        if remote_res.returncode == 0 and remote_res.stdout.strip():
+            remote_sha = remote_res.stdout.strip()
+            if ec2_sha:
+                in_sync = (ec2_sha == remote_sha)
+        else:
+            remote_sha = None
+            in_sync = None
+
         # Get latest commit message, author, date
-        log_res = subprocess.run(["git", "--no-optional-locks", "log", "-1", "--format=%an|%ad|%s"], capture_output=True, text=True, cwd=BASE_DIR)
+        log_res = subprocess.run(["git", "--no-optional-locks", "log", "-1", "--format=%an|%ad|%s"], capture_output=True, text=True, cwd=BASE_DIR, timeout=5.0)
         if log_res.returncode == 0 and "|" in log_res.stdout:
             parts = log_res.stdout.strip().split("|", 2)
             author = parts[0]
             date_str = parts[1]
             msg = parts[2]
 
-        # Check status
-        st_res = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"], capture_output=True, text=True, cwd=BASE_DIR)
+        # Check working tree cleanliness
+        st_res = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"], capture_output=True, text=True, cwd=BASE_DIR, timeout=5.0)
         if st_res.returncode == 0:
             lines = [l for l in st_res.stdout.strip().split("\n") if l.strip()]
             uncommitted = len(lines)
+            is_clean = (uncommitted == 0)
     except Exception as exc:
-        logger.warning("Git check fallback: %s", exc)
+        logger.warning("Git check error: %s", exc)
 
     return GitStatusResponse(
         branch=branch,
         ec2_commit_sha=ec2_sha,
-        remote_commit_sha=ec2_sha,
-        in_sync=True,
-        is_clean=uncommitted == 0,
+        remote_commit_sha=remote_sha,
+        in_sync=in_sync,
+        is_clean=is_clean,
+        sync_upstream_reference="@{u} (cached remote tracking ref; requires network fetch to update)",
         latest_commit_message=msg,
         latest_commit_author=author,
         latest_commit_date=date_str,
@@ -600,6 +827,7 @@ def get_git_commits(
             capture_output=True,
             text=True,
             cwd=BASE_DIR,
+            timeout=5.0,
         )
         if res.returncode == 0:
             for line in res.stdout.strip().split("\n"):
@@ -615,14 +843,6 @@ def get_git_commits(
     except Exception as exc:
         logger.warning("Git log error: %s", exc)
 
-    if not commits:
-        commits.append({
-            "commit_sha": "c8dec34cfa3330f8157e7c2c3b390249d59c07af",
-            "short_sha": "c8dec34",
-            "author": "ajithkumar31082004-bit",
-            "date": "Thu Nov 5 01:28:44 2026 +0530",
-            "message": "feat(phase3-final): discrete partial fill engine, look-ahead bias audit, and Phase 3 final report",
-        })
     return commits
 
 
@@ -631,12 +851,24 @@ def get_git_changes(token: str = Depends(verify_monitoring_auth)) -> Dict[str, A
     """Return changed files and sanitized diff for the latest commit or working tree."""
     changed_files = []
     diff_text = ""
+    commit_sha: Optional[str] = None
     try:
+        sha_res = subprocess.run(
+            ["git", "--no-optional-locks", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=BASE_DIR,
+            timeout=5.0,
+        )
+        if sha_res.returncode == 0 and sha_res.stdout.strip():
+            commit_sha = sha_res.stdout.strip()
+
         res_files = subprocess.run(
             ["git", "--no-optional-locks", "show", "--stat", "--name-status", "HEAD"],
             capture_output=True,
             text=True,
             cwd=BASE_DIR,
+            timeout=5.0,
         )
         if res_files.returncode == 0:
             for line in res_files.stdout.split("\n"):
@@ -649,6 +881,7 @@ def get_git_changes(token: str = Depends(verify_monitoring_auth)) -> Dict[str, A
             capture_output=True,
             text=True,
             cwd=BASE_DIR,
+            timeout=10.0,
         )
         if res_diff.returncode == 0:
             diff_text = redact_sensitive_info(res_diff.stdout[:15000])
@@ -656,7 +889,7 @@ def get_git_changes(token: str = Depends(verify_monitoring_auth)) -> Dict[str, A
         diff_text = f"Error reading git diff: {exc}"
 
     return {
-        "commit_sha": "c8dec34cfa3330f8157e7c2c3b390249d59c07af",
+        "commit_sha": commit_sha,
         "changed_files": changed_files,
         "diff_preview": diff_text,
         "notice": "All sensitive credentials and private keys are strictly redacted.",
@@ -670,53 +903,74 @@ def get_deployments(token: str = Depends(verify_monitoring_auth)) -> List[Deploy
         try:
             with open(DEPLOYMENTS_FILE, "r", encoding="utf-8") as f:
                 raw = json.load(f)
-                return [DeploymentRecord(**sanitize_dict(item)) for item in raw]
+                if isinstance(raw, list):
+                    return [DeploymentRecord(**sanitize_dict(item)) for item in raw]
         except Exception as exc:
             logger.warning("Could not parse %s: %s", DEPLOYMENTS_FILE, exc)
 
-    # Return default verified deployment record
-    return [
-        DeploymentRecord(
-            id="DEP-20261105-013305",
-            timestamp="2026-11-05T01:33:05Z",
-            commit_sha="c8dec34cfa3330f8157e7c2c3b390249d59c07af",
-            branch="feature/strategy-intelligence-v2",
-            author="ajithkumar31082004-bit",
-            environment="EC2",
-            status="SUCCESS",
-            tests_passed=True,
-            message="24-Hour Continuous Paper Trading Deployment verified and active",
-        )
-    ]
+    # Return empty list when deployment tracking file is missing or invalid
+    return []
 
 
 @app.get("/api/logs")
 def get_service_logs(
-    service: str = Query("trading", pattern="^(trading|dashboard)$"),
+    service: str = Query("trading", pattern="^(trading|daemon|observer|monitoring|delta-trading-daemon|delta-shadow-observer|delta-monitoring-api|dashboard)$"),
     level: str = Query("ALL", pattern="^(ALL|INFO|WARNING|ERROR)$"),
     limit: int = Query(50, ge=1, le=200),
     token: str = Depends(verify_monitoring_auth),
 ) -> Dict[str, Any]:
     """Return recent logs filtered by service and severity, with sensitive data redacted."""
     raw_lines: List[str] = []
-    if service == "trading" and SERVICE_LOG_FILE.exists():
+
+    service_lower = service.lower()
+    if service_lower in ("trading", "daemon", "delta-trading-daemon", "delta-trading-daemon.service"):
+        svc_name = "delta-trading-daemon.service"
+        primary_log = SERVICE_LOG_FILE
+        fallback_log = FALLBACK_LOG_FILE
+    elif service_lower in ("observer", "shadow", "delta-shadow-observer", "delta-shadow-observer.service"):
+        svc_name = "delta-shadow-observer.service"
+        primary_log = DATA_DIR / "shadow_observer.log"
+        fallback_log = None
+    elif service_lower in ("monitoring", "api", "delta-monitoring-api", "delta-monitoring-api.service"):
+        svc_name = "delta-monitoring-api.service"
+        primary_log = DATA_DIR / "monitoring_api.log"
+        fallback_log = None
+    else:
+        # Backward compatibility fallback
+        svc_name = "delta-trading-daemon.service"
+        primary_log = SERVICE_LOG_FILE
+        fallback_log = FALLBACK_LOG_FILE
+
+    active_log = None
+    if primary_log and primary_log.exists():
+        active_log = primary_log
+    elif fallback_log and fallback_log.exists():
+        active_log = fallback_log
+
+    if active_log:
         try:
-            with open(SERVICE_LOG_FILE, "r", encoding="utf-8") as f:
+            # Stream only the tail needed — avoid loading the entire file into memory
+            with open(active_log, "r", encoding="utf-8") as f:
+                f.seek(0, 2)
+                file_size = f.tell()
+                read_bytes = min(file_size, limit * 300)
+                f.seek(max(0, file_size - read_bytes))
                 raw_lines = f.readlines()
         except Exception as exc:
-            raw_lines = [f"Error reading trading log: {exc}"]
+            raw_lines = [f"Error reading {active_log.name}: {exc}"]
     else:
         # Fallback to systemd journal
-        svc_name = "delta-paper-trading.service" if service == "trading" else "delta-paper-dashboard.service"
         try:
             res = subprocess.run(
-                ["journalctl", "-u", svc_name, f"-n {limit}", "--no-pager"],
+                ["journalctl", "-u", svc_name, "-n", str(limit), "--no-pager"],  # -n and value as separate args
                 capture_output=True,
                 text=True,
-                timeout=3.0,
+                timeout=5.0,
             )
             if res.returncode == 0:
                 raw_lines = res.stdout.split("\n")
+            else:
+                raw_lines = [f"No journal output available for {svc_name}"]
         except Exception:
             raw_lines = [f"No journal output available for {svc_name}"]
 
