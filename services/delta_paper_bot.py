@@ -177,18 +177,18 @@ class DeltaPaperBot:
             logger.info("Starting DeltaPaperBot for %s [Mode: %s, Strategy: %s, Bootstrap: %d bars]...", self.cfg.symbol, self.cfg.mode, self._strategy_type, target_lookback)
             self._log_event("SYSTEM", f"Starting DeltaPaperBot for {self.cfg.symbol} in PAPER mode.")
 
-            candle_registered = False
-            tick_registered = False
+            candle_registration_attempted = False
+            tick_registration_attempted = False
             start_attempted = False
             try:
-                # Register callbacks with feed independently
+                # Register callbacks with feed independently (attempts tracked prior to invocation)
                 if self.feed is not None:
                     if hasattr(self.feed, "register_candle_callback"):
+                        candle_registration_attempted = True
                         self.feed.register_candle_callback(self._on_completed_candle)
-                        candle_registered = True
                     if hasattr(self.feed, "register_tick_callback"):
+                        tick_registration_attempted = True
                         self.feed.register_tick_callback(self._on_tick)
-                        tick_registered = True
 
                     # Start real-time feed (attempt tracked prior to invocation)
                     if hasattr(self.feed, "start"):
@@ -218,8 +218,8 @@ class DeltaPaperBot:
                         cleanup_errors.append(f"Feed stop failed: {stop_exc}")
                         logger.warning("Error during feed stop in rollback: %s", stop_exc)
 
-                # Rollback step 2: Unregister tick callback if registered
-                if tick_registered and self.feed is not None:
+                # Rollback step 2: Unregister tick callback whenever registration was attempted
+                if tick_registration_attempted and self.feed is not None:
                     if hasattr(self.feed, "unregister_tick_callback"):
                         try:
                             self.feed.unregister_tick_callback(self._on_tick)
@@ -232,8 +232,8 @@ class DeltaPaperBot:
                         except Exception as cb_exc:
                             cleanup_errors.append(f"Tick callback removal failed: {cb_exc}")
 
-                # Rollback step 3: Unregister candle callback if registered
-                if candle_registered and self.feed is not None:
+                # Rollback step 3: Unregister candle callback whenever registration was attempted
+                if candle_registration_attempted and self.feed is not None:
                     if hasattr(self.feed, "unregister_candle_callback"):
                         try:
                             self.feed.unregister_candle_callback(self._on_completed_candle)

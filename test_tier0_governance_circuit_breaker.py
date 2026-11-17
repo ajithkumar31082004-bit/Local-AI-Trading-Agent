@@ -983,3 +983,101 @@ def test_31_cleanup_failure_resilience_and_exception_preservation(temp_gov_env):
     cleanup_logs = [log for log in bot._bot_log if "secondary cleanup errors" in log.get("message", "")]
     assert len(cleanup_logs) >= 1
 
+
+# =============================================================================
+# TEST 32: PARTIAL CANDLE REGISTRATION ATTACHES AND RAISES ROLLBACK (V10)
+# =============================================================================
+
+def test_32_partial_candle_registration_attaches_and_raises_rollback(temp_gov_env):
+    """When register_candle_callback attaches callback to internal state and then raises, rollback unregisters it."""
+    class PartialAttachingCandleFeed:
+        def __init__(self):
+            self._candle_callbacks = []
+            self._tick_callbacks = []
+            self.tick_registered_attempted = False
+            self.start_called = False
+
+        def register_candle_callback(self, cb):
+            # Attaches callback internally, then fails partway through execution
+            self._candle_callbacks.append(cb)
+            raise RuntimeError("Simulated failure inside register_candle_callback after internal attachment")
+
+        def unregister_candle_callback(self, cb):
+            if cb in self._candle_callbacks:
+                self._candle_callbacks.remove(cb)
+
+        def register_tick_callback(self, cb):
+            self.tick_registered_attempted = True
+            self._tick_callbacks.append(cb)
+
+        def unregister_tick_callback(self, cb):
+            if cb in self._tick_callbacks:
+                self._tick_callbacks.remove(cb)
+
+        def start(self, bootstrap_lookback=None):
+            self.start_called = True
+
+        def stop(self):
+            pass
+
+    feed = PartialAttachingCandleFeed()
+    broker = DeltaPaperBroker(state_file=temp_gov_env["tmp_path"] / "partial_candle_attach_state.json")
+    bot = DeltaPaperBot(feed=feed, broker=broker)
+
+    with pytest.raises(RuntimeError, match="Simulated failure inside register_candle_callback after internal attachment"):
+        bot.start()
+
+    # Invariants: attached callback cleanly unmounted, subsequent steps never reached, bot not running
+    assert bot._is_running is False
+    assert len(feed._candle_callbacks) == 0
+    assert feed.tick_registered_attempted is False
+    assert feed.start_called is False
+
+
+# =============================================================================
+# TEST 33: PARTIAL TICK REGISTRATION ATTACHES AND RAISES ROLLBACK (V10)
+# =============================================================================
+
+def test_33_partial_tick_registration_attaches_and_raises_rollback(temp_gov_env):
+    """When register_tick_callback attaches callback to internal state and then raises, both callbacks are rolled back."""
+    class PartialAttachingTickFeed:
+        def __init__(self):
+            self._candle_callbacks = []
+            self._tick_callbacks = []
+            self.start_called = False
+
+        def register_candle_callback(self, cb):
+            self._candle_callbacks.append(cb)
+
+        def unregister_candle_callback(self, cb):
+            if cb in self._candle_callbacks:
+                self._candle_callbacks.remove(cb)
+
+        def register_tick_callback(self, cb):
+            # Attaches tick callback internally, then fails partway through execution
+            self._tick_callbacks.append(cb)
+            raise RuntimeError("Simulated failure inside register_tick_callback after internal attachment")
+
+        def unregister_tick_callback(self, cb):
+            if cb in self._tick_callbacks:
+                self._tick_callbacks.remove(cb)
+
+        def start(self, bootstrap_lookback=None):
+            self.start_called = True
+
+        def stop(self):
+            pass
+
+    feed = PartialAttachingTickFeed()
+    broker = DeltaPaperBroker(state_file=temp_gov_env["tmp_path"] / "partial_tick_attach_state.json")
+    bot = DeltaPaperBot(feed=feed, broker=broker)
+
+    with pytest.raises(RuntimeError, match="Simulated failure inside register_tick_callback after internal attachment"):
+        bot.start()
+
+    # Invariants: both attached callbacks cleanly unmounted, feed never started, bot not running
+    assert bot._is_running is False
+    assert len(feed._tick_callbacks) == 0
+    assert len(feed._candle_callbacks) == 0
+    assert feed.start_called is False
+
