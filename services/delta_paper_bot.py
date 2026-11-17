@@ -177,21 +177,23 @@ class DeltaPaperBot:
             logger.info("Starting DeltaPaperBot for %s [Mode: %s, Strategy: %s, Bootstrap: %d bars]...", self.cfg.symbol, self.cfg.mode, self._strategy_type, target_lookback)
             self._log_event("SYSTEM", f"Starting DeltaPaperBot for {self.cfg.symbol} in PAPER mode.")
 
-            callbacks_registered = False
-            feed_started = False
+            candle_registered = False
+            tick_registered = False
+            start_attempted = False
             try:
-                # Register callbacks with feed
+                # Register callbacks with feed independently
                 if self.feed is not None:
                     if hasattr(self.feed, "register_candle_callback"):
                         self.feed.register_candle_callback(self._on_completed_candle)
+                        candle_registered = True
                     if hasattr(self.feed, "register_tick_callback"):
                         self.feed.register_tick_callback(self._on_tick)
-                    callbacks_registered = True
+                        tick_registered = True
 
-                    # Start real-time feed
+                    # Start real-time feed (attempt tracked prior to invocation)
                     if hasattr(self.feed, "start"):
+                        start_attempted = True
                         self.feed.start(bootstrap_lookback=target_lookback)
-                        feed_started = True
 
                 # Evaluate initial historical batch to initialize signal state
                 if self.feed is not None and hasattr(self.feed, "get_completed_5m_candles"):
@@ -206,40 +208,51 @@ class DeltaPaperBot:
             except Exception as exc:
                 logger.error("FATAL: DeltaPaperBot startup failed. Executing atomic rollback: %s", exc)
                 self._is_running = False
-                self._log_event("SYSTEM", f"Startup failed with exception: {exc}. Atomic rollback engaged.")
+                cleanup_errors: List[str] = []
 
-                # Rollback step 1: Stop feed if started
-                if feed_started and self.feed is not None and hasattr(self.feed, "stop"):
+                # Rollback step 1: Stop feed whenever startup was attempted (even partially)
+                if start_attempted and self.feed is not None and hasattr(self.feed, "stop"):
                     try:
                         self.feed.stop()
                     except Exception as stop_exc:
+                        cleanup_errors.append(f"Feed stop failed: {stop_exc}")
                         logger.warning("Error during feed stop in rollback: %s", stop_exc)
 
-                # Rollback step 2: Unregister callbacks
-                if callbacks_registered and self.feed is not None:
-                    if hasattr(self.feed, "unregister_candle_callback"):
-                        try:
-                            self.feed.unregister_candle_callback(self._on_completed_candle)
-                        except Exception:
-                            pass
-                    elif hasattr(self.feed, "_candle_callbacks") and isinstance(self.feed._candle_callbacks, list):
-                        try:
-                            if self._on_completed_candle in self.feed._candle_callbacks:
-                                self.feed._candle_callbacks.remove(self._on_completed_candle)
-                        except Exception:
-                            pass
-
+                # Rollback step 2: Unregister tick callback if registered
+                if tick_registered and self.feed is not None:
                     if hasattr(self.feed, "unregister_tick_callback"):
                         try:
                             self.feed.unregister_tick_callback(self._on_tick)
-                        except Exception:
-                            pass
+                        except Exception as cb_exc:
+                            cleanup_errors.append(f"Tick callback unregister failed: {cb_exc}")
                     elif hasattr(self.feed, "_tick_callbacks") and isinstance(self.feed._tick_callbacks, list):
                         try:
                             if self._on_tick in self.feed._tick_callbacks:
                                 self.feed._tick_callbacks.remove(self._on_tick)
-                        except Exception:
-                            pass
+                        except Exception as cb_exc:
+                            cleanup_errors.append(f"Tick callback removal failed: {cb_exc}")
+
+                # Rollback step 3: Unregister candle callback if registered
+                if candle_registered and self.feed is not None:
+                    if hasattr(self.feed, "unregister_candle_callback"):
+                        try:
+                            self.feed.unregister_candle_callback(self._on_completed_candle)
+                        except Exception as cb_exc:
+                            cleanup_errors.append(f"Candle callback unregister failed: {cb_exc}")
+                    elif hasattr(self.feed, "_candle_callbacks") and isinstance(self.feed._candle_callbacks, list):
+                        try:
+                            if self._on_completed_candle in self.feed._candle_callbacks:
+                                self.feed._candle_callbacks.remove(self._on_completed_candle)
+                        except Exception as cb_exc:
+                            cleanup_errors.append(f"Candle callback removal failed: {cb_exc}")
+
+                if cleanup_errors:
+                    self._log_event(
+                        "SYSTEM",
+                        f"Startup failed with exception: {exc}. Rollback encountered secondary cleanup errors: {'; '.join(cleanup_errors)}"
+                    )
+                else:
+                    self._log_event("SYSTEM", f"Startup failed with exception: {exc}. Atomic rollback completed cleanly.")
 
                 raise
 

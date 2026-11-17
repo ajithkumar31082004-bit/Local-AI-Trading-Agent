@@ -733,7 +733,7 @@ def test_26_canonical_import_failure_without_fallback(temp_gov_env, monkeypatch)
 
 
 # =============================================================================
-# TEST 27: STARTUP ATOMICITY AND ROLLBACK ON FEED START FAILURE (V8)
+# TEST 27: STARTUP ATOMICITY AND ROLLBACK ON FEED START FAILURE (V9)
 # =============================================================================
 
 def test_27_startup_rollback_on_feed_start_failure(temp_gov_env):
@@ -775,8 +775,9 @@ def test_27_startup_rollback_on_feed_start_failure(temp_gov_env):
     with pytest.raises(ConnectionError, match="Simulated WebSocket connection reset during feed start"):
         bot.start()
 
-    # Invariants after rollback
+    # Invariants after rollback (Fail-closed lifecycle guarantee)
     assert bot._is_running is False
+    assert failing_feed.stop_called is True
     assert len(failing_feed._candle_callbacks) == 0
     assert len(failing_feed._tick_callbacks) == 0
 
@@ -839,4 +840,146 @@ def test_28_startup_rollback_on_candle_evaluation_failure(temp_gov_env, monkeypa
     assert healthy_feed.running is False
     assert len(healthy_feed._candle_callbacks) == 0
     assert len(healthy_feed._tick_callbacks) == 0
+
+
+# =============================================================================
+# TEST 29: PARTIAL CALLBACK REGISTRATION FAILURE ROLLBACK (V9)
+# =============================================================================
+
+def test_29_partial_callback_registration_failure_rollback(temp_gov_env):
+    """When candle callback registration succeeds but tick registration raises, candle callback is rolled back."""
+    class PartialCallbackFeed:
+        def __init__(self):
+            self._candle_callbacks = []
+            self._tick_callbacks = []
+            self.start_called = False
+            self.stop_called = False
+
+        def register_candle_callback(self, cb):
+            self._candle_callbacks.append(cb)
+
+        def unregister_candle_callback(self, cb):
+            if cb in self._candle_callbacks:
+                self._candle_callbacks.remove(cb)
+
+        def register_tick_callback(self, cb):
+            raise RuntimeError("Simulated failure during tick callback handler attachment")
+
+        def unregister_tick_callback(self, cb):
+            if cb in self._tick_callbacks:
+                self._tick_callbacks.remove(cb)
+
+        def start(self, bootstrap_lookback=None):
+            self.start_called = True
+
+        def stop(self):
+            self.stop_called = True
+
+    feed = PartialCallbackFeed()
+    broker = DeltaPaperBroker(state_file=temp_gov_env["tmp_path"] / "partial_cb_state.json")
+    bot = DeltaPaperBot(feed=feed, broker=broker)
+
+    with pytest.raises(RuntimeError, match="Simulated failure during tick callback handler attachment"):
+        bot.start()
+
+    # Invariants: candle callback cleanly removed, feed never started, bot not running
+    assert bot._is_running is False
+    assert len(feed._candle_callbacks) == 0
+    assert feed.start_called is False
+
+
+# =============================================================================
+# TEST 30: PARTIALLY INITIALIZED FEED STARTUP FAILURE ROLLBACK (V9)
+# =============================================================================
+
+def test_30_partially_initialized_feed_startup_rollback(temp_gov_env):
+    """When feed.start() starts internal workers/state before raising, feed.stop() is guaranteed invoked."""
+    class PartiallyStartingFeed:
+        def __init__(self):
+            self._candle_callbacks = []
+            self._tick_callbacks = []
+            self.internal_worker_running = False
+            self.stop_called = False
+
+        def register_candle_callback(self, cb):
+            self._candle_callbacks.append(cb)
+
+        def unregister_candle_callback(self, cb):
+            if cb in self._candle_callbacks:
+                self._candle_callbacks.remove(cb)
+
+        def register_tick_callback(self, cb):
+            self._tick_callbacks.append(cb)
+
+        def unregister_tick_callback(self, cb):
+            if cb in self._tick_callbacks:
+                self._tick_callbacks.remove(cb)
+
+        def start(self, bootstrap_lookback=None):
+            # Partially initialize internal worker before failing
+            self.internal_worker_running = True
+            raise ConnectionResetError("Simulated socket drop during handshake negotiation")
+
+        def stop(self):
+            self.stop_called = True
+            self.internal_worker_running = False
+
+    feed = PartiallyStartingFeed()
+    broker = DeltaPaperBroker(state_file=temp_gov_env["tmp_path"] / "partial_init_feed_state.json")
+    bot = DeltaPaperBot(feed=feed, broker=broker)
+
+    with pytest.raises(ConnectionResetError, match="Simulated socket drop during handshake negotiation"):
+        bot.start()
+
+    # Invariants: stop called, worker shutdown, callbacks released, bot not running
+    assert bot._is_running is False
+    assert feed.stop_called is True
+    assert feed.internal_worker_running is False
+    assert len(feed._candle_callbacks) == 0
+    assert len(feed._tick_callbacks) == 0
+
+
+# =============================================================================
+# TEST 31: CLEANUP FAILURE RESILIENCE AND ORIGINAL EXCEPTION PRESERVATION (V9)
+# =============================================================================
+
+def test_31_cleanup_failure_resilience_and_exception_preservation(temp_gov_env):
+    """When secondary cleanup fails during rollback, original startup exception is strictly preserved."""
+    class DefectiveTeardownFeed:
+        def __init__(self):
+            self._candle_callbacks = []
+            self._tick_callbacks = []
+
+        def register_candle_callback(self, cb):
+            self._candle_callbacks.append(cb)
+
+        def unregister_candle_callback(self, cb):
+            raise OSError("Simulated failure unregistering candle callback during cleanup")
+
+        def register_tick_callback(self, cb):
+            self._tick_callbacks.append(cb)
+
+        def unregister_tick_callback(self, cb):
+            raise OSError("Simulated failure unregistering tick callback during cleanup")
+
+        def start(self, bootstrap_lookback=None):
+            raise TimeoutError("Primary startup failure: Delta Exchange public feed unreachable")
+
+        def stop(self):
+            raise RuntimeError("Simulated crash in feed.stop() during emergency rollback")
+
+    feed = DefectiveTeardownFeed()
+    broker = DeltaPaperBroker(state_file=temp_gov_env["tmp_path"] / "defective_teardown_state.json")
+    bot = DeltaPaperBot(feed=feed, broker=broker)
+
+    # Must preserve primary startup exception (TimeoutError), NOT secondary stop or unregister errors
+    with pytest.raises(TimeoutError, match="Primary startup failure: Delta Exchange public feed unreachable"):
+        bot.start()
+
+    # Bot must not be running
+    assert bot._is_running is False
+
+    # Secondary cleanup errors must be logged in bot audit trail
+    cleanup_logs = [log for log in bot._bot_log if "secondary cleanup errors" in log.get("message", "")]
+    assert len(cleanup_logs) >= 1
 
