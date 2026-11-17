@@ -32,17 +32,11 @@ from risk.position_size_guard import (
 from services.idempotency_registry import DurableIdempotencyRegistry, IdempotencyRegistryError
 try:
     from services.governance_supervisor import GovernanceSupervisor, GovernanceContainmentError
-except ImportError:
-    try:
-        from governance_supervisor import GovernanceSupervisor, GovernanceContainmentError
-    except ImportError as e:
-        GovernanceSupervisor = None
-        GovernanceContainmentError = None
-        _SUPERVISOR_IMPORT_EXCEPTION = e
-    else:
-        _SUPERVISOR_IMPORT_EXCEPTION = None
-else:
     _SUPERVISOR_IMPORT_EXCEPTION = None
+except Exception as e:
+    GovernanceSupervisor = None
+    GovernanceContainmentError = None
+    _SUPERVISOR_IMPORT_EXCEPTION = e
 
 logger = logging.getLogger(__name__)
 
@@ -155,9 +149,10 @@ class DeltaPaperBroker:
                     f"FATAL: Failed to construct GovernanceSupervisor: {e}. Fail-closed containment engaged."
                 ) from e
 
-        if not hasattr(self.gov_supervisor, "enforce_startup_governance_safety"):
+        enforce_fn = getattr(self.gov_supervisor, "enforce_startup_governance_safety", None)
+        if not callable(enforce_fn):
             raise PaperSafetyViolation(
-                "FATAL: Injected gov_supervisor lacks mandatory 'enforce_startup_governance_safety' method."
+                "FATAL: Injected gov_supervisor lacks mandatory 'enforce_startup_governance_safety' method or method is not callable."
             )
 
         # Fail-closed startup safety verification

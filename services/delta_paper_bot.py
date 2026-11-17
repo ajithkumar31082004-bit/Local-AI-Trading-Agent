@@ -20,17 +20,11 @@ except ImportError:
 from services.delta_paper_broker import DeltaPaperBroker, PaperSafetyViolation
 try:
     from services.governance_supervisor import GovernanceSupervisor, GovernanceContainmentError
-except ImportError:
-    try:
-        from governance_supervisor import GovernanceSupervisor, GovernanceContainmentError
-    except ImportError as e:
-        GovernanceSupervisor = None
-        GovernanceContainmentError = None
-        _BOT_SUPERVISOR_IMPORT_EXCEPTION = e
-    else:
-        _BOT_SUPERVISOR_IMPORT_EXCEPTION = None
-else:
     _BOT_SUPERVISOR_IMPORT_EXCEPTION = None
+except Exception as e:
+    GovernanceSupervisor = None
+    GovernanceContainmentError = None
+    _BOT_SUPERVISOR_IMPORT_EXCEPTION = e
 from strategy.arbitrator import arbitrate_strategies, ArbitrationResult
 from strategy.orb_ema_volume import evaluate_orb, Signal
 from strategy.trend_following import evaluate_trend_following
@@ -91,9 +85,10 @@ class DeltaPaperBot:
                     f"FATAL: Failed to construct GovernanceSupervisor: {e}. Fail-closed containment engaged."
                 ) from e
 
-        if not hasattr(self.gov_supervisor, "enforce_startup_governance_safety"):
+        enforce_fn = getattr(self.gov_supervisor, "enforce_startup_governance_safety", None)
+        if not callable(enforce_fn):
             raise PaperSafetyViolation(
-                "FATAL: Injected gov_supervisor lacks mandatory 'enforce_startup_governance_safety' method."
+                "FATAL: Injected gov_supervisor lacks mandatory 'enforce_startup_governance_safety' method or method is not callable."
             )
 
         # Fail-closed startup safety verification
@@ -126,6 +121,12 @@ class DeltaPaperBot:
             self.broker = broker
             if self.broker.gov_supervisor is not self.gov_supervisor:
                 self.broker.gov_supervisor = self.gov_supervisor
+            # Mandatory post-synchronization identity verification (Fail-closed)
+            if self.broker.gov_supervisor is not self.gov_supervisor:
+                raise PaperSafetyViolation(
+                    "FATAL: Post-synchronization supervisor identity verification failed. "
+                    "Broker gov_supervisor must be identical to bot gov_supervisor (identity mismatch)."
+                )
         else:
             self.broker = DeltaPaperBroker(cfg=self.cfg, gov_supervisor=self.gov_supervisor)
         self.risk_state = DailyRiskState(path=self.cfg.state_path, cfg=self.cfg)
@@ -156,7 +157,7 @@ class DeltaPaperBot:
     # -------------------------------------------------------------------------
 
     def start(self, bootstrap_lookback: Optional[int] = None) -> bool:
-        """Start live market data feed and register event callbacks."""
+        """Start live market data feed and register event callbacks with atomic rollback."""
         target_lookback = bootstrap_lookback or getattr(self.cfg, "bootstrap_lookback_candles", 450)
         with self._lock:
             if self._is_running:
@@ -164,28 +165,83 @@ class DeltaPaperBot:
                 return True
 
             # Fail-closed startup governance safety verification
-            if self.gov_supervisor is None or not hasattr(self.gov_supervisor, "enforce_startup_governance_safety"):
+            if self.gov_supervisor is None:
                 raise PaperSafetyViolation("FATAL: DeltaPaperBot requires active GovernanceSupervisor to start.")
+            enforce_fn = getattr(self.gov_supervisor, "enforce_startup_governance_safety", None)
+            if not callable(enforce_fn):
+                raise PaperSafetyViolation(
+                    "FATAL: Injected gov_supervisor lacks mandatory 'enforce_startup_governance_safety' method or method is not callable."
+                )
             self.gov_supervisor.enforce_startup_governance_safety()
 
             logger.info("Starting DeltaPaperBot for %s [Mode: %s, Strategy: %s, Bootstrap: %d bars]...", self.cfg.symbol, self.cfg.mode, self._strategy_type, target_lookback)
             self._log_event("SYSTEM", f"Starting DeltaPaperBot for {self.cfg.symbol} in PAPER mode.")
 
-            # Register callbacks with feed
-            self.feed.register_candle_callback(self._on_completed_candle)
-            self.feed.register_tick_callback(self._on_tick)
+            callbacks_registered = False
+            feed_started = False
+            try:
+                # Register callbacks with feed
+                if self.feed is not None:
+                    if hasattr(self.feed, "register_candle_callback"):
+                        self.feed.register_candle_callback(self._on_completed_candle)
+                    if hasattr(self.feed, "register_tick_callback"):
+                        self.feed.register_tick_callback(self._on_tick)
+                    callbacks_registered = True
 
-            # Start real-time feed
-            self.feed.start(bootstrap_lookback=target_lookback)
-            self._is_running = True
+                    # Start real-time feed
+                    if hasattr(self.feed, "start"):
+                        self.feed.start(bootstrap_lookback=target_lookback)
+                        feed_started = True
 
-            # Evaluate initial historical batch to initialize signal state
-            initial_5m = self.feed.get_completed_5m_candles()
-            if not initial_5m.empty:
-                logger.info("Evaluating initial completed candle batch (%d bars)...", len(initial_5m))
-                self._evaluate_strategy(initial_5m)
+                # Evaluate initial historical batch to initialize signal state
+                if self.feed is not None and hasattr(self.feed, "get_completed_5m_candles"):
+                    initial_5m = self.feed.get_completed_5m_candles()
+                    if hasattr(initial_5m, "empty") and not initial_5m.empty:
+                        logger.info("Evaluating initial completed candle batch (%d bars)...", len(initial_5m))
+                        self._evaluate_strategy(initial_5m)
 
-            return True
+                self._is_running = True
+                return True
+
+            except Exception as exc:
+                logger.error("FATAL: DeltaPaperBot startup failed. Executing atomic rollback: %s", exc)
+                self._is_running = False
+                self._log_event("SYSTEM", f"Startup failed with exception: {exc}. Atomic rollback engaged.")
+
+                # Rollback step 1: Stop feed if started
+                if feed_started and self.feed is not None and hasattr(self.feed, "stop"):
+                    try:
+                        self.feed.stop()
+                    except Exception as stop_exc:
+                        logger.warning("Error during feed stop in rollback: %s", stop_exc)
+
+                # Rollback step 2: Unregister callbacks
+                if callbacks_registered and self.feed is not None:
+                    if hasattr(self.feed, "unregister_candle_callback"):
+                        try:
+                            self.feed.unregister_candle_callback(self._on_completed_candle)
+                        except Exception:
+                            pass
+                    elif hasattr(self.feed, "_candle_callbacks") and isinstance(self.feed._candle_callbacks, list):
+                        try:
+                            if self._on_completed_candle in self.feed._candle_callbacks:
+                                self.feed._candle_callbacks.remove(self._on_completed_candle)
+                        except Exception:
+                            pass
+
+                    if hasattr(self.feed, "unregister_tick_callback"):
+                        try:
+                            self.feed.unregister_tick_callback(self._on_tick)
+                        except Exception:
+                            pass
+                    elif hasattr(self.feed, "_tick_callbacks") and isinstance(self.feed._tick_callbacks, list):
+                        try:
+                            if self._on_tick in self.feed._tick_callbacks:
+                                self.feed._tick_callbacks.remove(self._on_tick)
+                        except Exception:
+                            pass
+
+                raise
 
     def stop(self) -> None:
         """Stop paper bot and disconnect live feeds."""

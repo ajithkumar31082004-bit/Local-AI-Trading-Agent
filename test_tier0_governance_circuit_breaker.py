@@ -626,3 +626,217 @@ def test_22_injected_broker_with_no_supervisor_support_fails_closed(temp_gov_env
     with pytest.raises(PaperSafetyViolation, match="does not support governance monitoring"):
         DeltaPaperBot(broker=unsafe_broker)
 
+
+# =============================================================================
+# TEST 23: SUPERVISOR POST-SYNCHRONIZATION IDENTITY MISMATCH REJECTION (V8)
+# =============================================================================
+
+def test_23_supervisor_identity_mismatch_fails_closed(temp_gov_env):
+    """When an injected broker rejects or mutates supervisor assignment, bot fails closed."""
+    class DefectiveBroker:
+        def __init__(self):
+            self._sup = GovernanceSupervisor()
+
+        @property
+        def gov_supervisor(self):
+            # Returns internal supervisor instance regardless of assignment attempts
+            return self._sup
+
+        @gov_supervisor.setter
+        def gov_supervisor(self, val):
+            # Defect: silently ignore or reject synchronization assignment
+            pass
+
+    defective_broker = DefectiveBroker()
+    bot_sup = GovernanceSupervisor()
+
+    with pytest.raises(PaperSafetyViolation, match="Post-synchronization supervisor identity verification failed"):
+        DeltaPaperBot(broker=defective_broker, gov_supervisor=bot_sup)
+
+
+# =============================================================================
+# TEST 24: NON-CALLABLE ENFORCE STARTUP METHOD FAILS CLOSED (V8)
+# =============================================================================
+
+def test_24_non_callable_enforce_startup_method_fails_closed(temp_gov_env):
+    """Supervisor having non-callable enforce_startup_governance_safety fails closed."""
+    class NonCallableSupervisor:
+        enforce_startup_governance_safety = "NOT_A_CALLABLE_STRING"
+        def has_active_breach(self):
+            return False
+
+    bad_sup = NonCallableSupervisor()
+    state_file = temp_gov_env["tmp_path"] / "non_callable_sup_state.json"
+
+    with pytest.raises(PaperSafetyViolation, match="method or method is not callable"):
+        DeltaPaperBroker(state_file=state_file, gov_supervisor=bad_sup)
+
+    with pytest.raises(PaperSafetyViolation, match="method or method is not callable"):
+        DeltaPaperBot(gov_supervisor=bad_sup)
+
+
+# =============================================================================
+# TEST 25: THROWING ENFORCE STARTUP METHOD EXCEPTION PROPAGATION (V8)
+# =============================================================================
+
+def test_25_throwing_enforce_startup_exception_propagates(temp_gov_env):
+    """Exceptions raised by enforce_startup_governance_safety propagate without being swallowed."""
+    class ThrowingSupervisor:
+        def enforce_startup_governance_safety(self):
+            raise GovernanceContainmentError("Simulated governance breach during startup verification")
+
+    throwing_sup = ThrowingSupervisor()
+    state_file = temp_gov_env["tmp_path"] / "throwing_sup_state.json"
+
+    with pytest.raises(GovernanceContainmentError, match="Simulated governance breach during startup verification"):
+        DeltaPaperBroker(state_file=state_file, gov_supervisor=throwing_sup)
+
+    with pytest.raises(GovernanceContainmentError, match="Simulated governance breach during startup verification"):
+        DeltaPaperBot(gov_supervisor=throwing_sup)
+
+    # Also verify custom runtime exceptions propagate
+    class CustomErrorSupervisor:
+        def enforce_startup_governance_safety(self):
+            raise RuntimeError("Custom governance infrastructure failure")
+
+    custom_sup = CustomErrorSupervisor()
+    state_file2 = temp_gov_env["tmp_path"] / "throwing_custom_state.json"
+
+    with pytest.raises(RuntimeError, match="Custom governance infrastructure failure"):
+        DeltaPaperBroker(state_file=state_file2, gov_supervisor=custom_sup)
+
+    with pytest.raises(RuntimeError, match="Custom governance infrastructure failure"):
+        DeltaPaperBot(gov_supervisor=custom_sup)
+
+
+# =============================================================================
+# TEST 26: CANONICAL IMPORT FAILURE WITHOUT FALLBACK (V8)
+# =============================================================================
+
+def test_26_canonical_import_failure_without_fallback(temp_gov_env, monkeypatch):
+    """Broker and bot fail closed when canonical services.governance_supervisor fails to import."""
+    import services.delta_paper_broker as broker_mod
+    import services.delta_paper_bot as bot_mod
+
+    monkeypatch.setattr(broker_mod, "GovernanceSupervisor", None)
+    monkeypatch.setattr(broker_mod, "_SUPERVISOR_IMPORT_EXCEPTION", ImportError("No module named 'services.governance_supervisor'"))
+
+    state_file = temp_gov_env["tmp_path"] / "canonical_import_fail_state.json"
+    with pytest.raises(PaperSafetyViolation, match="GovernanceSupervisor module failed to import"):
+        broker_mod.DeltaPaperBroker(state_file=state_file)
+
+    monkeypatch.setattr(bot_mod, "GovernanceSupervisor", None)
+    monkeypatch.setattr(bot_mod, "_BOT_SUPERVISOR_IMPORT_EXCEPTION", ImportError("No module named 'services.governance_supervisor'"))
+
+    with pytest.raises(PaperSafetyViolation, match="GovernanceSupervisor module failed to import"):
+        bot_mod.DeltaPaperBot()
+
+
+# =============================================================================
+# TEST 27: STARTUP ATOMICITY AND ROLLBACK ON FEED START FAILURE (V8)
+# =============================================================================
+
+def test_27_startup_rollback_on_feed_start_failure(temp_gov_env):
+    """When feed.start() raises, callbacks are unregistered, feed is stopped, and bot remains not running."""
+    class FailingFeed:
+        def __init__(self):
+            self._candle_callbacks = []
+            self._tick_callbacks = []
+            self.stop_called = False
+
+        def register_candle_callback(self, cb):
+            self._candle_callbacks.append(cb)
+
+        def unregister_candle_callback(self, cb):
+            if cb in self._candle_callbacks:
+                self._candle_callbacks.remove(cb)
+
+        def register_tick_callback(self, cb):
+            self._tick_callbacks.append(cb)
+
+        def unregister_tick_callback(self, cb):
+            if cb in self._tick_callbacks:
+                self._tick_callbacks.remove(cb)
+
+        def start(self, bootstrap_lookback=None):
+            raise ConnectionError("Simulated WebSocket connection reset during feed start")
+
+        def stop(self):
+            self.stop_called = True
+
+        def get_completed_5m_candles(self):
+            import pandas as pd
+            return pd.DataFrame()
+
+    failing_feed = FailingFeed()
+    broker = DeltaPaperBroker(state_file=temp_gov_env["tmp_path"] / "rollback_feed_state.json")
+    bot = DeltaPaperBot(feed=failing_feed, broker=broker)
+
+    with pytest.raises(ConnectionError, match="Simulated WebSocket connection reset during feed start"):
+        bot.start()
+
+    # Invariants after rollback
+    assert bot._is_running is False
+    assert len(failing_feed._candle_callbacks) == 0
+    assert len(failing_feed._tick_callbacks) == 0
+
+
+# =============================================================================
+# TEST 28: STARTUP ATOMICITY AND ROLLBACK ON CANDLE EVALUATION FAILURE (V8)
+# =============================================================================
+
+def test_28_startup_rollback_on_candle_evaluation_failure(temp_gov_env, monkeypatch):
+    """When bootstrap candle evaluation fails during startup, feed is stopped, callbacks removed, and bot is not running."""
+    import pandas as pd
+
+    class HealthyMockFeed:
+        def __init__(self):
+            self._candle_callbacks = []
+            self._tick_callbacks = []
+            self.running = False
+            self.stop_called = False
+
+        def register_candle_callback(self, cb):
+            self._candle_callbacks.append(cb)
+
+        def unregister_candle_callback(self, cb):
+            if cb in self._candle_callbacks:
+                self._candle_callbacks.remove(cb)
+
+        def register_tick_callback(self, cb):
+            self._tick_callbacks.append(cb)
+
+        def unregister_tick_callback(self, cb):
+            if cb in self._tick_callbacks:
+                self._tick_callbacks.remove(cb)
+
+        def start(self, bootstrap_lookback=None):
+            self.running = True
+
+        def stop(self):
+            self.running = False
+            self.stop_called = True
+
+        def get_completed_5m_candles(self):
+            # Returns non-empty dataframe to trigger _evaluate_strategy
+            return pd.DataFrame({"Close": [100.0, 101.0], "High": [102.0, 103.0], "Low": [99.0, 100.0], "Volume": [10, 20]})
+
+    healthy_feed = HealthyMockFeed()
+    broker = DeltaPaperBroker(state_file=temp_gov_env["tmp_path"] / "eval_fail_broker_state.json")
+    bot = DeltaPaperBot(feed=healthy_feed, broker=broker)
+
+    def broken_eval(df):
+        raise ValueError("Simulated corrupt candle schema during initial batch evaluation")
+
+    monkeypatch.setattr(bot, "_evaluate_strategy", broken_eval)
+
+    with pytest.raises(ValueError, match="Simulated corrupt candle schema"):
+        bot.start()
+
+    # Invariants after rollback
+    assert bot._is_running is False
+    assert healthy_feed.stop_called is True
+    assert healthy_feed.running is False
+    assert len(healthy_feed._candle_callbacks) == 0
+    assert len(healthy_feed._tick_callbacks) == 0
+

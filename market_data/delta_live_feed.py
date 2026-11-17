@@ -149,11 +149,23 @@ class DeltaLiveMarketDataFeed:
             if cb not in self._candle_callbacks:
                 self._candle_callbacks.append(cb)
 
+    def unregister_candle_callback(self, cb: Callable[[pd.DataFrame, pd.DataFrame, Dict[str, Any]], None]) -> None:
+        """Unregister previously registered candle callback."""
+        with self._lock:
+            if cb in self._candle_callbacks:
+                self._candle_callbacks.remove(cb)
+
     def register_tick_callback(self, cb: Callable[[float, Dict[str, Any]], None]) -> None:
         """Register callback invoked on each ticker or trade price update."""
         with self._lock:
             if cb not in self._tick_callbacks:
                 self._tick_callbacks.append(cb)
+
+    def unregister_tick_callback(self, cb: Callable[[float, Dict[str, Any]], None]) -> None:
+        """Unregister previously registered tick callback."""
+        with self._lock:
+            if cb in self._tick_callbacks:
+                self._tick_callbacks.remove(cb)
 
     # -------------------------------------------------------------------------
     # Thread-Safe Data Getters
