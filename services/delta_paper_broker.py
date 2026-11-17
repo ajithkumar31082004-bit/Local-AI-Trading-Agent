@@ -33,8 +33,16 @@ from services.idempotency_registry import DurableIdempotencyRegistry, Idempotenc
 try:
     from services.governance_supervisor import GovernanceSupervisor, GovernanceContainmentError
 except ImportError:
-    GovernanceSupervisor = None
-    GovernanceContainmentError = RuntimeError
+    try:
+        from governance_supervisor import GovernanceSupervisor, GovernanceContainmentError
+    except ImportError as e:
+        GovernanceSupervisor = None
+        GovernanceContainmentError = None
+        _SUPERVISOR_IMPORT_EXCEPTION = e
+    else:
+        _SUPERVISOR_IMPORT_EXCEPTION = None
+else:
+    _SUPERVISOR_IMPORT_EXCEPTION = None
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +137,31 @@ class DeltaPaperBroker:
         gov_supervisor: Optional[Any] = None,
     ):
         self.cfg = cfg or default_orb_settings
-        self.gov_supervisor = gov_supervisor
+
+        # Mandatory Governance Supervisor Integration (V7 Fail-Closed)
+        if _SUPERVISOR_IMPORT_EXCEPTION is not None or GovernanceSupervisor is None:
+            raise PaperSafetyViolation(
+                f"FATAL: GovernanceSupervisor module failed to import: {_SUPERVISOR_IMPORT_EXCEPTION}. "
+                "Fail-closed governance mandates an active supervisor."
+            )
+
+        if gov_supervisor is not None:
+            self.gov_supervisor = gov_supervisor
+        else:
+            try:
+                self.gov_supervisor = GovernanceSupervisor()
+            except Exception as e:
+                raise PaperSafetyViolation(
+                    f"FATAL: Failed to construct GovernanceSupervisor: {e}. Fail-closed containment engaged."
+                ) from e
+
+        if not hasattr(self.gov_supervisor, "enforce_startup_governance_safety"):
+            raise PaperSafetyViolation(
+                "FATAL: Injected gov_supervisor lacks mandatory 'enforce_startup_governance_safety' method."
+            )
+
+        # Fail-closed startup safety verification
+        self.gov_supervisor.enforce_startup_governance_safety()
 
         # Hard safety verification
         if getattr(self.cfg, "mode", "PAPER") == "LIVE" and not getattr(self.cfg, "live_trading_enabled", False):

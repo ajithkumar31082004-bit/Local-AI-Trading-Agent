@@ -18,6 +18,19 @@ try:
 except ImportError:
     DeltaLiveMarketDataFeed = None
 from services.delta_paper_broker import DeltaPaperBroker, PaperSafetyViolation
+try:
+    from services.governance_supervisor import GovernanceSupervisor, GovernanceContainmentError
+except ImportError:
+    try:
+        from governance_supervisor import GovernanceSupervisor, GovernanceContainmentError
+    except ImportError as e:
+        GovernanceSupervisor = None
+        GovernanceContainmentError = None
+        _BOT_SUPERVISOR_IMPORT_EXCEPTION = e
+    else:
+        _BOT_SUPERVISOR_IMPORT_EXCEPTION = None
+else:
+    _BOT_SUPERVISOR_IMPORT_EXCEPTION = None
 from strategy.arbitrator import arbitrate_strategies, ArbitrationResult
 from strategy.orb_ema_volume import evaluate_orb, Signal
 from strategy.trend_following import evaluate_trend_following
@@ -58,7 +71,33 @@ class DeltaPaperBot:
         gov_supervisor: Optional[Any] = None,
     ):
         self.cfg = cfg or default_orb_settings
-        self.gov_supervisor = gov_supervisor or getattr(broker, "gov_supervisor", None)
+
+        # Mandatory Governance Supervisor Unification & Instantiation (V7 Fail-Closed)
+        if _BOT_SUPERVISOR_IMPORT_EXCEPTION is not None or GovernanceSupervisor is None:
+            raise PaperSafetyViolation(
+                f"FATAL: GovernanceSupervisor module failed to import: {_BOT_SUPERVISOR_IMPORT_EXCEPTION}. "
+                "Fail-closed governance mandates an active supervisor."
+            )
+
+        if gov_supervisor is not None:
+            self.gov_supervisor = gov_supervisor
+        elif broker is not None and getattr(broker, "gov_supervisor", None) is not None:
+            self.gov_supervisor = broker.gov_supervisor
+        else:
+            try:
+                self.gov_supervisor = GovernanceSupervisor()
+            except Exception as e:
+                raise PaperSafetyViolation(
+                    f"FATAL: Failed to construct GovernanceSupervisor: {e}. Fail-closed containment engaged."
+                ) from e
+
+        if not hasattr(self.gov_supervisor, "enforce_startup_governance_safety"):
+            raise PaperSafetyViolation(
+                "FATAL: Injected gov_supervisor lacks mandatory 'enforce_startup_governance_safety' method."
+            )
+
+        # Fail-closed startup safety verification
+        self.gov_supervisor.enforce_startup_governance_safety()
 
         # Hard safety validation & Tier 0 containment
         if self.cfg.mode != "PAPER" or getattr(self.cfg, "live_trading_enabled", False):
@@ -77,7 +116,18 @@ class DeltaPaperBot:
                 raise PaperSafetyViolation("CRITICAL: LIVE_TRADING_ENABLED is true. DeltaPaperBot enforces simulated trading only.")
 
         self.feed = feed or (DeltaLiveMarketDataFeed(cfg=self.cfg) if DeltaLiveMarketDataFeed else None)
-        self.broker = broker or DeltaPaperBroker(cfg=self.cfg, gov_supervisor=self.gov_supervisor)
+
+        # Synchronize supervisor to injected broker or instantiate broker with supervisor
+        if broker is not None:
+            if not hasattr(broker, "gov_supervisor"):
+                raise PaperSafetyViolation(
+                    "FATAL: Injected broker does not support governance monitoring ('gov_supervisor' attribute missing)."
+                )
+            self.broker = broker
+            if self.broker.gov_supervisor is not self.gov_supervisor:
+                self.broker.gov_supervisor = self.gov_supervisor
+        else:
+            self.broker = DeltaPaperBroker(cfg=self.cfg, gov_supervisor=self.gov_supervisor)
         self.risk_state = DailyRiskState(path=self.cfg.state_path, cfg=self.cfg)
         self.journal = (ORBJournal(path=self.cfg.journal_path) if ORBJournal else None)
 
@@ -112,6 +162,11 @@ class DeltaPaperBot:
             if self._is_running:
                 logger.info("DeltaPaperBot is already running.")
                 return True
+
+            # Fail-closed startup governance safety verification
+            if self.gov_supervisor is None or not hasattr(self.gov_supervisor, "enforce_startup_governance_safety"):
+                raise PaperSafetyViolation("FATAL: DeltaPaperBot requires active GovernanceSupervisor to start.")
+            self.gov_supervisor.enforce_startup_governance_safety()
 
             logger.info("Starting DeltaPaperBot for %s [Mode: %s, Strategy: %s, Bootstrap: %d bars]...", self.cfg.symbol, self.cfg.mode, self._strategy_type, target_lookback)
             self._log_event("SYSTEM", f"Starting DeltaPaperBot for {self.cfg.symbol} in PAPER mode.")

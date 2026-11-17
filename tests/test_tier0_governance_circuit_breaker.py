@@ -34,7 +34,7 @@ from services.phase4_7_analytics import (
 
 
 @pytest.fixture
-def temp_gov_env(tmp_path):
+def temp_gov_env(tmp_path, monkeypatch):
     """Create isolated directory structure for governance testing."""
     ledger_file = tmp_path / "governance_incidents.json"
     defect_file = tmp_path / "paper_forward_24h_state.json"
@@ -43,6 +43,11 @@ def temp_gov_env(tmp_path):
     valid_content = b'{"defect_ledger_test": true}'
     defect_file.write_bytes(valid_content)
     expected_hash = hashlib.sha256(valid_content).hexdigest()
+
+    # Isolate default class paths so default instantiations use test sandbox
+    monkeypatch.setattr(GovernanceSupervisor, "DEFAULT_LEDGER_PATH", ledger_file)
+    monkeypatch.setattr(GovernanceSupervisor, "DEFAULT_DEFECT_LEDGER_PATH", defect_file)
+    monkeypatch.setattr(GovernanceSupervisor, "EXPECTED_DEFECT_LEDGER_SHA256", expected_hash)
 
     supervisor = GovernanceSupervisor(
         ledger_path=ledger_file,
@@ -427,4 +432,197 @@ def test_12_real_paper_bot_init_live_mode_triggers_breach(temp_gov_env):
     assert sup.has_active_breach() is True
     incidents = sup.get_incidents()
     assert any(inc["incident_type"] == "LIVE_ORDER_ATTEMPT" for inc in incidents)
+
+
+# =============================================================================
+# TEST 13: DEFAULT PAPER BROKER CONSTRUCTION MANDATES GOVERNANCE SUPERVISOR
+# =============================================================================
+
+def test_13_default_paper_broker_construction_mandates_governance_supervisor(temp_gov_env):
+    """DeltaPaperBroker created without gov_supervisor automatically constructs and activates one."""
+    state_file = temp_gov_env["tmp_path"] / "default_broker_state.json"
+    broker = DeltaPaperBroker(state_file=state_file)
+
+    assert broker.gov_supervisor is not None
+    assert isinstance(broker.gov_supervisor, GovernanceSupervisor)
+    assert broker.gov_supervisor.has_active_breach() is False
+
+    # Submitting live order triggers supervisor containment
+    with pytest.raises(PaperSafetyViolation):
+        broker.execute_live_order(symbol="XAUTUSD", lots=1, side="BUY")
+    assert broker.gov_supervisor.has_active_breach() is True
+
+
+# =============================================================================
+# TEST 14: DEFAULT PAPER BOT CONSTRUCTION MANDATES GOVERNANCE SUPERVISOR
+# =============================================================================
+
+def test_14_default_paper_bot_construction_mandates_governance_supervisor(temp_gov_env):
+    """DeltaPaperBot created without gov_supervisor automatically constructs one and cascades to broker."""
+    bot = DeltaPaperBot()
+
+    assert bot.gov_supervisor is not None
+    assert isinstance(bot.gov_supervisor, GovernanceSupervisor)
+    assert bot.broker.gov_supervisor is not None
+    # Crucial instance consistency: bot and broker must reference the exact same supervisor object
+    assert bot.broker.gov_supervisor is bot.gov_supervisor
+
+
+# =============================================================================
+# TEST 15: INJECTED BROKER RECEIVES BOT SUPERVISOR FOR UNIFIED CONTAINMENT
+# =============================================================================
+
+def test_15_injected_broker_receives_bot_supervisor(temp_gov_env):
+    """Injected broker without supervisor or with different supervisor is synchronized to bot supervisor."""
+    sup = temp_gov_env["supervisor"]
+    state_file = temp_gov_env["tmp_path"] / "injected_broker_state.json"
+    injected_broker = DeltaPaperBroker(state_file=state_file, gov_supervisor=None)
+
+    bot = DeltaPaperBot(broker=injected_broker, gov_supervisor=sup)
+    assert bot.gov_supervisor is sup
+    assert bot.broker.gov_supervisor is sup
+    assert bot.broker.gov_supervisor is bot.gov_supervisor
+
+
+# =============================================================================
+# TEST 16: BROKER AND BOT STARTUP REFUSAL WHEN ACTIVE INCIDENT IN LEDGER
+# =============================================================================
+
+def test_16_broker_and_bot_startup_refusal_when_active_incident_in_ledger(temp_gov_env):
+    """Broker and Bot constructors and start method refuse initialization if active breach exists."""
+    sup: GovernanceSupervisor = temp_gov_env["supervisor"]
+    state_file = temp_gov_env["tmp_path"] / "startup_refusal_state.json"
+
+    # Record fatal breach
+    sup.record_incident("MANUAL_AUDIT_BREACH", {"reason": "Test active breach"}, severity="FATAL")
+    assert sup.has_active_breach() is True
+
+    # 1. DeltaPaperBroker refuses construction
+    with pytest.raises(GovernanceContainmentError, match="Runner startup refused"):
+        DeltaPaperBroker(state_file=state_file, gov_supervisor=sup)
+
+    # 2. DeltaPaperBot refuses construction
+    with pytest.raises(GovernanceContainmentError, match="Runner startup refused"):
+        DeltaPaperBot(gov_supervisor=sup)
+
+    # 3. Clean bot startup also refuses if breach occurs before start()
+    clean_sup = GovernanceSupervisor(ledger_path=temp_gov_env["tmp_path"] / "clean_ledger.json")
+    clean_bot = DeltaPaperBot(gov_supervisor=clean_sup)
+    clean_sup.record_incident("POST_INIT_BREACH", {"reason": "Breach after init"}, severity="FATAL")
+    with pytest.raises(GovernanceContainmentError, match="Runner startup refused"):
+        clean_bot.start()
+
+
+# =============================================================================
+# TEST 17: FAIL CLOSED IF INCIDENT LEDGER IS CORRUPTED AT STARTUP
+# =============================================================================
+
+def test_17_fail_closed_if_ledger_corrupted_at_startup(temp_gov_env):
+    """Unreadable or corrupted incident ledger forces fail-closed containment and blocks startup."""
+    corrupt_ledger = temp_gov_env["tmp_path"] / "corrupt_ledger.json"
+    corrupt_ledger.write_text("{ MALFORMED_JSON ::: invalid syntax }", encoding="utf-8")
+
+    corrupt_sup = GovernanceSupervisor(ledger_path=corrupt_ledger)
+    assert corrupt_sup.has_active_breach() is True
+
+    # Broker and Bot must refuse startup
+    with pytest.raises(GovernanceContainmentError, match="Runner startup refused"):
+        DeltaPaperBroker(state_file=temp_gov_env["tmp_path"] / "corrupt_broker_state.json", gov_supervisor=corrupt_sup)
+
+    with pytest.raises(GovernanceContainmentError, match="Runner startup refused"):
+        DeltaPaperBot(gov_supervisor=corrupt_sup)
+
+
+# =============================================================================
+# TEST 18: MISSING SUPERVISOR MODULE FAILS CLOSED
+# =============================================================================
+
+def test_18_missing_supervisor_module_fails_closed(temp_gov_env, monkeypatch):
+    """When GovernanceSupervisor module fails to import, both broker and bot raise PaperSafetyViolation."""
+    import services.delta_paper_broker as broker_mod
+    import services.delta_paper_bot as bot_mod
+
+    monkeypatch.setattr(broker_mod, "_SUPERVISOR_IMPORT_EXCEPTION", ImportError("Mock module missing"))
+    monkeypatch.setattr(bot_mod, "_BOT_SUPERVISOR_IMPORT_EXCEPTION", ImportError("Mock module missing"))
+
+    state_file = temp_gov_env["tmp_path"] / "import_fail_state.json"
+    with pytest.raises(PaperSafetyViolation, match="GovernanceSupervisor module failed to import"):
+        DeltaPaperBroker(state_file=state_file)
+
+    with pytest.raises(PaperSafetyViolation, match="GovernanceSupervisor module failed to import"):
+        DeltaPaperBot()
+
+
+# =============================================================================
+# TEST 19: MISSING SUPERVISOR DEPENDENCY FAILS CLOSED
+# =============================================================================
+
+def test_19_missing_supervisor_dependency_fails_closed(temp_gov_env, monkeypatch):
+    """When GovernanceSupervisor is None due to broken dependency, broker and bot fail closed."""
+    import services.delta_paper_broker as broker_mod
+    import services.delta_paper_bot as bot_mod
+
+    monkeypatch.setattr(broker_mod, "GovernanceSupervisor", None)
+    monkeypatch.setattr(bot_mod, "GovernanceSupervisor", None)
+
+    state_file = temp_gov_env["tmp_path"] / "dep_fail_state.json"
+    with pytest.raises(PaperSafetyViolation, match="GovernanceSupervisor module failed to import"):
+        DeltaPaperBroker(state_file=state_file)
+
+    with pytest.raises(PaperSafetyViolation, match="GovernanceSupervisor module failed to import"):
+        DeltaPaperBot()
+
+
+# =============================================================================
+# TEST 20: SUPERVISOR CONSTRUCTOR FAILURE FAILS CLOSED
+# =============================================================================
+
+def test_20_supervisor_constructor_failure_fails_closed(temp_gov_env, monkeypatch):
+    """When GovernanceSupervisor constructor raises an unexpected error, broker and bot fail closed."""
+    def broken_init(self, *args, **kwargs):
+        raise OSError("Simulated disk I/O permission denied during supervisor init")
+
+    monkeypatch.setattr(GovernanceSupervisor, "__init__", broken_init)
+
+    state_file = temp_gov_env["tmp_path"] / "ctor_fail_state.json"
+    with pytest.raises(PaperSafetyViolation, match="Failed to construct GovernanceSupervisor"):
+        DeltaPaperBroker(state_file=state_file)
+
+    with pytest.raises(PaperSafetyViolation, match="Failed to construct GovernanceSupervisor"):
+        DeltaPaperBot()
+
+
+# =============================================================================
+# TEST 21: MISSING ENFORCE STARTUP METHOD FAILS CLOSED
+# =============================================================================
+
+def test_21_missing_enforce_startup_method_fails_closed(temp_gov_env):
+    """Injected supervisor missing enforce_startup_governance_safety causes immediate failure."""
+    class MockIncompleteSupervisor:
+        def has_active_breach(self):
+            return False
+
+    incomplete_sup = MockIncompleteSupervisor()
+    state_file = temp_gov_env["tmp_path"] / "incomplete_sup_state.json"
+
+    with pytest.raises(PaperSafetyViolation, match="lacks mandatory 'enforce_startup_governance_safety'"):
+        DeltaPaperBroker(state_file=state_file, gov_supervisor=incomplete_sup)
+
+    with pytest.raises(PaperSafetyViolation, match="lacks mandatory 'enforce_startup_governance_safety'"):
+        DeltaPaperBot(gov_supervisor=incomplete_sup)
+
+
+# =============================================================================
+# TEST 22: INJECTED BROKER WITH NO SUPERVISOR SUPPORT FAILS CLOSED
+# =============================================================================
+
+def test_22_injected_broker_with_no_supervisor_support_fails_closed(temp_gov_env):
+    """Injecting a broker object that lacks 'gov_supervisor' attribute immediately fails closed."""
+    class UnmonitoredBroker:
+        pass
+
+    unsafe_broker = UnmonitoredBroker()
+
+    with pytest.raises(PaperSafetyViolation, match="does not support governance monitoring"):
+        DeltaPaperBot(broker=unsafe_broker)
 
