@@ -155,9 +155,6 @@ class DeltaPaperBroker:
                 "FATAL: Injected gov_supervisor lacks mandatory 'enforce_startup_governance_safety' method or method is not callable."
             )
 
-        # Fail-closed startup safety verification
-        self.gov_supervisor.enforce_startup_governance_safety()
-
         # Hard safety verification
         if getattr(self.cfg, "mode", "PAPER") == "LIVE" and not getattr(self.cfg, "live_trading_enabled", False):
             if self.gov_supervisor:
@@ -166,6 +163,9 @@ class DeltaPaperBroker:
                 except Exception:
                     pass
             raise PaperSafetyViolation("CRITICAL: Live trading requested in paper broker context.")
+
+        # Fail-closed startup safety verification
+        self.gov_supervisor.enforce_startup_governance_safety()
 
         self.initial_equity = float(initial_equity or getattr(self.cfg, "paper_initial_equity", 10000.0))
         self.state_file = Path(state_file) if state_file else (Path(self.cfg.state_path).parent / "paper_account_xautusd.json")

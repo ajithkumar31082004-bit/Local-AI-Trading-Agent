@@ -527,21 +527,26 @@ def test_risk_configuration_defaults_and_precedence():
     assert custom_cfg.daily_loss_limit_r == 3.0
 
 
-def test_paper_safety_violations_unconditional():
+from services.governance_supervisor import GovernanceSupervisor
+
+def test_paper_safety_violations_unconditional(tmp_path, monkeypatch):
     """Verify DeltaPaperBot and DeltaPaperBroker raise PaperSafetyViolation if live mode is attempted."""
     # Bot rejects mode='LIVE'
+    monkeypatch.setattr(GovernanceSupervisor, "DEFAULT_LEDGER_PATH", tmp_path / "gov_bot_live.json")
     with pytest.raises(PaperSafetyViolation, match="mode='PAPER'"):
         live_cfg = ORBSettings(mode="LIVE")
         DeltaPaperBot._instance = None
         DeltaPaperBot(cfg=live_cfg)
 
     # Bot rejects live_trading_enabled=True
+    monkeypatch.setattr(GovernanceSupervisor, "DEFAULT_LEDGER_PATH", tmp_path / "gov_bot_enabled.json")
     with pytest.raises(PaperSafetyViolation, match="LIVE_TRADING_ENABLED"):
         live_enabled_cfg = ORBSettings(mode="PAPER", live_trading_enabled=True)
         DeltaPaperBot._instance = None
         DeltaPaperBot(cfg=live_enabled_cfg)
 
     # Broker unconditionally rejects execute_live_order
+    monkeypatch.setattr(GovernanceSupervisor, "DEFAULT_LEDGER_PATH", tmp_path / "gov_broker.json")
     paper_broker = DeltaPaperBroker(cfg=make_test_cfg())
     with pytest.raises(PaperSafetyViolation, match="execute_live_order"):
         paper_broker.execute_live_order("XAUTUSD", "BUY", 1)

@@ -91,9 +91,6 @@ class DeltaPaperBot:
                 "FATAL: Injected gov_supervisor lacks mandatory 'enforce_startup_governance_safety' method or method is not callable."
             )
 
-        # Fail-closed startup safety verification
-        self.gov_supervisor.enforce_startup_governance_safety()
-
         # Hard safety validation & Tier 0 containment
         if self.cfg.mode != "PAPER" or getattr(self.cfg, "live_trading_enabled", False):
             if self.gov_supervisor:
@@ -109,6 +106,9 @@ class DeltaPaperBot:
                 raise PaperSafetyViolation(f"DeltaPaperBot requires mode='PAPER', got '{self.cfg.mode}'. Refusing to run.")
             if getattr(self.cfg, "live_trading_enabled", False):
                 raise PaperSafetyViolation("CRITICAL: LIVE_TRADING_ENABLED is true. DeltaPaperBot enforces simulated trading only.")
+
+        # Fail-closed startup safety verification
+        self.gov_supervisor.enforce_startup_governance_safety()
 
         self.feed = feed or (DeltaLiveMarketDataFeed(cfg=self.cfg) if DeltaLiveMarketDataFeed else None)
 
