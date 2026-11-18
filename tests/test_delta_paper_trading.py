@@ -32,6 +32,7 @@ from config.settings import Settings
 from market_data.delta_live_feed import DeltaLiveMarketDataFeed
 from services.delta_paper_broker import DeltaPaperBroker, PaperSafetyViolation
 from services.delta_paper_bot import DeltaPaperBot
+from services.governance_supervisor import GovernanceSupervisor
 from risk.position_sizing import DailyRiskState
 
 
@@ -39,8 +40,8 @@ from risk.position_sizing import DailyRiskState
 # Global Safety Guard Fixture
 # --------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
-def intercept_live_orders(monkeypatch):
-    """Enforce that NO test can ever contact live exchange order endpoints."""
+def intercept_live_orders(monkeypatch, tmp_path):
+    """Enforce that NO test can ever contact live exchange order endpoints and isolate governance incidents."""
     real_post = requests.post
 
     def guarded_post(url, *args, **kwargs):
@@ -49,6 +50,11 @@ def intercept_live_orders(monkeypatch):
         return real_post(url, *args, **kwargs)
 
     monkeypatch.setattr(requests, "post", guarded_post)
+
+    # Isolate incident ledger to temporary directory per test to prevent fail-closed cross-contamination
+    from services.governance_supervisor import GovernanceSupervisor
+    test_ledger = tmp_path / "gov_incidents_isolated.json"
+    monkeypatch.setattr(GovernanceSupervisor, "DEFAULT_LEDGER_PATH", test_ledger)
 
 
 # --------------------------------------------------------------------------
@@ -417,12 +423,14 @@ def test_13_invalid_configuration_fails_safely():
 # --------------------------------------------------------------------------
 # Test 14: LIVE mode is rejected by the PAPER-only runtime
 # --------------------------------------------------------------------------
-def test_14_live_mode_rejected_by_paper_runtime(tmp_path):
+def test_14_live_mode_rejected_by_paper_runtime(tmp_path, monkeypatch):
     """Verify DeltaPaperBot strictly blocks execution if mode is LIVE or live trading is enabled."""
     cfg_live = ORBSettings(mode="LIVE")
     with pytest.raises(PaperSafetyViolation, match="requires mode='PAPER'"):
         DeltaPaperBot(cfg=cfg_live)
 
+    # Use isolated ledger for second check to prevent first sub-check breach containment from masking second check
+    monkeypatch.setattr(GovernanceSupervisor, "DEFAULT_LEDGER_PATH", tmp_path / "gov_14b.json")
     cfg_enabled = ORBSettings(mode="PAPER", live_trading_enabled=True)
     with pytest.raises(PaperSafetyViolation, match="LIVE_TRADING_ENABLED is true"):
         DeltaPaperBot(cfg=cfg_enabled)
