@@ -814,7 +814,10 @@ class DeltaPaperBroker:
                     "unfilled_lots": unfilled_lots,
                     "contract_qty": contract_qty,
                     "stop_loss": stop_loss,
+                    "initial_stop_loss": stop_loss,
                     "take_profit": take_profit,
+                    "is_breakeven_active": False,
+                    "scale_out_executed": False,
                     "margin": margin_required,
                     "order_type": order_kind,
                     "entry_order_type": order_kind,
@@ -1144,6 +1147,50 @@ class DeltaPaperBroker:
         bar_high = float(high if high is not None else current_price)
         bar_low = float(low if low is not None else current_price)
 
+        # Multi-Stage Exit Logic: Breakeven stop ratcheting and partial scale-out
+        enable_multi_stage = getattr(self.cfg, "enable_multi_stage_exits", False)
+        be_trigger_r = float(getattr(self.cfg, "breakeven_trigger_r", 1.0))
+        entry_price = float(pos["entry_price"])
+        initial_sl = float(pos.get("initial_stop_loss", sl))
+        risk_dist = abs(entry_price - initial_sl)
+
+        if enable_multi_stage and risk_dist > 1e-6 and not pos.get("is_breakeven_active", False):
+            # Calculate maximum favorable excursion on this tick/bar
+            if side == "LONG":
+                favorable_price = bar_high
+                excursion_r = (favorable_price - entry_price) / risk_dist
+            else:
+                favorable_price = bar_low
+                excursion_r = (entry_price - favorable_price) / risk_dist
+
+            if excursion_r >= be_trigger_r:
+                fee_buffer = round(pos["entry_fee"] / pos["contract_qty"], 2) if pos.get("contract_qty", 0) > 0 else 0.0
+                ratchet_sl = round(entry_price + fee_buffer, 2) if side == "LONG" else round(entry_price - fee_buffer, 2)
+
+                with self._process_lock:
+                    if self.open_position is not None:
+                        new_sl = max(sl, ratchet_sl) if side == "LONG" else min(sl, ratchet_sl)
+                        self.open_position["stop_loss"] = new_sl
+                        self.open_position["is_breakeven_active"] = True
+                        sl = new_sl
+                        logger.info(
+                            "Multi-Stage Exit: %s stop-loss ratcheted to breakeven ($%.2f) at +%.2fR excursion.",
+                            side, new_sl, excursion_r
+                        )
+
+                # If position has >= 2 lots, execute 50% partial scale-out at favorable price
+                if pos.get("lots", 1) >= 2 and not pos.get("scale_out_executed", False):
+                    with self._process_lock:
+                        if self.open_position is not None:
+                            self.open_position["scale_out_executed"] = True
+                    self.close_simulated_trade(
+                        exit_price=favorable_price,
+                        exit_reason="TP1_SCALE_OUT",
+                        exit_timestamp=timestamp,
+                        order_type="MAKER",
+                        fill_ratio=0.5,
+                    )
+
         hit_sl = (bar_low <= sl) if side == "LONG" else (bar_high >= sl)
 
         # Realism: touching limit price does not guarantee a fill without penetration or queue priority
@@ -1160,7 +1207,7 @@ class DeltaPaperBroker:
                     exit_price = min(sl, float(open_price)) if open_price is not None else sl
                 else:
                     exit_price = max(sl, float(open_price)) if open_price is not None else sl
-                reason = "SL"
+                reason = "BREAKEVEN_SL" if pos.get("is_breakeven_active", False) else "SL"
                 order_type = "TAKER"
                 exit_close_lots = None
                 exit_fill_ratio = 1.0
