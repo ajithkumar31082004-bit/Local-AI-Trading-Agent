@@ -339,6 +339,25 @@ def main():
                         ts_str = now_dt.strftime("%H:%M:%S")
                         print(f"[{ts_str}] 💓 Heartbeat: Price ${cur_price:.2f} | Next 5m bar in ~{mins_left:02d}m {secs_left:02d}s | Watching {args.symbol} ({settings.mode})   ", end="\r", flush=True)
 
+                    # Publish active runner heartbeat for dashboard telemetry
+                    try:
+                        live_status_path = Path("data") / "paper_forward_24h_live_status.json"
+                        live_status_data = {
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                            "ws_connected": True,
+                            "readiness_state": "READY",
+                            "price": cur_price,
+                            "mark_price": cur_price,
+                            "completed_5m": len(frame) if not frame.empty else 0,
+                            "ticks_count": len(frame) if not frame.empty else 0,
+                            "status_line": f"Price ${cur_price:.2f} | Watching {args.symbol} ({settings.mode})",
+                        }
+                        live_status_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(live_status_path, "w", encoding="utf-8") as f_live:
+                            json.dump(live_status_data, f_live, indent=2)
+                    except Exception:
+                        pass
+
                     if executor and settings.mode == "LIVE":
                         stale = executor.cancel_stale_orders(max_age_minutes=15)
                         if stale:

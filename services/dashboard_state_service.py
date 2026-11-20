@@ -175,10 +175,23 @@ def resolve_dashboard_paper_state(
                 f"No active runner heartbeat file found at '{live_path}'."
             )
 
-    # 7. Instantiate broker pointing explicitly to resolved state file
-    broker_cfg = cfg or default_orb_settings
-    broker = DeltaPaperBroker(cfg=broker_cfg, state_file=state_path, initial_equity=raw_state.get("initial_equity", 10000.0))
-    summary = broker.get_account_summary()
+    # 7. Instantiate broker pointing explicitly to resolved state file in PAPER mode
+    from dataclasses import replace
+    base_cfg = cfg or default_orb_settings
+    broker_cfg = replace(base_cfg, mode="PAPER", live_trading_enabled=False)
+    try:
+        broker = DeltaPaperBroker(cfg=broker_cfg, state_file=state_path, initial_equity=raw_state.get("initial_equity", 10000.0))
+        summary = broker.get_account_summary()
+    except Exception as exc:
+        logger.warning("Failed to initialize DeltaPaperBroker for dashboard: %s", exc)
+        summary = {
+            "cash_balance": raw_state.get("cash_balance", 10000.0),
+            "realized_pnl": raw_state.get("realized_pnl", 0.0),
+            "unrealized_pnl": raw_state.get("unrealized_pnl", 0.0),
+            "equity": raw_state.get("equity", 10000.0),
+            "has_open_position": False,
+        }
+        broker = None
 
     return DashboardAccountState(
         account_name=account_name,

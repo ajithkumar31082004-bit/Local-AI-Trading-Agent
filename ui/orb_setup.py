@@ -90,14 +90,23 @@ def render_orb_setup():
     tab_live, tab_backtest = st.tabs(["📊 Live Strategy Monitor", "🧪 Backtesting"])
 
     with tab_live:
-        # Prominent PAPER TRADING Safety Banner
-        st.markdown(
-            "<div style='background: linear-gradient(90deg, #1E3A8A 0%, #0D9488 100%); color: white; padding: 12px 18px; border-radius: 8px; font-weight: bold; font-size: 1.05em; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between;'>"
-            "<span>🛡️ PAPER TRADING – LIVE MARKET DATA – NO REAL ORDERS</span>"
-            "<span style='background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; font-size: 0.8em;'>DELTA EXCHANGE INDIA (XAUTUSD)</span>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
+        # Prominent Mode & Safety Banner
+        if default_orb_settings.mode == "LIVE":
+            st.markdown(
+                "<div style='background: linear-gradient(90deg, #DC2626 0%, #991B1B 100%); color: white; padding: 12px 18px; border-radius: 8px; font-weight: bold; font-size: 1.05em; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between;'>"
+                "<span>⚠️ LIVE TRADING ACTIVE – REAL ORDERS SENT TO DELTA EXCHANGE</span>"
+                "<span style='background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; font-size: 0.8em;'>DELTA EXCHANGE INDIA (XAUTUSD)</span>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<div style='background: linear-gradient(90deg, #1E3A8A 0%, #0D9488 100%); color: white; padding: 12px 18px; border-radius: 8px; font-weight: bold; font-size: 1.05em; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between;'>"
+                "<span>🛡️ PAPER TRADING – LIVE MARKET DATA – NO REAL ORDERS</span>"
+                "<span style='background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; font-size: 0.8em;'>DELTA EXCHANGE INDIA (XAUTUSD)</span>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
         mode_color = "#D50000" if default_orb_settings.mode == "LIVE" else "#FF8F00" if default_orb_settings.mode == "ALERT_ONLY" else "#1E88E5"
         kill_switch_tag = ""
@@ -117,8 +126,10 @@ def render_orb_setup():
         with col_m2:
             reload_btn = st.button("🔄 Refresh Data", use_container_width=True)
 
-        # Real-Time WebSocket Market Data & Paper Bot Engine Panel
-        paper_bot = DeltaPaperBot.get_instance(cfg=cfg)
+        # Real-Time WebSocket Market Data & Paper Bot Engine Panel (Protected Sandbox)
+        from dataclasses import replace
+        paper_bot_cfg = replace(cfg, mode="PAPER", live_trading_enabled=False)
+        paper_bot = DeltaPaperBot.get_instance(cfg=paper_bot_cfg)
         bot_telem = paper_bot.get_dashboard_telemetry()
         feed_info = bot_telem.get("feed", {})
         acc_info = bot_telem.get("account", {})
