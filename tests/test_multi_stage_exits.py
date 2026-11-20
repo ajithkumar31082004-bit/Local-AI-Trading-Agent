@@ -148,3 +148,107 @@ def test_legacy_mode_does_not_ratchet_when_disabled(tmp_path):
     # In legacy mode, stop_loss must NOT be modified
     assert broker.open_position["stop_loss"] == 3980.0
     assert broker.open_position.get("is_breakeven_active", False) is False
+
+
+def test_live_executor_breakeven_ratchet_long_position(tmp_path):
+    """Verify DeltaLiveExecutor.manage_open_positions ratchets stop order to breakeven for Long position."""
+    from unittest.mock import MagicMock
+    from services.delta_live_executor import DeltaLiveExecutor
+
+    cfg = ORBSettings(
+        symbol="XAUTUSD",
+        mode="LIVE",
+        live_trading_enabled=True,
+        live_trading_acknowledged="YES",
+        enable_multi_stage_exits=True,
+        breakeven_trigger_r=0.8,
+        state_path=tmp_path / "live_state.json",
+    )
+    mock_client = MagicMock()
+    mock_client.change_order.return_value = {"success": True}
+    mock_account = MagicMock()
+
+    # Long position entered at 3570.0, SL at 3560.0 (risk = 10 pts)
+    mock_account._fetch_open_positions.return_value = {
+        "success": True,
+        "result": [{"product_id": 131253, "size": 1, "entry_price": "3570.00"}],
+    }
+    mock_account._fetch_open_orders.return_value = {
+        "success": True,
+        "result": [
+            {
+                "id": 99991,
+                "product_id": 131253,
+                "side": "sell",
+                "stop_price": "3560.00",
+                "limit_price": "3559.95",
+                "reduce_only": True,
+                "order_type": "stop_limit_order",
+            }
+        ],
+    }
+    executor = DeltaLiveExecutor(cfg=cfg, client=mock_client, account_service=mock_account)
+
+    # Price at 3575.0 (+0.5R, not reaching 0.8R) -> no change
+    msg = executor.manage_open_positions(current_price=3575.0)
+    assert msg is None
+    assert mock_client.change_order.called is False
+
+    # Price reaches 3578.50 (+0.85R >= 0.8R) -> triggers ratchet!
+    msg = executor.manage_open_positions(current_price=3578.50)
+    assert msg is not None
+    assert "Ratcheted LONG Stop-Loss to Breakeven" in msg
+    assert mock_client.change_order.called is True
+    call_args = mock_client.change_order.call_args[1]
+    assert call_args["order_id"] == "99991"
+    assert call_args["stop_price"] >= 3570.0  # At or above entry price
+
+
+def test_live_executor_breakeven_ratchet_short_position(tmp_path):
+    """Verify DeltaLiveExecutor.manage_open_positions ratchets stop order to breakeven for Short position."""
+    from unittest.mock import MagicMock
+    from services.delta_live_executor import DeltaLiveExecutor
+
+    cfg = ORBSettings(
+        symbol="XAUTUSD",
+        mode="LIVE",
+        live_trading_enabled=True,
+        live_trading_acknowledged="YES",
+        enable_multi_stage_exits=True,
+        breakeven_trigger_r=0.8,
+        state_path=tmp_path / "live_state.json",
+    )
+    mock_client = MagicMock()
+    mock_client.change_order.return_value = {"success": True}
+    mock_account = MagicMock()
+
+    # Short position entered at 3550.0, SL at 3560.0 (risk = 10 pts)
+    mock_account._fetch_open_positions.return_value = {
+        "success": True,
+        "result": [{"product_id": 131253, "size": -1, "entry_price": "3550.00"}],
+    }
+    mock_account._fetch_open_orders.return_value = {
+        "success": True,
+        "result": [
+            {
+                "id": 99992,
+                "product_id": 131253,
+                "side": "buy",
+                "stop_price": "3560.00",
+                "limit_price": "3560.05",
+                "reduce_only": True,
+                "order_type": "stop_limit_order",
+            }
+        ],
+    }
+    executor = DeltaLiveExecutor(cfg=cfg, client=mock_client, account_service=mock_account)
+
+    # Price at 3541.0 (+0.9R >= 0.8R favorable drop) -> triggers ratchet!
+    msg = executor.manage_open_positions(current_price=3541.0)
+    assert msg is not None
+    assert "Ratcheted SHORT Stop-Loss to Breakeven" in msg
+    assert mock_client.change_order.called is True
+    call_args = mock_client.change_order.call_args[1]
+    assert call_args["order_id"] == "99992"
+    assert call_args["stop_price"] <= 3550.0  # At or below entry price
+

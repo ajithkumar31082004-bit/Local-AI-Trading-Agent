@@ -202,3 +202,54 @@ class DeltaExchangeClient:
         except Exception as exc:
             return {"success": False, "error": str(exc), "status_code": 0}
 
+    def change_order(
+        self,
+        order_id: str,
+        product_id: int,
+        limit_price: Optional[float] = None,
+        stop_price: Optional[float] = None,
+        size: Optional[int] = None,
+        bracket_stop_loss_price: Optional[float] = None,
+        bracket_stop_loss_limit_price: Optional[float] = None,
+        bracket_take_profit_price: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Modify an existing open order or protective stop on Delta Exchange via PUT /v2/orders."""
+        if not self.api_key or not self.api_secret:
+            return {"success": False, "error": "API credentials missing."}
+        import json
+        path = "/v2/orders"
+        payload: Dict[str, Any] = {
+            "id": int(order_id) if str(order_id).isdigit() else order_id,
+            "product_id": int(product_id),
+        }
+        if limit_price is not None:
+            payload["limit_price"] = f"{limit_price:.2f}"
+        if stop_price is not None:
+            payload["stop_price"] = f"{stop_price:.2f}"
+        if size is not None:
+            payload["size"] = int(size)
+        if bracket_stop_loss_price is not None:
+            payload["bracket_stop_loss_price"] = f"{bracket_stop_loss_price:.2f}"
+        if bracket_stop_loss_limit_price is not None:
+            payload["bracket_stop_loss_limit_price"] = f"{bracket_stop_loss_limit_price:.2f}"
+        if bracket_take_profit_price is not None:
+            payload["bracket_take_profit_price"] = f"{bracket_take_profit_price:.2f}"
+
+        compact_payload = json.dumps(payload, separators=(",", ":"))
+        headers = self._get_headers("PUT", path, payload=compact_payload)
+        url = f"{self.base_url}{path}"
+        try:
+            res = requests.put(url, data=compact_payload, headers=headers, timeout=self.timeout)
+            if res.status_code in (200, 201):
+                data = res.json()
+                data["status_code"] = res.status_code
+                return data
+            return {
+                "success": False,
+                "error": f"HTTP {res.status_code}: {res.text[:120]}",
+                "status_code": res.status_code,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "status_code": 0}
+
+

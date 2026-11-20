@@ -363,6 +363,10 @@ def main():
                         if stale:
                             print(f"\n[{now_dt.strftime('%H:%M:%S')}] Auto-cancelled {len(stale)} stale unfilled limit order(s).")
 
+                        ratchet_msg = executor.manage_open_positions(cur_price)
+                        if ratchet_msg:
+                            print(f"\n[{now_dt.strftime('%H:%M:%S')}] 🛡️ {ratchet_msg}")
+
                 except DeltaCandleError as exc:
                     print(f"\n[{now_dt.strftime('%H:%M:%S')}] Market data temporarily unavailable: {exc}")
                 except Exception as exc:

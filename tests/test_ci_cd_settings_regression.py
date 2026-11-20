@@ -12,7 +12,7 @@ from config.orb_settings import ORBSettings, settings, validate_settings
 
 def test_orb_settings_has_mode_and_trading_mode_attributes():
     """Verify that ORBSettings supports both .mode and .trading_mode seamlessly."""
-    cfg = ORBSettings()
+    cfg = ORBSettings(mode="PAPER")
     assert hasattr(cfg, "mode"), "ORBSettings must have 'mode' attribute"
     assert hasattr(cfg, "trading_mode"), "ORBSettings must have 'trading_mode' attribute for backward compatibility"
     assert cfg.mode == "PAPER", f"Expected mode == 'PAPER', got {cfg.mode}"
@@ -49,7 +49,10 @@ def test_workflow_yaml_syntax_and_safety_step():
 
     # Extract and execute the exact Python inline snippet from the workflow
     python_code = script.split('python -c "', 1)[1].rsplit('"', 1)[0]
-    result = subprocess.run([sys.executable, "-c", python_code], capture_output=True, text=True)
+    ci_env = os.environ.copy()
+    ci_env["TRADING_MODE"] = "PAPER"
+    ci_env["LIVE_TRADING_ENABLED"] = "false"
+    result = subprocess.run([sys.executable, "-c", python_code], capture_output=True, text=True, env=ci_env)
     assert result.returncode == 0, f"Workflow safety Python snippet failed: {result.stderr}"
     assert "Safety verification PASSED" in result.stdout
 

@@ -187,6 +187,19 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
             rejected.append((name, "COUNTER_TREND_LONG_FORBIDDEN"))
             continue
 
+        # In ranging regimes, reject counter-trend signals when 15m EMAs are strongly separated
+        if regime_res.regime == MarketRegime.RANGING:
+            ema20_15 = regime_res.metrics.get("ema20_15m")
+            ema50_15 = regime_res.metrics.get("ema50_15m")
+            if ema20_15 is not None and ema50_15 is not None:
+                ema_diff_pct = (ema20_15 - ema50_15) / max(ema50_15, 1e-6)
+                if ema_diff_pct < -0.0015 and sig.direction == "LONG":
+                    rejected.append((name, "HTF_BEARISH_TREND_BLOCKS_LONG"))
+                    continue
+                elif ema_diff_pct > 0.0015 and sig.direction == "SHORT":
+                    rejected.append((name, "HTF_BULLISH_TREND_BLOCKS_SHORT"))
+                    continue
+
         eligible.append(sig)
 
     # 4. Check for Conflicting Signals (Simultaneous LONG and SHORT)

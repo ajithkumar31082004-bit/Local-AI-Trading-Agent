@@ -66,6 +66,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
         self.instrument_service = instrument_service or DeltaInstrumentService(cfg=self.cfg)
         self.reconciliation_service = reconciliation_service or DeltaReconciliationService(cfg=self.cfg)
         self.risk_state = DailyRiskState(path=self.cfg.state_path, cfg=self.cfg)
+        self._ratcheted_positions: set = set()
 
     def validate_preflight(
         self,
@@ -387,4 +388,145 @@ class DeltaLiveExecutor(BaseExecutionEngine):
     def reconcile_all_pending(self) -> List[LiveOrderRecord]:
         """Reconcile all unconfirmed or pending orders with the exchange."""
         return self.reconciliation_service.reconcile_all_pending(self.client)
+
+    def manage_open_positions(self, current_price: float) -> Optional[str]:
+        """Audit live position excursion and ratchet stop-loss to Breakeven when reaching threshold R."""
+        if not getattr(self.cfg, "enable_multi_stage_exits", True):
+            return None
+
+        be_trigger_r = float(getattr(self.cfg, "breakeven_trigger_r", 0.8))
+
+        try:
+            pos_res = self.account_service._fetch_open_positions(self.cfg.product_id)
+            if not pos_res.get("success"):
+                return None
+
+            positions = pos_res.get("result", [])
+            if not positions:
+                self._ratcheted_positions.clear()
+                return None
+
+            for pos in positions:
+                size = int(pos.get("size", 0))
+                entry_price = float(pos.get("entry_price", 0))
+                if size == 0 or entry_price <= 0:
+                    continue
+
+                pos_key = f"{self.cfg.product_id}_{entry_price}_{size}"
+                if pos_key in self._ratcheted_positions:
+                    continue
+
+                # Query open protective stop orders on Delta Exchange
+                ord_res = self.account_service._fetch_open_orders(self.cfg.product_id)
+                if not ord_res.get("success"):
+                    continue
+
+                open_orders = ord_res.get("result", [])
+                
+                # Identify stop order associated with this position
+                stop_order = None
+                for ord_item in open_orders:
+                    is_stop = (
+                        ord_item.get("stop_price") is not None
+                        or ord_item.get("bracket_stop_loss_price") is not None
+                        or ord_item.get("order_type") in ("stop_order", "stop_limit_order")
+                    )
+                    expected_side = "sell" if size > 0 else "buy"
+                    if is_stop and ord_item.get("side") == expected_side:
+                        stop_order = ord_item
+                        break
+
+                if not stop_order:
+                    continue
+
+                stop_id = str(stop_order.get("id"))
+                current_sl = float(stop_order.get("stop_price") or stop_order.get("limit_price") or 0)
+
+                # LONG Position Evaluation
+                if size > 0:
+                    if current_sl <= 0:
+                        continue
+                    if current_sl >= entry_price:
+                        self._ratcheted_positions.add(pos_key)
+                        continue
+                    risk_dist = entry_price - current_sl
+                    if risk_dist <= 0:
+                        continue
+                    excursion = current_price - entry_price
+                    r_achieved = excursion / risk_dist
+
+                    if r_achieved >= be_trigger_r:
+                        # Ratchet SL to entry + 0.10 buffer
+                        new_sl = round(entry_price + 0.10, 2)
+                        new_limit = round(new_sl - 0.05, 2)
+                        chg_res = self.client.change_order(
+                            order_id=stop_id,
+                            product_id=self.cfg.product_id,
+                            stop_price=new_sl,
+                            limit_price=new_limit,
+                        )
+                        if chg_res.get("success"):
+                            self._ratcheted_positions.add(pos_key)
+                            msg = f"Multi-Stage Exit: Ratcheted LONG Stop-Loss to Breakeven (${new_sl:.2f}) at +{r_achieved:.2f}R excursion!"
+                            logger.info(msg)
+                            try:
+                                send_telegram_alert(
+                                    f"🛡️ <b>BREAKEVEN STOP RATCHET ACTIVATED</b>\n\n"
+                                    f"• <b>Symbol:</b> {self.cfg.symbol}\n"
+                                    f"• <b>Side:</b> LONG\n"
+                                    f"• <b>Entry:</b> ${entry_price:.2f}\n"
+                                    f"• <b>New Stop:</b> ${new_sl:.2f}\n"
+                                    f"• <b>Excursion:</b> +{r_achieved:.2f}R\n"
+                                    f"• <b>Risk:</b> Protected at Breakeven"
+                                )
+                            except Exception:
+                                pass
+                            return msg
+
+                # SHORT Position Evaluation
+                elif size < 0:
+                    if current_sl <= 0:
+                        continue
+                    if current_sl <= entry_price:
+                        self._ratcheted_positions.add(pos_key)
+                        continue
+                    risk_dist = current_sl - entry_price
+                    if risk_dist <= 0:
+                        continue
+                    excursion = entry_price - current_price
+                    r_achieved = excursion / risk_dist
+
+                    if r_achieved >= be_trigger_r:
+                        # Ratchet SL to entry - 0.10 buffer
+                        new_sl = round(entry_price - 0.10, 2)
+                        new_limit = round(new_sl + 0.05, 2)
+                        chg_res = self.client.change_order(
+                            order_id=stop_id,
+                            product_id=self.cfg.product_id,
+                            stop_price=new_sl,
+                            limit_price=new_limit,
+                        )
+                        if chg_res.get("success"):
+                            self._ratcheted_positions.add(pos_key)
+                            msg = f"Multi-Stage Exit: Ratcheted SHORT Stop-Loss to Breakeven (${new_sl:.2f}) at +{r_achieved:.2f}R excursion!"
+                            logger.info(msg)
+                            try:
+                                send_telegram_alert(
+                                    f"🛡️ <b>BREAKEVEN STOP RATCHET ACTIVATED</b>\n\n"
+                                    f"• <b>Symbol:</b> {self.cfg.symbol}\n"
+                                    f"• <b>Side:</b> SHORT\n"
+                                    f"• <b>Entry:</b> ${entry_price:.2f}\n"
+                                    f"• <b>New Stop:</b> ${new_sl:.2f}\n"
+                                    f"• <b>Excursion:</b> +{r_achieved:.2f}R\n"
+                                    f"• <b>Risk:</b> Protected at Breakeven"
+                                )
+                            except Exception:
+                                pass
+                            return msg
+
+        except Exception as exc:
+            logger.warning("Error during open position management: %s", exc)
+
+        return None
+
 
