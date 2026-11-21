@@ -344,7 +344,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
             "orders_marked_cancelled": len(active_orders),
         }
 
-    def cancel_stale_orders(self, max_age_minutes: int = 15) -> List[Dict[str, Any]]:
+    def cancel_stale_orders(self, max_age_minutes: int = 5) -> List[Dict[str, Any]]:
         """Cancel unfilled limit orders older than max_age_minutes to avoid stale entries."""
         now = datetime.now(timezone.utc)
         cancelled = []

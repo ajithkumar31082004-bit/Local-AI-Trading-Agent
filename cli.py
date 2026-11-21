@@ -359,7 +359,7 @@ def main():
                         pass
 
                     if executor and settings.mode == "LIVE":
-                        stale = executor.cancel_stale_orders(max_age_minutes=15)
+                        stale = executor.cancel_stale_orders(max_age_minutes=5)
                         if stale:
                             print(f"\n[{now_dt.strftime('%H:%M:%S')}] Auto-cancelled {len(stale)} stale unfilled limit order(s).")
 

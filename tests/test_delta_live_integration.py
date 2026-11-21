@@ -257,6 +257,7 @@ def test_executor_minimum_lot_risk_budget_rejection(tmp_path, monkeypatch):
         live_trading_acknowledged="YES",
         api_key="real_key",
         api_secret="real_secret",
+        risk_pct=0.5,
         state_path=tmp_path / "risk.json",
     )
     executor = DeltaLiveExecutor(cfg=cfg_live)
