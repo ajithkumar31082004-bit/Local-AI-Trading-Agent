@@ -39,10 +39,13 @@ class PaperBroker:
         clean_symbol = symbol.strip().upper()
         clean_side = side.strip().upper()
 
-        if quantity <= 0:
-            return False, "Quantity must be strictly positive.", None
-        if current_price <= 0:
-            return False, "Invalid price quote.", None
+        import math
+        if quantity <= 0 or math.isnan(quantity) or math.isinf(quantity):
+            return False, "Quantity must be strictly positive and finite.", None
+        if current_price <= 0 or math.isnan(current_price) or math.isinf(current_price):
+            return False, "Price must be strictly positive and finite.", None
+        if clean_side not in (OrderSide.BUY.value, OrderSide.SELL.value):
+            return False, f"Invalid order side '{side}'. Must be BUY or SELL.", None
 
         with self._lock:
             # 1. Fetch current account state and positions
@@ -78,10 +81,14 @@ class PaperBroker:
                 effective_price = risk_res.effective_price
                 slippage = risk_res.estimated_slippage
                 fee = risk_res.estimated_fee
+                norm_sl = risk_res.stop_loss
+                norm_tp = risk_res.take_profit
             else:
                 effective_price, slip = self.risk_manager.calculate_execution_price(current_price, clean_side)
                 slippage = round(slip * quantity, 2)
                 fee = self.risk_manager.calculate_fee(quantity * effective_price)
+                norm_sl = stop_loss
+                norm_tp = take_profit
 
             trade_value = round(quantity * effective_price, 2)
 
@@ -113,8 +120,8 @@ class PaperBroker:
                         unrealized_pnl=unrealized,
                         unrealized_pnl_pct=unrealized_pct,
                         realized_pnl=existing_pos.realized_pnl,
-                        stop_loss=stop_loss or existing_pos.stop_loss,
-                        take_profit=take_profit or existing_pos.take_profit,
+                        stop_loss=norm_sl or existing_pos.stop_loss,
+                        take_profit=norm_tp or existing_pos.take_profit,
                         opened_at=existing_pos.opened_at,
                         updated_at=now_str,
                     )
@@ -129,8 +136,8 @@ class PaperBroker:
                         unrealized_pnl=0.0,
                         unrealized_pnl_pct=0.0,
                         realized_pnl=0.0,
-                        stop_loss=stop_loss,
-                        take_profit=take_profit,
+                        stop_loss=norm_sl,
+                        take_profit=norm_tp,
                         opened_at=now_str,
                         updated_at=now_str,
                     )
@@ -142,10 +149,11 @@ class PaperBroker:
                 net_inflow = round(trade_value - fee, 2)
                 new_cash = round(cash_balance + net_inflow, 2)
 
-                # Realized P&L calculation: (effective_sell_price - avg_entry_price) * quantity
+                # Realized P&L calculation: (effective_sell_price - avg_entry_price) * quantity - fee
                 cost_basis = quantity * existing_pos.avg_entry_price
                 gross_pnl = trade_value - cost_basis
-                realized_pnl_delta = round(gross_pnl, 2)
+                net_pnl = round(gross_pnl - fee, 2)
+                realized_pnl_delta = net_pnl
 
                 rem_qty = round(existing_qty - quantity, 6)
                 if rem_qty <= 0.0001:
@@ -180,6 +188,12 @@ class PaperBroker:
                     )
 
             # 4. Construct and record trade
+            trade_notes = notes
+            if clean_side == OrderSide.SELL.value:
+                trade_notes = f"Realized PnL: ${realized_pnl_delta:,.2f} | {notes}".strip(" | ")
+            elif norm_sl:
+                trade_notes = f"SL: ${norm_sl:,.2f} | TP: ${norm_tp:,.2f} | {notes}".strip(" | ")
+
             trade = TradeRecord(
                 symbol=clean_symbol,
                 side=clean_side,
@@ -191,7 +205,7 @@ class PaperBroker:
                 timestamp=now_str,
                 strategy=strategy_name,
                 status=OrderStatus.FILLED.value,
-                notes=notes,
+                notes=trade_notes,
             )
 
             trade_id = self.repo.record_trade_and_update_portfolio(

@@ -1,0 +1,49 @@
+{
+  "audit_name": "Audit 3: Multi-Process Concurrency & Public-Feed Validation",
+  "phase": "Phase 3.26",
+  "target_files": [
+    "services/delta_paper_broker.py",
+    "scripts/stage1_readonly_market_monitor.py"
+  ],
+  "timestamp_utc": "2026-11-10T15:27:00Z",
+  "verdict": "FAIL",
+  "severity": "HIGH",
+  "part_a_multiprocess_concurrency": {
+    "verdict": "FAIL",
+    "severity": "HIGH",
+    "lock_mechanism": "threading.Lock() (Python standard library)",
+    "limitation": "In-process memory boundary only. threading.Lock() provides zero mutual exclusion across separate operating system processes.",
+    "findings": [
+      {
+        "id": "AUDIT-3-MP-CONCURRENT-RESERVATION",
+        "severity": "CRITICAL",
+        "title": "Cross-Process Concurrent Reservation Collision",
+        "description": "When two distinct OS processes (such as two background daemons, cron workers, or CLI scripts) instantiate DeltaPaperBroker pointed to the identical state_file, neither process has visibility into the other's in-memory _pending_reservation or _lock. Both processes can concurrently reserve the order slot and execute trades simultaneously.",
+        "test_proof": "tests/test_phase3_26_safety_audits.py::test_audit3_multiprocess_concurrency_limitation",
+        "impact": "Double-fill risk and violation of maximum position sizing invariant if multiple worker processes are spawned."
+      },
+      {
+        "id": "AUDIT-3-MP-FILE-CLOBBERING",
+        "severity": "HIGH",
+        "title": "Last-Writer-Wins State File Replacement",
+        "description": "_save_state() reads local memory and writes to state.json via temporary file replacement without holding an OS-level file lock (e.g. fcntl.flock / portalocker). If Process A and Process B write concurrently, Process B overwrites Process A's changes, leading to lost position or ledger updates.",
+        "impact": "Desynchronization between actual open positions and persisted broker state."
+      }
+    ]
+  },
+  "part_b_feed_discrepancy_forensics": {
+    "verdict": "RESOLVED_EXPLAINED",
+    "severity": "MEDIUM",
+    "incident_background": "During the Stage 1 1-hour EC2 public market-data observation, the monitor reported exactly 250 'out-of-order ticks' and 0 duplicate ticks across 14,089 received WebSocket messages.",
+    "forensic_investigation": {
+      "monitored_channels": [
+        "v2/ticker (Orderbook best bid/ask and 24h summary updates)",
+        "all_trades (Individual public trade execution prints)"
+      ],
+      "clock_architecture": "Single shared timestamp variable: 'self.last_tick_ts'",
+      "root_cause": "The observer dispatched both ticker quotes and trade executions into the same processing loop that compared tick timestamp T against a singular 'self.last_tick_ts'. Because Delta Exchange processes orderbook ticker snapshots and individual trade prints via separate internal dispatch pipelines, a trade occurring at T=1,000.2ms can arrive immediately following a ticker snapshot at T=1,000.5ms. The observer's cross-stream comparison 'trade_ts < last_tick_ts' incorrectly flagged 250 legitimate asynchronous trade messages as out-of-order.",
+      "evidence": "Detailed trace verification confirmed that within the v2/ticker stream alone, timestamps are strictly monotonic. Within the all_trades stream alone, timestamps are strictly monotonic. The 250 out-of-order ticks were entirely an artifact of interleaving two distinct physical streams against one shared logical clock variable.",
+      "test_proof": "tests/test_phase3_26_safety_audits.py::test_audit3_feed_out_of_order_stream_analysis"
+    }
+  }
+}

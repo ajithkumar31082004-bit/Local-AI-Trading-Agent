@@ -1,38 +1,97 @@
-"""NewsAPI Client for financial headlines and market sentiment."""
+"""NewsAPI Client for gold & macro market headlines and high-impact event blackout filter."""
 
+from datetime import datetime, timezone, timedelta
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import requests
 
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+GOLD_SYMBOLS = {"XAUUSD", "XAUTUSD", "XAU", "XAUT", "GC=F", "GOLD"}
+GOLD_MACRO_QUERY = "gold price OR Federal Reserve OR CPI OR dollar index OR FOMC"
+
+
+def is_news_blackout(
+    current_time: Optional[datetime] = None,
+    blackout_windows: Optional[List[str]] = None,
+    buffer_minutes: int = 30,
+) -> Tuple[bool, str]:
+    """Check if current time falls within ±buffer_minutes of any configured high-impact event (CPI, NFP, FOMC).
+    
+    blackout_windows contains ISO-formatted timestamps of scheduled events.
+    Returns (is_blacked_out: bool, reason: str).
+    """
+    if not blackout_windows:
+        return False, "No blackout windows configured."
+
+    now_dt = current_time or datetime.now(timezone.utc)
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=timezone.utc)
+    now_utc = now_dt.astimezone(timezone.utc)
+
+    buffer_delta = timedelta(minutes=buffer_minutes)
+
+    for event_str in blackout_windows:
+        try:
+            event_dt = datetime.fromisoformat(event_str)
+            if event_dt.tzinfo is None:
+                event_dt = event_dt.replace(tzinfo=timezone.utc)
+            event_utc = event_dt.astimezone(timezone.utc)
+
+            start_window = event_utc - buffer_delta
+            end_window = event_utc + buffer_delta
+
+            if start_window <= now_utc <= end_window:
+                remaining = (end_window - now_utc).total_seconds() / 60.0
+                return True, (
+                    f"NO TRADE: Trading blacked out within ±{buffer_minutes}m of high-impact macro event "
+                    f"at {event_utc.strftime('%Y-%m-%d %H:%M UTC')} ({remaining:.1f}m remaining)."
+                )
+        except Exception as exc:
+            logger.warning("Could not parse blackout window timestamp '%s': %s", event_str, exc)
+            continue
+
+    return False, "No active macro news blackout."
+
 
 class NewsProvider:
-    """Retrieves financial news headlines and computes sentiment summaries using NewsAPI."""
+    """Retrieves financial and gold headlines and computes sentiment summaries using NewsAPI.
+    
+    Security: Always transmits API key via HTTP headers (X-Api-Key), never in URL parameters.
+    """
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key if api_key is not None else settings.newsapi_key
         self.base_url = "https://newsapi.org/v2"
 
-    def get_market_news(self, symbol: str, page_size: int = 5) -> List[Dict[str, Any]]:
-        """Fetch latest financial news articles for a given symbol."""
+    def get_market_news(self, symbol: str = "XAUTUSD", page_size: int = 5) -> List[Dict[str, Any]]:
+        """Fetch latest financial news articles with specialized macro queries for Gold."""
         if not self.api_key:
             return []
 
-        # Strip market suffix for cleaner search (e.g. TCS.NS -> TCS)
-        search_term = symbol.split(".")[0]
+        clean_symbol = symbol.upper().strip()
+        if clean_symbol in GOLD_SYMBOLS or "XAU" in clean_symbol:
+            query = GOLD_MACRO_QUERY
+        else:
+            search_term = symbol.split(".")[0]
+            query = f"{search_term} stock OR shares OR market"
+
         params = {
-            "q": f"{search_term} stock OR shares OR market",
+            "q": query,
             "sortBy": "publishedAt",
             "pageSize": page_size,
             "language": "en",
-            "apiKey": self.api_key,
+        }
+        headers = {
+            "X-Api-Key": self.api_key,
+            "Accept": "application/json",
+            "User-Agent": "LocalAITradingAgent/1.0",
         }
 
         try:
-            res = requests.get(f"{self.base_url}/everything", params=params, timeout=6)
+            res = requests.get(f"{self.base_url}/everything", params=params, headers=headers, timeout=6)
             if res.status_code == 200:
                 data = res.json()
                 articles = data.get("articles", [])
@@ -52,8 +111,8 @@ class NewsProvider:
             logger.warning("Error fetching news for %s: %s", symbol, e)
             return []
 
-    def get_sentiment_summary(self, symbol: str) -> Dict[str, Any]:
-        """Compute headline sentiment and summary for Market Research Agent."""
+    def get_sentiment_summary(self, symbol: str = "XAUTUSD") -> Dict[str, Any]:
+        """Compute headline sentiment and summary for info panels."""
         articles = self.get_market_news(symbol, page_size=5)
         if not articles:
             return {"symbol": symbol, "sentiment": "Neutral", "score": 0.0, "articles": []}

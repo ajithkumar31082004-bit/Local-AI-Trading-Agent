@@ -1,0 +1,58 @@
+{
+  "audit_phase": "3.35",
+  "audit_name": "Read-Only Shadow Observer Safety & Isolation Audit",
+  "timestamp": "2026-11-11T08:08:00Z",
+  "verdict": "PASS",
+  "isolation_checks": {
+    "broker_import_isolation": {
+      "verified_modules": [
+        "services/shadow_observer/strategy_evaluator.py",
+        "services/shadow_observer/signal_recorder.py",
+        "services/shadow_observer/market_data_reader.py",
+        "services/shadow_observer/candle_validator.py",
+        "services/shadow_observer/observer_safety_guard.py",
+        "services/shadow_observer/shadow_report.py"
+      ],
+      "forbidden_symbols_found": 0,
+      "status": "COMPLIANT"
+    },
+    "order_execution_barrier": {
+      "execution_methods_present": 0,
+      "order_endpoints_present": 0,
+      "block_execution_guard_active": true,
+      "status": "COMPLIANT"
+    },
+    "file_system_write_isolation": {
+      "authorized_output_directory": "reports/phase3_35_shadow_validation",
+      "forbidden_targets_protected": [
+        "paper_account_xautusd.json",
+        "paper_forward_24h_state.json",
+        "paper_account_xautusd.idempotency.db",
+        "trading_agent.db",
+        ".env",
+        ".env.monitoring"
+      ],
+      "path_escape_prevention_active": true,
+      "status": "COMPLIANT"
+    },
+    "private_credential_isolation": {
+      "private_api_keys_loaded": false,
+      "private_secrets_loaded": false,
+      "unauthenticated_public_endpoints_only": true,
+      "status": "COMPLIANT"
+    },
+    "daemon_service_isolation": {
+      "service_start_capability": false,
+      "service_restart_capability": false,
+      "status": "COMPLIANT"
+    },
+    "broker_state_invariance": {
+      "cash_balance_modified": false,
+      "open_position_modified": false,
+      "closed_trades_modified": false,
+      "historical_484_lot_incident_intact": true,
+      "sqlite_idempotency_records_modified": false,
+      "status": "COMPLIANT"
+    }
+  }
+}

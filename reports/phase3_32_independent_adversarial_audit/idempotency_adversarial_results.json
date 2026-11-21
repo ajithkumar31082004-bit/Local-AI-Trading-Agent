@@ -1,0 +1,78 @@
+{
+  "audit_phase": "3.32",
+  "audit_name": "Idempotency Adversarial Testing Matrix",
+  "timestamp": "2026-11-10T22:58:30Z",
+  "verdict": "PASS",
+  "scenarios": [
+    {
+      "test_name": "100-Burst Same-Key Submission",
+      "description": "Rapid succession of 100 duplicate order submissions with identical idempotency_key in a single process",
+      "iterations": 100,
+      "accepted_executions": 1,
+      "rejected_executions": 99,
+      "rejection_rate": "99.0%",
+      "rejection_reason": "Order with idempotency key already processed",
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Same-Key Replay After Process Restart",
+      "description": "Submitting identical idempotency_key after clean broker teardown and process re-initialization",
+      "iterations": 1,
+      "accepted_executions": 0,
+      "rejected_executions": 1,
+      "rejection_source": "Durable SQLite Idempotency Registry (status=COMMITTED)",
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Same-Key Replay After Crash Recovery",
+      "description": "Submitting identical idempotency_key after crash during write-ahead execution intent and startup reconciliation",
+      "iterations": 1,
+      "accepted_executions": 0,
+      "rejected_executions": 1,
+      "rejection_source": "Reconciled SQLite Idempotency Registry",
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Same-Key Replay After Online Backup and Restore",
+      "description": "Submitting identical historical idempotency_key after restoring from online SQLite backup into a fresh working directory",
+      "iterations": 1,
+      "accepted_executions": 0,
+      "rejected_executions": 1,
+      "rejection_source": "Restored SQLite Idempotency Database",
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Multi-Threaded Same-Key Concurrency (10 Threads)",
+      "description": "10 concurrent threads attempting to execute the identical idempotency_key simultaneously via ThreadPoolExecutor",
+      "thread_count": 10,
+      "accepted_executions": 1,
+      "rejected_executions": 9,
+      "race_conditions_observed": 0,
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Multi-Process Same-Key Concurrency (4 OS Processes)",
+      "description": "4 separate OS processes executing concurrently against shared disk state and SQLite registry using file locks and transactions",
+      "process_count": 4,
+      "accepted_executions": 1,
+      "rejected_executions": 3,
+      "sqlite_busy_lock_conflicts": 0,
+      "double_fills_detected": 0,
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Crash Before Registry Commit",
+      "description": "Simulated failure before SQLite records COMMITTED; reservation expires via 10s TTL or rolls back",
+      "retry_outcome": "Accepted cleanly as valid new order without duplicate positions",
+      "cash_conserved": true,
+      "verdict": "PASS"
+    },
+    {
+      "test_name": "Crash After Registry Commit",
+      "description": "Simulated failure after SQLite records COMMITTED and JSON records position; state survives crash",
+      "retry_outcome": "Rejected deterministically as duplicate",
+      "duplicate_fills": 0,
+      "verdict": "PASS"
+    }
+  ]
+}

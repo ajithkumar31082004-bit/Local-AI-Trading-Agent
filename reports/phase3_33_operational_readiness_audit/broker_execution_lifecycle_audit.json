@@ -1,0 +1,62 @@
+{
+  "audit_phase": "3.33",
+  "audit_name": "Broker Execution Lifecycle & Durability Code Review",
+  "timestamp": "2026-11-10T23:22:30Z",
+  "verdict": "PASS",
+  "components_inspected": {
+    "idempotency_registry": "services/idempotency_registry.py",
+    "paper_broker": "services/delta_paper_broker.py",
+    "position_guard": "risk/position_size_guard.py"
+  },
+  "lifecycle_stages": [
+    {
+      "step": 1,
+      "name": "Order Reservation",
+      "method": "DeltaPaperBroker.reserve_order_slot() -> DurableIdempotencyRegistry.reserve_execution()",
+      "findings": "Checks is_executed(); verifies fencing generation counter; inserts row with status='RESERVED', unique token RES_GEN{gen}_{hex}, and 10.0s TTL. Enforces mutual exclusion under cross_process_lock.",
+      "status": "VERIFIED_CORRECT"
+    },
+    {
+      "step": 2,
+      "name": "Sizing & Parameter Guard",
+      "method": "risk.position_size_guard.validate_paper_order_lots()",
+      "findings": "Enforces discrete integer lots; strictly allows APPROVED_MAX_PAPER_LOTS == 1. Rejects float, NaN, inf, None, bool, negative, and oversized lots (>1) with PositionSizeViolation. Zero silent clamping.",
+      "status": "VERIFIED_CORRECT"
+    },
+    {
+      "step": 3,
+      "name": "Write-Ahead Intent",
+      "method": "DeltaPaperBroker.open_simulated_trade() -> DurableIdempotencyRegistry.record_execution_intent()",
+      "findings": "Durably logs status='EXECUTING' to SQLite WAL with full intent payload (pos, order_id, trade_id, cash_outflow, fee) before mutating in-memory or JSON state. Fails and releases reservation if SQLite intent logging fails.",
+      "status": "VERIFIED_CORRECT"
+    },
+    {
+      "step": 4,
+      "name": "Atomic State Persistence",
+      "method": "DeltaPaperBroker._save_state()",
+      "findings": "Mutates in-memory broker state (cash, fees, position, last_order, processed_keys); writes to state.json.tmp; flushes OS cache via os.fsync(f.fileno()); performs atomic replace via os.replace(tmp, state_file).",
+      "status": "VERIFIED_CORRECT"
+    },
+    {
+      "step": 5,
+      "name": "SQLite Commit Transition",
+      "method": "DurableIdempotencyRegistry.commit_execution()",
+      "findings": "Transitions SQLite status from 'EXECUTING' to 'COMMITTED'; sets expires_at=NULL; updates updated_at. Commits under PRAGMA synchronous = FULL;.",
+      "status": "VERIFIED_CORRECT"
+    },
+    {
+      "step": 6,
+      "name": "Crash Recovery Reconciliation",
+      "method": "DeltaPaperBroker._recover_pending_execution_intents()",
+      "findings": "On startup, queries get_pending_intents() for 'EXECUTING' rows. If matching position/order exists in state.json, transitions to 'COMMITTED'. If position was never persisted, transitions to 'ROLLED_BACK'. Completely eliminates partial-execution crash window.",
+      "status": "VERIFIED_CORRECT"
+    }
+  ],
+  "durability_and_connection_hygiene": {
+    "journal_mode": "WAL",
+    "synchronous": "FULL (2)",
+    "busy_timeout_ms": 10000,
+    "connection_teardown": "Deterministic close in try/finally blocks and explicit reg.close() preventing Windows [WinError 32] file handle leaks.",
+    "fail_closed_guarantee": "Raises IdempotencyRegistryError and halts startup if database was corrupted and persistent state file contains zero historical trades."
+  }
+}

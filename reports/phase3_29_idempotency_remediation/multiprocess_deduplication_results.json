@@ -1,0 +1,62 @@
+{
+  "test_name": "Multi-Process Concurrent Deduplication Verification",
+  "tested_scenarios": [
+    {
+      "scenario": "Simultaneous Submission of Identical Key Across 2 OS Processes",
+      "test_reference": "test_6_concurrent_processes_same_key",
+      "concurrency_level": 2,
+      "idempotency_key": "SHARED_RACE_KEY",
+      "mechanisms_exercised": [
+        "CrossProcessReentrantLock (portalocker)",
+        "DurableIdempotencyRegistry PRIMARY KEY constraint",
+        "reserve_order_slot() gating"
+      ],
+      "execution_results": {
+        "process_1": {
+          "status": "ACCEPTED",
+          "trade_opened": true
+        },
+        "process_2": {
+          "status": "REJECTED",
+          "rejection_reason": "Duplicate order / active reservation conflict",
+          "trade_opened": false
+        }
+      },
+      "ledger_consistency": {
+        "expected_open_positions": 1,
+        "actual_open_positions": 1,
+        "double_execution_count": 0,
+        "cash_balance_discrepancy": 0.0
+      },
+      "result": "PASSED"
+    },
+    {
+      "scenario": "Ten Independent OS Processes Competing for Order Slot",
+      "test_reference": "test_phase3_27_safety_remediations::test_ten_process_stress_test",
+      "concurrency_level": 10,
+      "mechanisms_exercised": [
+        "Multi-process OS kernel file lock acquisition",
+        "SQLite WAL concurrent transactions",
+        "Monotonic fencing generation progression"
+      ],
+      "execution_results": {
+        "total_attempted_workers": 10,
+        "successful_reservations": 1,
+        "rejected_workers": 9,
+        "lock_contention_deadlocks": 0
+      },
+      "result": "PASSED"
+    },
+    {
+      "scenario": "Simultaneous Trade Closure Across 2 OS Processes",
+      "test_reference": "test_phase3_28_independent_audit::test_audit_b_simultaneous_close_across_processes",
+      "concurrency_level": 2,
+      "execution_results": {
+        "process_1": "Close executed successfully with PnL calculation",
+        "process_2": "Rejected with 'Position not open' error"
+      },
+      "result": "PASSED"
+    }
+  ],
+  "concurrency_audit_verdict": "PASS"
+}

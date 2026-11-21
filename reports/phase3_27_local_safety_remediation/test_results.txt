@@ -1,0 +1,29 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0 -- C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collecting ... collected 19 items
+
+tests/test_phase3_27_safety_remediations.py::test_short_ttl_followed_by_longer_ttl PASSED [  5%]
+tests/test_phase3_27_safety_remediations.py::test_long_ttl_followed_by_shorter_ttl PASSED [ 10%]
+tests/test_phase3_27_safety_remediations.py::test_expired_commit_without_competing_worker PASSED [ 15%]
+tests/test_phase3_27_safety_remediations.py::test_worker_a_expires_worker_b_reserves_worker_a_commit_fails PASSED [ 21%]
+tests/test_phase3_27_safety_remediations.py::test_failed_commit_leaves_broker_state_unchanged PASSED [ 26%]
+tests/test_phase3_27_safety_remediations.py::test_concurrent_reservation_attempts_in_memory PASSED [ 31%]
+tests/test_phase3_27_safety_remediations.py::test_reservation_cleanup_and_recovery PASSED [ 36%]
+tests/test_phase3_27_safety_remediations.py::test_same_key_submitted_twice_in_one_process PASSED [ 42%]
+tests/test_phase3_27_safety_remediations.py::test_same_key_submitted_after_process_restart PASSED [ 47%]
+tests/test_phase3_27_safety_remediations.py::test_restart_after_trade_closure PASSED [ 52%]
+tests/test_phase3_27_safety_remediations.py::test_crash_recovery_simulation_around_state_persistence PASSED [ 57%]
+tests/test_phase3_27_safety_remediations.py::test_missing_or_corrupt_idempotency_storage PASSED [ 63%]
+tests/test_phase3_27_safety_remediations.py::test_existing_ledger_and_accounting_invariants_preserved PASSED [ 68%]
+tests/test_phase3_27_safety_remediations.py::test_two_independent_processes_request_same_reservation_simultaneously PASSED [ 73%]
+tests/test_phase3_27_safety_remediations.py::test_ten_process_stress_test PASSED [ 78%]
+tests/test_phase3_27_safety_remediations.py::test_process_termination_while_holding_lock PASSED [ 84%]
+tests/test_phase3_27_safety_remediations.py::test_duplicate_idempotency_keys_across_processes PASSED [ 89%]
+tests/test_phase3_27_safety_remediations.py::test_interleaved_feed_channels_no_false_out_of_order PASSED [ 94%]
+tests/test_phase3_27_safety_remediations.py::test_independent_stream_monotonicity PASSED [100%]
+
+============================= 19 passed in 27.04s =============================

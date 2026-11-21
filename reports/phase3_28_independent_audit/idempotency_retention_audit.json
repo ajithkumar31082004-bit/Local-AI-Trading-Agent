@@ -1,0 +1,38 @@
+{
+  "audit_area": "Audit A — Idempotency Retention and Replay Analysis",
+  "audit_target": "services/delta_paper_broker.py",
+  "inspected_methods": [
+    "reserve_order_slot",
+    "commit_order_reservation",
+    "release_order_reservation",
+    "_load_state",
+    "_save_state"
+  ],
+  "retention_policy": {
+    "data_structure": "Dict[str, Dict[str, Any]] (self._processed_idempotency_keys)",
+    "maximum_capacity": 1000,
+    "pruning_trigger": "commit_order_reservation() when len > 1000",
+    "pruning_algorithm": "FIFO sort by ISO timestamp, retaining the newest 1,000 entries (dict(sorted_keys[-1000:]))",
+    "persistence": "Persisted in state JSON under _processed_idempotency_keys key"
+  },
+  "replay_vulnerability_analysis": {
+    "is_pruned_key_rejected_by_broker": false,
+    "root_cause": "reserve_order_slot() only validates if clean_key in self._processed_idempotency_keys. It does not query historical closed_trades or a permanent tombstone ledger.",
+    "test_evidence": "test_audit_a_pruned_key_replay_vulnerability verified that after injecting and committing 1,005 subsequent trades, KEY_TARGET was pruned from _processed_idempotency_keys. A subsequent open_simulated_trade() with KEY_TARGET was accepted and executed successfully.",
+    "temporal_risk_window": "Vulnerable to replay once 1,000 subsequent orders are committed and the current position is flat.",
+    "severity": "MEDIUM (Paper environment limit; orders still restricted to 1 lot and single concurrent position, but violates strict permanent idempotency invariant)"
+  },
+  "recommendations": [
+    {
+      "priority": "HIGH",
+      "action": "Secondary ledger check in reserve_order_slot",
+      "implementation": "Check any(t.get('idempotency_key') == clean_key for t in self.closed_trades) or keep an unbounded lightweight set of SHA-256 hashes of all processed idempotency keys."
+    },
+    {
+      "priority": "MEDIUM",
+      "action": "Sqlite or append-only tombstone file",
+      "implementation": "Maintain an append-only JSONL or SQLite database of historical idempotency tokens that is never pruned."
+    }
+  ],
+  "audit_verdict": "CONDITIONAL PASS"
+}

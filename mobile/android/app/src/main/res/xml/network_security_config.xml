@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Deny all cleartext HTTP traffic across the public internet by default -->
+    <base-config cleartextTrafficPermitted="false" />
+
+    <!-- Permit cleartext HTTP strictly to localhost / SSH tunnel loopback -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
+

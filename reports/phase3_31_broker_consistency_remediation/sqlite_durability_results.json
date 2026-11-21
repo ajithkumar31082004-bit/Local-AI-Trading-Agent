@@ -1,0 +1,30 @@
+{
+  "phase": "PHASE_3_31_BROKER_CONSISTENCY_REMEDIATION",
+  "audit_date": "2026-11-10T22:38:15+05:30",
+  "sqlite_durability_evaluation": {
+    "journal_mode": "WAL",
+    "synchronous": 2,
+    "synchronous_name": "FULL",
+    "busy_timeout_ms": 10000,
+    "isolation_level": "DEFERRED",
+    "row_factory": "sqlite3.Row"
+  },
+  "connection_verification": {
+    "applied_uniformly": true,
+    "connection_factory": "services.idempotency_registry.DurableIdempotencyRegistry._get_connection",
+    "deterministic_cleanup": true
+  },
+  "performance_and_latency_benchmark": {
+    "test_iterations": 50,
+    "measured_avg_latency_ms": 24.07,
+    "order_frequency_context": "At most 1 order per 5m to 15m candle bar interval",
+    "performance_impact": "Negligible. ~24ms latency is <0.01% of the candle bar interval.",
+    "verdict": "ACCEPTABLE"
+  },
+  "durability_tradeoff_analysis": {
+    "protection_level": "Host power-loss safe, hypervisor termination safe, application crash safe",
+    "fsync_behavior": "SQLite explicitly executes fsync() / FlushFileBuffers on every WAL commit",
+    "limitations": "Does not protect against physical disk storage controller failure or hardware bad blocks"
+  },
+  "verdict": "PASS"
+}

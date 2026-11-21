@@ -1,0 +1,126 @@
+{
+  "phase": "3.35",
+  "audit_name": "Strategy Registry Discovery & Dependency Inventory",
+  "timestamp": "2026-11-11T08:06:30Z",
+  "target_instrument": "XAUTUSD",
+  "total_strategies_discovered": 6,
+  "broker_dependencies_found": 0,
+  "all_evaluable_without_broker": true,
+  "strategies": [
+    {
+      "name": "ORB",
+      "display_name": "Opening Range Breakout + EMA20 + Volume",
+      "module": "strategy.orb_ema_volume",
+      "entry_function": "evaluate_orb(frame, cfg)",
+      "timeframe": "5m",
+      "required_indicators": [
+        "Opening Range High/Low (09:00-09:45 IST)",
+        "EMA20",
+        "5m ATR(14)",
+        "Volume SMA(20)",
+        "EMA Slope",
+        "EMA Cross Count"
+      ],
+      "warmup_candles": 20,
+      "signal_conditions": "Candle body closes outside opening range with volume > volume SMA and trend aligned with EMA20 slope.",
+      "rejection_conditions": "Inside opening range, breakout volume < average, flat EMA slope, overextended from range, counter-trend EMA.",
+      "broker_dependency": false
+    },
+    {
+      "name": "TREND_FOLLOWING",
+      "display_name": "Multi-Timeframe Trend Following Pullback",
+      "module": "strategy.trend_following",
+      "entry_function": "evaluate_trend_following(frame, cfg)",
+      "timeframe": "15m higher timeframe trend / 5m execution pullback",
+      "required_indicators": [
+        "15m EMA20",
+        "15m EMA50",
+        "15m ADX(14)",
+        "5m EMA20",
+        "5m ATR(14)",
+        "Volume SMA(20)"
+      ],
+      "warmup_candles": 150,
+      "signal_conditions": "15m trend established (EMA20 > EMA50, ADX > 20), 5m pullback to EMA20 with rejection wick, confirmed by volume expansion.",
+      "rejection_conditions": "Choppy ADX (<20), flat EMA slope, price stretched >2.5 ATR from 5m EMA20 (overextended), counter-trend pullback.",
+      "broker_dependency": false
+    },
+    {
+      "name": "VWAP_EMA",
+      "display_name": "Intraday VWAP + EMA Confirmation",
+      "module": "strategy.vwap_ema",
+      "entry_function": "evaluate_vwap_ema(frame, cfg)",
+      "timeframe": "5m",
+      "required_indicators": [
+        "Intraday VWAP",
+        "5m EMA20",
+        "5m ATR(14)",
+        "ADX(14)",
+        "Volume SMA(20)",
+        "EMA Slope"
+      ],
+      "warmup_candles": 20,
+      "signal_conditions": "Price positioned above/below VWAP, aligned with EMA20, test/bounce of VWAP or EMA20 confirmed by volume and EMA slope.",
+      "rejection_conditions": "Price cross conflicting VWAP, flat slope, overextended (>2.0 ATR from EMA20), insufficient volume.",
+      "broker_dependency": false
+    },
+    {
+      "name": "BB_RSI_MEAN_REVERSION",
+      "display_name": "Bollinger Bands + RSI Mean Reversion",
+      "module": "strategy.bb_rsi_mean_reversion",
+      "entry_function": "evaluate_bb_rsi(frame, cfg)",
+      "timeframe": "5m",
+      "required_indicators": [
+        "Bollinger Bands (20, 2.0)",
+        "RSI(14)",
+        "ATR(14)"
+      ],
+      "warmup_candles": 30,
+      "signal_conditions": "Price touches/pierces outer Bollinger Band, RSI oversold (<30) for LONG or overbought (>70) for SHORT, followed by reversal candle closing back inside band.",
+      "rejection_conditions": "Forbidden in trending market regime, RSI not extreme, Bollinger Band expansion (breakout rather than reversion).",
+      "broker_dependency": false
+    },
+    {
+      "name": "ATR_COMPRESSION_BREAKOUT",
+      "display_name": "ATR Volatility Compression Breakout",
+      "module": "strategy.atr_compression_breakout",
+      "entry_function": "evaluate_atr_compression_breakout(frame, cfg)",
+      "timeframe": "5m",
+      "required_indicators": [
+        "ATR(14)",
+        "20-period ATR Moving Average",
+        "Bollinger Bands Bandwidth",
+        "5m EMA20",
+        "Volume SMA(20)"
+      ],
+      "warmup_candles": 30,
+      "signal_conditions": "Volatility compression detected (current ATR < 0.7 * ATR MA), followed by expansion breakout candle closing outside consolidation range with volume.",
+      "rejection_conditions": "Wick-only breakout without body close outside range, low volume, lack of prior compression.",
+      "broker_dependency": false
+    },
+    {
+      "name": "LIQUIDITY_SWEEP",
+      "display_name": "Liquidity Sweep Reversal",
+      "module": "strategy.liquidity_sweep",
+      "entry_function": "evaluate_liquidity_sweep(frame, cfg)",
+      "timeframe": "5m",
+      "required_indicators": [
+        "Rolling Swing Highs/Lows (20-period)",
+        "5m ATR(14)",
+        "5m EMA20",
+        "Volume Spike (>1.5 * SMA)"
+      ],
+      "warmup_candles": 30,
+      "signal_conditions": "False breakout beyond prior swing high/low with long rejection wick and close back inside range, accompanied by volume spike.",
+      "rejection_conditions": "Clean breakout closing beyond swing level without rejection, lack of volume spike, insufficient wick ratio.",
+      "broker_dependency": false
+    }
+  ],
+  "arbitration_engine": {
+    "module": "strategy.arbitrator",
+    "entry_function": "arbitrate_strategies(frame, cfg)",
+    "market_regime_integration": "strategy/arbitrator.py integrates detect_market_regime(frame, cfg)",
+    "regime_filtering": "Blocks trending strategies in ranging regimes; blocks mean reversion in trending regimes; blocks all strategies in UNCERTAIN regimes or during system WARMING_UP.",
+    "broker_dependency": false
+  }
+}
