@@ -252,3 +252,62 @@ def test_live_executor_breakeven_ratchet_short_position(tmp_path):
     assert call_args["order_id"] == "99992"
     assert call_args["stop_price"] <= 3550.0  # At or below entry price
 
+
+def test_live_executor_progressive_profit_locking(tmp_path):
+    """Verify progressive profit lock from Breakeven (+0.8R) to +0.75R Lock (+1.5R) and +1.50R Lock (+2.2R)."""
+    from unittest.mock import MagicMock
+    from services.delta_live_executor import DeltaLiveExecutor
+
+    cfg = ORBSettings(
+        symbol="XAUTUSD",
+        mode="LIVE",
+        live_trading_enabled=True,
+        live_trading_acknowledged="YES",
+        enable_multi_stage_exits=True,
+        breakeven_trigger_r=0.8,
+        state_path=tmp_path / "live_state.json",
+    )
+    mock_client = MagicMock()
+    mock_client.change_order.return_value = {"success": True}
+    mock_account = MagicMock()
+
+    # Long position entered at 3500.0, SL at 3490.0 (risk = 10 pts)
+    mock_account._fetch_open_positions.return_value = {
+        "success": True,
+        "result": [{"product_id": 131253, "size": 1, "entry_price": "3500.00"}],
+    }
+    mock_account._fetch_open_orders.return_value = {
+        "success": True,
+        "result": [
+            {
+                "id": 99993,
+                "product_id": 131253,
+                "side": "sell",
+                "stop_price": "3490.00",
+                "limit_price": "3489.95",
+                "reduce_only": True,
+                "order_type": "stop_limit_order",
+            }
+        ],
+    }
+    executor = DeltaLiveExecutor(cfg=cfg, client=mock_client, account_service=mock_account)
+
+    # Stage 1: Price at 3509.0 (+0.9R) -> triggers Breakeven Ratchet
+    msg1 = executor.manage_open_positions(current_price=3509.0)
+    assert msg1 is not None
+    assert "Ratcheted LONG Stop-Loss to Breakeven" in msg1
+    assert mock_client.change_order.call_args[1]["stop_price"] == 3500.10
+
+    # Stage 2: Price surges to 3516.0 (+1.6R) -> triggers +0.75R Profit Lock
+    msg2 = executor.manage_open_positions(current_price=3516.0)
+    assert msg2 is not None
+    assert "Lock +0.75R Profit" in msg2
+    assert mock_client.change_order.call_args[1]["stop_price"] == 3507.50
+
+    # Stage 3: Price surges to 3523.0 (+2.3R) -> triggers +1.50R Profit Lock
+    msg3 = executor.manage_open_positions(current_price=3523.0)
+    assert msg3 is not None
+    assert "Lock +1.50R Profit" in msg3
+    assert mock_client.change_order.call_args[1]["stop_price"] == 3515.00
+
+
