@@ -206,11 +206,8 @@ class DeltaLiveExecutor(BaseExecutionEngine):
         )
 
         # Build official Delta Exchange bracket order payload
-        # Slippage protective buffer for stop-limit fill
-        sl_limit_offset = float(specs.tick_size) * 5.0
-        sl_limit_price = (aligned_sl - sl_limit_offset) if side == "buy" else (aligned_sl + sl_limit_offset)
-        aligned_sl_limit = self.instrument_service.align_price_to_tick(sl_limit_price, specs.tick_size)
-
+        # Omit bracket_stop_loss_limit_price so Stop-Loss triggers as a Stop-Market order,
+        # guaranteeing 100% immediate fill without resting limit slippage traps.
         payload = {
             "product_id": specs.product_id,
             "size": risk_dec.lots,
@@ -220,7 +217,6 @@ class DeltaLiveExecutor(BaseExecutionEngine):
             "time_in_force": "gtc",
             "stop_trigger_method": "last_traded_price",
             "bracket_stop_loss_price": f"{aligned_sl:.2f}",
-            "bracket_stop_loss_limit_price": f"{aligned_sl_limit:.2f}",
             "bracket_take_profit_price": f"{aligned_tp:.2f}",
             "bracket_take_profit_limit_price": f"{aligned_tp:.2f}",
             "client_order_id": client_order_id,
