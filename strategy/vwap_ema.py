@@ -126,6 +126,8 @@ def evaluate_vwap_ema(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signa
 
     if is_bullish_15m and adx_15m < 22.0:
         return _no_trade(f"NO TRADE: 15m ADX too weak for bullish VWAP setup ({adx_15m:.1f} < 22.0).", "WEAK_BULLISH_ADX")
+    if is_bearish_15m and adx_15m < 22.0:
+        return _no_trade(f"NO TRADE: 15m ADX too weak for bearish VWAP setup ({adx_15m:.1f} < 22.0).", "WEAK_BEARISH_ADX")
 
     # 5m Indicators (VWAP, EMA20, EMA50, ATR14)
     df_5m["EMA20"] = ema(df_5m["Close"], 20)

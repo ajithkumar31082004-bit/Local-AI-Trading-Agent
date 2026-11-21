@@ -69,6 +69,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
         self._ratcheted_positions: set = set()
         self._position_initial_sl: Dict[str, float] = {}
         self._position_stage: Dict[str, int] = {}
+        self._position_start_time: Dict[str, datetime] = {}
 
     def validate_preflight(
         self,
@@ -404,6 +405,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                 self._ratcheted_positions.clear()
                 self._position_initial_sl.clear()
                 self._position_stage.clear()
+                self._position_start_time.clear()
                 return None
 
             for pos in positions:
@@ -416,6 +418,10 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                 current_stage = self._position_stage.get(pos_key, 0)
                 if current_stage >= 3:
                     continue
+
+                if pos_key not in self._position_start_time:
+                    self._position_start_time[pos_key] = datetime.now(timezone.utc)
+                age_minutes = (datetime.now(timezone.utc) - self._position_start_time[pos_key]).total_seconds() / 60.0
 
                 # Query open protective stop orders on Delta Exchange
                 ord_res = self.account_service._fetch_open_orders(self.cfg.product_id)
@@ -456,6 +462,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                         risk_dist = max(entry_price - current_sl, 1.0)
                     excursion = current_price - entry_price
                     r_achieved = excursion / risk_dist
+                    is_stagnant_in_profit = (age_minutes >= 45.0 and r_achieved >= 0.20)
 
                     target_sl = None
                     target_stage = 0
@@ -469,7 +476,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                         target_sl = round(entry_price + (0.75 * risk_dist), 2)
                         target_stage = 2
                         stage_desc = f"Ratcheted LONG Stop-Loss to Lock +0.75R Profit (${target_sl:.2f})"
-                    elif r_achieved >= be_trigger_r and current_stage < 1:
+                    elif (r_achieved >= be_trigger_r or is_stagnant_in_profit) and current_stage < 1:
                         target_sl = round(entry_price + 0.10, 2)
                         target_stage = 1
                         stage_desc = f"Ratcheted LONG Stop-Loss to Breakeven (${target_sl:.2f})"
@@ -508,6 +515,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                         risk_dist = max(current_sl - entry_price, 1.0)
                     excursion = entry_price - current_price
                     r_achieved = excursion / risk_dist
+                    is_stagnant_in_profit = (age_minutes >= 45.0 and r_achieved >= 0.20)
 
                     target_sl = None
                     target_stage = 0
@@ -521,7 +529,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                         target_sl = round(entry_price - (0.75 * risk_dist), 2)
                         target_stage = 2
                         stage_desc = f"Ratcheted SHORT Stop-Loss to Lock +0.75R Profit (${target_sl:.2f})"
-                    elif r_achieved >= be_trigger_r and current_stage < 1:
+                    elif (r_achieved >= be_trigger_r or is_stagnant_in_profit) and current_stage < 1:
                         target_sl = round(entry_price - 0.10, 2)
                         target_stage = 1
                         stage_desc = f"Ratcheted SHORT Stop-Loss to Breakeven (${target_sl:.2f})"
