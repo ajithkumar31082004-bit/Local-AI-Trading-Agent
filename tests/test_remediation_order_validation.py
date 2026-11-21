@@ -162,8 +162,8 @@ def test_daily_realized_loss_accounting_includes_closed_trades(tmp_path):
 
 def test_backtest_fee_accounting_and_open_position_reporting():
     """Verify that backtest exit fees calculate from actual exit price and open positions are captured."""
-    # Construct minimal synthetic 5m dataframe
-    times = pd.date_range("2026-11-20 09:00:00", periods=10, freq="5min", tz="Asia/Kolkata")
+    # Construct minimal synthetic 5m dataframe in the active trading window
+    times = pd.date_range("2026-11-20 10:00:00", periods=10, freq="5min", tz="Asia/Kolkata")
     df = pd.DataFrame({
         "Open": [3500.0 + i for i in range(10)],
         "High": [3505.0 + i for i in range(10)],
@@ -188,7 +188,13 @@ def test_backtest_fee_accounting_and_open_position_reporting():
         sig.direction = "NONE"
         return sig
 
-    cfg = ORBSettings(close_at_eod=False)  # Keep trade open across bars
+    cfg = ORBSettings(
+        close_at_eod=False,
+        orb_minutes=0,
+        no_entry_minutes_after_open=0,
+        session_start="09:00",
+        last_entry_time="22:00",
+    )  # Keep trade open across bars
 
     result = run_backtest(df, initial_equity=1000.0, cfg=cfg, strategy_fn=mock_strat, chart_output_path=None)
 
