@@ -39,6 +39,7 @@ data/scratch/
 data/*.sqlite
 data/*.sqlite3
 data/*.json
+!data/paper_forward_24h_state.json
 data/*.lock
 data/*.html
 data/*.csv

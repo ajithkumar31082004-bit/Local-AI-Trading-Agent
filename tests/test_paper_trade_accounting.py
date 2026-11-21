@@ -287,21 +287,22 @@ def test_position_sizing_reported_495_lots():
     due to the binding 10% maximum margin limit at 2.0x leverage.
     """
     from risk.position_sizing import size_position, estimate_lot_risk
-    from config.orb_settings import settings
+    from config.orb_settings import ORBSettings
 
+    cfg = ORBSettings(mode="BACKTEST", risk_pct=0.5, max_margin_pct_equity=10.0, leverage=2.0)
     entry = 4035.58
     stop = 4021.73
     equity = 10000.0
 
     # 1. Configured constraints
-    assert settings.risk_pct == 0.5
-    assert settings.max_margin_pct_equity == 10.0
-    assert settings.leverage == 2.0
-    assert settings.contract_size_xaut == 0.001
-    assert settings.lot_increment == 1
+    assert cfg.risk_pct == 0.5
+    assert cfg.max_margin_pct_equity == 10.0
+    assert cfg.leverage == 2.0
+    assert cfg.contract_size_xaut == 0.001
+    assert cfg.lot_increment == 1
 
     # 2. Financial risk budget
-    risk_budget = equity * (settings.risk_pct / 100.0)
+    risk_budget = equity * (cfg.risk_pct / 100.0)
     assert risk_budget == 50.0
 
     # 3. Stop distance
@@ -309,8 +310,8 @@ def test_position_sizing_reported_495_lots():
     assert round(stop_dist, 2) == 13.85
 
     # 4. Per-lot risk and costs
-    per_lot_risk, fee_per_lot, costs_per_lot = estimate_lot_risk(entry, stop, settings)
-    gross_risk_per_lot = stop_dist * settings.contract_size_xaut
+    per_lot_risk, fee_per_lot, costs_per_lot = estimate_lot_risk(entry, stop, cfg)
+    gross_risk_per_lot = stop_dist * cfg.contract_size_xaut
     assert round(gross_risk_per_lot, 5) == 0.01385
 
     # 5. Raw risk lots (unconstrained by margin)
@@ -318,11 +319,11 @@ def test_position_sizing_reported_495_lots():
     assert raw_risk_lots > 3000
 
     # 6. Margin constraint: 10% of $10,000 = $1,000 max margin allocation
-    max_margin_budget = equity * (settings.max_margin_pct_equity / 100.0)
+    max_margin_budget = equity * (cfg.max_margin_pct_equity / 100.0)
     assert max_margin_budget == 1000.0
 
-    notional_per_lot = entry * settings.contract_size_xaut  # $4.03558
-    margin_per_lot = notional_per_lot / settings.leverage   # $2.01779
+    notional_per_lot = entry * cfg.contract_size_xaut  # $4.03558
+    margin_per_lot = notional_per_lot / cfg.leverage   # $2.01779
     max_margin_lots = int(max_margin_budget // margin_per_lot)
 
     # 1000.0 / 2.01779 = 495.59 -> 495 integer lots
@@ -330,8 +331,7 @@ def test_position_sizing_reported_495_lots():
 
     # 7. Execute size_position:
     # In BACKTEST mode: returns raw margin-capped 495 lots
-    cfg_backtest = ORBSettings(mode="BACKTEST")
-    decision_bt = size_position(entry, stop, equity, cfg_backtest)
+    decision_bt = size_position(entry, stop, equity, cfg)
     assert decision_bt.approved is True
     assert decision_bt.lots == 495
     assert decision_bt.lots == min(raw_risk_lots, max_margin_lots)
