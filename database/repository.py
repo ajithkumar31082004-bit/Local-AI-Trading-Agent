@@ -20,8 +20,8 @@ from database.supabase_client import SupabaseClient
 class DatabaseRepository:
     """Thread-safe SQLite repository with transaction guarantees and optional Supabase cloud sync."""
 
-    def __init__(self, db_path: Optional[Path] = None, supabase_client: Optional[SupabaseClient] = None):
-        self.db_path = db_path or settings.db_path
+    def __init__(self, db_path: Optional[Path | str] = None, supabase_client: Optional[SupabaseClient] = None):
+        self.db_path = Path(db_path) if db_path else settings.db_path
         self._lock = threading.Lock()
         self.supabase = supabase_client or SupabaseClient()
         self._init_db()
@@ -398,11 +398,27 @@ class DatabaseRepository:
         today_prefix = datetime.now().strftime("%Y-%m-%d")
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
-            # Calculate from closed trades / realized pnl today
+            total_loss = 0.0
+
+            # 1. Calculate from active or closed positions updated today with negative realized P&L
             cursor.execute("""
                 SELECT realized_pnl FROM positions
                 WHERE updated_at LIKE ? AND realized_pnl < 0;
             """, (f"{today_prefix}%",))
             rows = cursor.fetchall()
-            total_loss = sum(abs(r["realized_pnl"]) for r in rows)
-            return total_loss
+            for r in rows:
+                total_loss += abs(r["realized_pnl"])
+
+            # 2. Also calculate from closed SELL trades today to capture liquidated positions
+            cursor.execute("""
+                SELECT notes FROM trades
+                WHERE timestamp LIKE ? AND side = 'SELL' AND notes LIKE '%Realized PnL: -%';
+            """, (f"{today_prefix}%",))
+            import re
+            for tr in cursor.fetchall():
+                match = re.search(r"Realized PnL:\s*-\$?([0-9,.]+)", tr["notes"] or "")
+                if match:
+                    loss_amt = float(match.group(1).replace(",", ""))
+                    total_loss = max(total_loss, loss_amt)
+
+            return round(total_loss, 2)

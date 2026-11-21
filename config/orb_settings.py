@@ -85,6 +85,7 @@ class ORBSettings:
     apply_gst: bool = os.getenv("DELTA_APPLY_GST", "false").lower() == "true"
     enable_multi_stage_exits: bool = os.getenv("ENABLE_MULTI_STAGE_EXITS", "false").lower() == "true"
     breakeven_trigger_r: float = _float("BREAKEVEN_TRIGGER_R", 1.0)
+    close_at_eod: bool = os.getenv("ORB_CLOSE_AT_EOD", "true").lower() == "true"
     state_path: Path = ROOT / "data" / "orb_risk_state.json"
     journal_path: Path = ROOT / "data" / "orb_journal.sqlite3"
     api_base_url: str = os.getenv("ORB_DELTA_API_BASE_URL", os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")).rstrip("/").replace("https://india.delta.exchange", "https://api.india.delta.exchange")

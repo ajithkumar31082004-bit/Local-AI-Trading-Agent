@@ -1,7 +1,7 @@
 """Chronological day-by-day replay of historical 5m candles with identical strategy and risk rules."""
 import logging
 import tempfile
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import time as time_of_day
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -29,6 +29,7 @@ class ORBBacktestResult:
     trade_log: List[Dict[str, Any]]
     max_drawdown_r: float = 0.0
     no_setup_pct: float = 0.0
+    open_positions: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -192,8 +193,11 @@ def run_backtest(
                     price_delta = (exit_price - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - exit_price)
                     gross_pnl_cash = contract_qty * price_delta
 
-                    _, fee_cost, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], sl, cfg)
-                    total_friction = (fee_cost + spread_slip_cost) * pending_trade["lots"]
+                    _, _, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], sl, cfg)
+                    entry_fee = pending_trade["entry"] * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
+                    exit_fee = exit_price * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
+                    fee_cost_per_lot = entry_fee + exit_fee
+                    total_friction = (fee_cost_per_lot + spread_slip_cost) * pending_trade["lots"]
                     pnl_cash = gross_pnl_cash - total_friction
 
                     risk_budget = equity * (cfg.risk_pct / 100.0)
@@ -216,7 +220,7 @@ def run_backtest(
                         "lots": pending_trade["lots"],
                         "contract_qty": round(contract_qty, 4),
                         "gross_pnl": round(gross_pnl_cash, 2),
-                        "fee_cost": round(fee_cost * pending_trade["lots"], 4),
+                        "fee_cost": round(fee_cost_per_lot * pending_trade["lots"], 4),
                         "spread_slip_cost": round(spread_slip_cost * pending_trade["lots"], 4),
                         "total_friction": round(total_friction, 4),
                         "r": round(net_r, 4),
@@ -277,8 +281,9 @@ def run_backtest(
                             "time": ts,
                         }
 
-        # Close any position still open at the end of the day at the day's final close price
-        if pending_trade is not None:
+        # Close any position still open at the end of the day at the day's final close price (if close_at_eod)
+        close_at_eod = getattr(cfg, "close_at_eod", True)
+        if pending_trade is not None and close_at_eod:
             last_ts = day_frame.index[-1]
             exit_price = float(day_frame["Close"].iloc[-1])
             side = pending_trade["direction"]
@@ -286,8 +291,11 @@ def run_backtest(
             price_delta = (exit_price - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - exit_price)
             gross_pnl_cash = contract_qty * price_delta
 
-            _, fee_cost, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], pending_trade["sl"], cfg)
-            total_friction = (fee_cost + spread_slip_cost) * pending_trade["lots"]
+            _, _, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], pending_trade["sl"], cfg)
+            entry_fee = pending_trade["entry"] * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
+            exit_fee = exit_price * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
+            fee_cost_per_lot = entry_fee + exit_fee
+            total_friction = (fee_cost_per_lot + spread_slip_cost) * pending_trade["lots"]
             pnl_cash = gross_pnl_cash - total_friction
 
             risk_budget = equity * (cfg.risk_pct / 100.0)
@@ -310,7 +318,7 @@ def run_backtest(
                 "lots": pending_trade["lots"],
                 "contract_qty": round(contract_qty, 4),
                 "gross_pnl": round(gross_pnl_cash, 2),
-                "fee_cost": round(fee_cost * pending_trade["lots"], 4),
+                "fee_cost": round(fee_cost_per_lot * pending_trade["lots"], 4),
                 "spread_slip_cost": round(spread_slip_cost * pending_trade["lots"], 4),
                 "total_friction": round(total_friction, 4),
                 "r": round(net_r, 4),
@@ -324,6 +332,8 @@ def run_backtest(
             else:
                 current_losing_streak = 0
 
+            pending_trade = None
+
         if trades_today == 0:
             skipped_days += 1
 
@@ -335,6 +345,24 @@ def run_backtest(
             "date": str(day),
             "equity": round(equity, 2),
             "daily_r": round(day_r, 4),
+        })
+
+    # Record any unclosed open position at the end of the backtest replay
+    open_positions_report: List[Dict[str, Any]] = []
+    if pending_trade is not None:
+        last_candle_close = float(df["Close"].iloc[-1])
+        contract_qty = pending_trade["lots"] * cfg.contract_size_xaut
+        side = pending_trade["direction"]
+        unrealized = contract_qty * (
+            (last_candle_close - pending_trade["entry"])
+            if side == "LONG"
+            else (pending_trade["entry"] - last_candle_close)
+        )
+        open_positions_report.append({
+            **pending_trade,
+            "current_price": last_candle_close,
+            "unrealized_pnl": round(unrealized, 2),
+            "contract_qty": round(contract_qty, 4),
         })
 
     r_multiples = [t["r"] for t in trades]
@@ -380,4 +408,5 @@ def run_backtest(
         trade_log=trades,
         max_drawdown_r=round(max_dd_r, 4),
         no_setup_pct=no_setup_pct,
+        open_positions=open_positions_report,
     )
