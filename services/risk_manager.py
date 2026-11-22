@@ -305,12 +305,12 @@ class RiskManager:
             rejection_reasons.append(
                 f"Insufficient Cash: Order cost with fees is ${cost:,.2f}, but available cash is ${cash_balance:,.2f}."
             )
-        elif requested_quantity > allocation_based_qty * 1.02:
+        elif requested_quantity > allocation_based_qty + 1e-6:
             rejection_reasons.append(
                 f"Position Allocation Exceeded: Requested position size (${requested_quantity * effective_price:,.2f}) "
                 f"exceeds max position allocation limit (${max_allocation_dollars:,.2f} = {self.max_position_allocation_pct}% of equity)."
             )
-        elif (requested_quantity * stop_distance) > (max_risk_dollars * 1.05):
+        elif (requested_quantity * stop_distance) > (max_risk_dollars + 1e-6):
             risk_amt = requested_quantity * stop_distance
             rejection_reasons.append(
                 f"Risk Per Trade Limit Exceeded: Stop loss risk (${risk_amt:,.2f}) "

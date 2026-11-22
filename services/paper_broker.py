@@ -202,6 +202,7 @@ class PaperBroker:
                 fee=fee,
                 slippage=slippage,
                 total_cost=trade_value,
+                realized_pnl=realized_pnl_delta if clean_side == OrderSide.SELL.value else 0.0,
                 timestamp=now_str,
                 strategy=strategy_name,
                 status=OrderStatus.FILLED.value,

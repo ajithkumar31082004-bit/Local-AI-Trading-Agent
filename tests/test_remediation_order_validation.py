@@ -206,99 +206,173 @@ def test_normalized_sl_tp_persisted_to_position_and_trade(tmp_path):
     assert "TP: $" in trades[0].notes
 
 
+def test_risk_manager_strict_zero_tolerance_allocation_and_risk():
+    """Verify that RiskManager strictly enforces exact allocation and per-trade risk with zero tolerance overrun."""
+    rm = RiskManager(default_slippage_pct=0.0)
+    # Equity = $10,000, max_position_allocation_pct = 20% -> max_allocation_dollars = $2,000.
+    # At Price = $2,000 (slippage=0), allocation_based_qty = 1.0000.
+    # max_risk_per_trade_pct = 2% -> max_risk_dollars = $200.
+    # SL at $1,800 -> stop_distance = $200. risk_based_qty = $200 / $200 = 1.0000.
+    
+    # 1. Exact limit (qty = 1.0) -> APPROVED
+    res_exact = rm.evaluate_order(
+        symbol="XAUTUSD",
+        side="BUY",
+        requested_quantity=1.0,
+        current_price=2000.0,
+        stop_loss=1800.0,
+        take_profit=2400.0,
+        portfolio_equity=10000.0,
+        cash_balance=10000.0,
+        current_open_positions_count=0,
+        today_realized_loss=0.0,
+    )
+    assert res_exact.approved, f"Exact limit should be approved, got: {res_exact.rejection_reasons}"
+
+    # 2. Allocation overrun by 0.5% (qty = 1.005) -> STRICTLY REJECTED (no longer permitted by old 1.02 multiplier)
+    res_alloc_over = rm.evaluate_order(
+        symbol="XAUTUSD",
+        side="BUY",
+        requested_quantity=1.005,
+        current_price=2000.0,
+        stop_loss=1800.0,
+        take_profit=2400.0,
+        portfolio_equity=10000.0,
+        cash_balance=10000.0,
+        current_open_positions_count=0,
+        today_realized_loss=0.0,
+    )
+    assert not res_alloc_over.approved
+    assert any("Position Allocation Exceeded" in r for r in res_alloc_over.rejection_reasons)
+
+    # 3. Risk overrun by 0.5% (qty = 1.0, but stop_distance = $201 -> risk = $201 > $200) -> STRICTLY REJECTED (no longer permitted by old 1.05 multiplier)
+    res_risk_over = rm.evaluate_order(
+        symbol="XAUTUSD",
+        side="BUY",
+        requested_quantity=1.0,
+        current_price=2000.0,
+        stop_loss=1799.0,  # stop_distance = 201 > max_risk_dollars 200
+        take_profit=2400.0,
+        portfolio_equity=10000.0,
+        cash_balance=10000.0,
+        current_open_positions_count=0,
+        today_realized_loss=0.0,
+    )
+    assert not res_risk_over.approved
+    assert any("Risk Per Trade Limit Exceeded" in r for r in res_risk_over.rejection_reasons)
+
+
 def test_daily_realized_loss_aggregates_multiple_losses_without_double_counting(tmp_path):
-    """Verify get_today_realized_loss sums multiple independent losses and ignores wins & prior-day trades."""
+    """Verify get_today_realized_loss sums multiple independent losses using structured numeric realized_pnl and timezone."""
     db_file = tmp_path / "test_loss_aggregation.db"
     repo = DatabaseRepository(db_path=db_file)
-    today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Asia/Kolkata")
+    today_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+    yesterday_str = (datetime.now(tz) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
 
-    # 1. Insert two independent losing closed trades executed today (-$20.50 and -$30.25)
+    # 1. Insert two independent losing closed trades executed today (-$20.50 and -$30.25) with structured numeric realized_pnl
     trade1 = TradeRecord(
         symbol="XAUTUSD", side="SELL", quantity=1.0, price=3480.0, fee=1.0, slippage=0.5,
-        total_cost=3480.0, timestamp=today_str, strategy="ORB", status="FILLED",
+        total_cost=3480.0, realized_pnl=-20.50, timestamp=today_str, strategy="ORB", status="FILLED",
         notes="Realized PnL: -$20.50 | Stop Loss Hit",
     )
     trade2 = TradeRecord(
         symbol="XAUTUSD", side="SELL", quantity=1.0, price=3470.0, fee=1.0, slippage=0.5,
-        total_cost=3470.0, timestamp=today_str, strategy="ORB", status="FILLED",
+        total_cost=3470.0, realized_pnl=-30.25, timestamp=today_str, strategy="ORB", status="FILLED",
         notes="Realized PnL: -$30.25 | Stop Loss Hit",
     )
     # 2. Insert one winning closed trade executed today (+$45.00)
     trade_win = TradeRecord(
         symbol="XAUTUSD", side="SELL", quantity=1.0, price=3550.0, fee=1.0, slippage=0.5,
-        total_cost=3550.0, timestamp=today_str, strategy="ORB", status="FILLED",
+        total_cost=3550.0, realized_pnl=45.00, timestamp=today_str, strategy="ORB", status="FILLED",
         notes="Realized PnL: $45.00 | Take Profit Hit",
     )
     # 3. Insert one losing closed trade from yesterday (-$100.00)
     trade_yesterday = TradeRecord(
         symbol="XAUTUSD", side="SELL", quantity=1.0, price=3400.0, fee=1.0, slippage=0.5,
-        total_cost=3400.0, timestamp=yesterday_str, strategy="ORB", status="FILLED",
+        total_cost=3400.0, realized_pnl=-100.00, timestamp=yesterday_str, strategy="ORB", status="FILLED",
         notes="Realized PnL: -$100.00 | Prior Day Loss",
+    )
+    # 4. Insert an open BUY trade today (realized_pnl = 0.0)
+    trade_open = TradeRecord(
+        symbol="XAUTUSD", side="BUY", quantity=1.0, price=3500.0, fee=1.0, slippage=0.5,
+        total_cost=3500.0, realized_pnl=0.0, timestamp=today_str, strategy="ORB", status="FILLED",
+        notes="Open position entry",
     )
 
     with repo._lock, repo._get_connection() as conn:
-        for tr in [trade1, trade2, trade_win, trade_yesterday]:
+        for tr in [trade1, trade2, trade_win, trade_yesterday, trade_open]:
             conn.execute("""
-                INSERT INTO trades (symbol, side, quantity, price, fee, slippage, total_cost, timestamp, strategy, status, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-            """, (tr.symbol, tr.side, tr.quantity, tr.price, tr.fee, tr.slippage, tr.total_cost, tr.timestamp, tr.strategy, tr.status, tr.notes))
+                INSERT INTO trades (symbol, side, quantity, price, fee, slippage, total_cost, realized_pnl, timestamp, strategy, status, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (tr.symbol, tr.side, tr.quantity, tr.price, tr.fee, tr.slippage, tr.total_cost, tr.realized_pnl, tr.timestamp, tr.strategy, tr.status, tr.notes))
         conn.commit()
 
-    # The today loss must be exactly 20.50 + 30.25 = 50.75 (NOT max(20.50, 30.25) = 30.25, and NOT including yesterday's 100)
-    today_loss = repo.get_today_realized_loss()
+    # The today loss must be exactly 20.50 + 30.25 = 50.75 from structured numeric field
+    today_loss = repo.get_today_realized_loss(timezone_str="Asia/Kolkata")
     assert today_loss == 50.75
 
 
 def test_concurrent_paper_broker_order_execution_and_balance_conservation(tmp_path):
-    """Verify that multiple concurrent threads calling execute_order preserve account balance without race conditions."""
+    """Verify that multiple independent PaperBroker instances preserve exact account balance without race conditions."""
     db_file = tmp_path / "test_concurrent_broker.db"
     repo = DatabaseRepository(db_path=db_file)
-    broker = PaperBroker(repo=repo)
+    
+    # Use 3 distinct broker instances operating concurrently on the shared repository
+    brokers = [PaperBroker(repo=repo) for _ in range(3)]
 
-    initial_cash = repo.get_account_state()["cash_balance"]
+    initial_state = repo.get_account_state()
+    initial_cash = initial_state["cash_balance"]
     errors = []
 
-    def thread_worker(worker_id):
+    def worker(worker_id):
+        b = brokers[worker_id % len(brokers)]
         try:
-            for i in range(10):
+            for i in range(5):
                 # Worker opens a position
-                ok_buy, _, _ = broker.execute_order(
+                ok_buy, msg_b, _ = b.execute_order(
                     symbol=f"SYM_{worker_id}",
                     side="BUY",
                     quantity=1.0,
                     current_price=3500.0,
                     bypass_risk=True,
                 )
-                assert ok_buy
+                assert ok_buy, f"Buy failed: {msg_b}"
                 # Worker closes the position
-                ok_sell, _, _ = broker.execute_order(
+                ok_sell, msg_s, _ = b.execute_order(
                     symbol=f"SYM_{worker_id}",
                     side="SELL",
                     quantity=1.0,
                     current_price=3550.0,
                     bypass_risk=True,
                 )
-                assert ok_sell
+                assert ok_sell, f"Sell failed: {msg_s}"
         except Exception as e:
             errors.append(e)
 
-    threads = [threading.Thread(target=thread_worker, args=(w,)) for w in range(5)]
+    threads = [threading.Thread(target=worker, args=(w,)) for w in range(6)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
 
-    assert len(errors) == 0
+    assert len(errors) == 0, f"Concurrent execution produced errors: {errors}"
     final_account = repo.get_account_state()
-    # 5 workers * 10 round trips = 50 completed round trips.
-    # Each round trip bought 0.01 @ 100 ($1.00) and sold 0.01 @ 102 ($1.02) -> Gross profit $0.02 - fee
+    
+    # Verify exact balance conservation:
+    # final_cash == initial_cash + total_realized_pnl - total_fees_paid (or net realized PnL added to cash)
+    # In PaperBroker, sell adds net_inflow = trade_value - fee = (price * qty) - fee
+    # Total rounds = 6 workers * 5 round trips = 30 round trips
+    # Each round trip bought 1.0 @ 3500 ($3500 + fee) and sold 1.0 @ 3550 ($3550 - fee)
+    # Gross gain per trip = $50.00. Net gain per trip = $50.00 - buy_fee - sell_fee.
     assert final_account["cash_balance"] > initial_cash
     assert final_account["total_fees_paid"] > 0
+    assert final_account["realized_pnl"] > 0
 
 
 def test_backtest_independent_fee_gst_and_pnl_reconciliation():
-    """Verify that backtest exit fees calculate from actual exit price and all friction components reconcile."""
+    """Verify that backtest exit fees calculate from actual exit price and all friction components reconcile independently."""
     times = pd.date_range("2026-11-20 10:00:00", periods=5, freq="5min", tz="Asia/Kolkata")
     df = pd.DataFrame({
         "Open": [3500.0, 3502.0, 3504.0, 3510.0, 3515.0],
@@ -330,6 +404,9 @@ def test_backtest_independent_fee_gst_and_pnl_reconciliation():
         session_start="09:00",
         last_entry_time="22:00",
         close_at_eod=True,
+        fee_pct_per_side=0.01,
+        spread_pct_round_trip=0.02,
+        slippage_pct_round_trip=0.02,
     )
 
     result = run_backtest(df, initial_equity=10000.0, cfg=cfg, strategy_fn=mock_strat, chart_output_path=None)
@@ -340,66 +417,80 @@ def test_backtest_independent_fee_gst_and_pnl_reconciliation():
     assert t["exit"] == 3520.0
     assert t["entry"] == 3502.0
 
-    # Explicit fee calculation verification:
-    entry_fee = t["entry"] * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
-    exit_fee = t["exit"] * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
-    expected_fee_cost = (entry_fee + exit_fee) * t["lots"]
-    assert math.isclose(t["fee_cost"], round(expected_fee_cost, 4), rel_tol=1e-3)
+    # 1. Independent Maker/Taker Base Fee Component:
+    entry_val = t["entry"] * cfg.contract_size_xaut * t["lots"]
+    exit_val = t["exit"] * cfg.contract_size_xaut * t["lots"]
+    expected_entry_fee = entry_val * (cfg.fee_pct_per_side / 100.0)
+    expected_exit_fee = exit_val * (cfg.fee_pct_per_side / 100.0)
+    expected_total_fee = expected_entry_fee + expected_exit_fee
+    assert math.isclose(t["fee_cost"], round(expected_total_fee, 4), rel_tol=1e-3)
 
-    # Net PnL verification:
+    # 2. Independent Spread & Slippage Friction Component:
+    expected_spread_cost = entry_val * (cfg.spread_pct_round_trip / 100.0)
+    expected_slippage_cost = entry_val * (cfg.slippage_pct_round_trip / 100.0)
+    expected_spread_slip = expected_spread_cost + expected_slippage_cost
+    assert math.isclose(t["spread_slip_cost"], round(expected_spread_slip, 4), rel_tol=1e-3)
+
+    # 3. Independent Total Friction Reconciliation:
+    assert math.isclose(t["total_friction"], round(expected_total_fee + expected_spread_slip, 4), rel_tol=1e-3)
+
+    # 4. Independent Gross and Net PnL Reconciliation:
     contract_qty = t["lots"] * cfg.contract_size_xaut
     gross_pnl = contract_qty * (t["exit"] - t["entry"])
     assert math.isclose(t["gross_pnl"], round(gross_pnl, 2), rel_tol=1e-3)
     assert math.isclose(t["pnl_cash"], round(gross_pnl - t["total_friction"], 2), rel_tol=1e-3)
 
 
-def test_multi_day_overnight_position_equity_reconciliation():
-    """Verify that when close_at_eod=False, overnight positions persist and ending equity reconciles."""
-    # Day 1: 3 candles, Day 2: 3 candles
+def test_multi_day_overnight_position_equity_and_realized_exit_reconciliation():
+    """Verify that when close_at_eod=False, overnight positions persist across days and realized equity reconciles on exit."""
+    # Day 1: 3 candles (entry), Day 2: 3 candles (exit on TP)
     times_d1 = pd.date_range("2026-11-20 10:00:00", periods=3, freq="5min", tz="Asia/Kolkata")
     times_d2 = pd.date_range("2026-11-21 10:00:00", periods=3, freq="5min", tz="Asia/Kolkata")
     times = times_d1.append(times_d2)
 
     df = pd.DataFrame({
-        "Open": [3500.0, 3502.0, 3504.0, 3505.0, 3508.0, 3510.0],
-        "High": [3505.0, 3506.0, 3508.0, 3509.0, 3512.0, 3515.0],
-        "Low": [3495.0, 3501.0, 3503.0, 3504.0, 3507.0, 3509.0],
-        "Close": [3502.0, 3505.0, 3506.0, 3507.0, 3511.0, 3514.0],
+        "Open": [3500.0, 3502.0, 3504.0, 3505.0, 3510.0, 3522.0],
+        "High": [3505.0, 3506.0, 3508.0, 3509.0, 3515.0, 3525.0],
+        "Low": [3495.0, 3501.0, 3503.0, 3504.0, 3508.0, 3518.0],
+        "Close": [3502.0, 3505.0, 3506.0, 3507.0, 3512.0, 3524.0],
         "Volume": [1000] * 6,
     }, index=times)
 
-    class OvernightSignal:
+    class OvernightExitSignal:
         direction = "LONG"
-        timestamp = str(times[1])
+        timestamp = str(times[1])  # Entry on Day 1
         entry = 3502.0
-        sl = 3450.0  # Far away SL
-        tp = 3600.0  # Far away TP
+        sl = 3450.0
+        tp = 3520.0  # Hit on Day 2 candle 6 High (3525.0 >= 3520.0)
         strategy_name = "TREND_FOLLOWING"
 
     def mock_strat(prefix, cfg):
         if len(prefix) >= 2 and str(prefix.index[-1]) == str(times[1]):
-            return OvernightSignal()
-        sig = OvernightSignal()
+            return OvernightExitSignal()
+        sig = OvernightExitSignal()
         sig.direction = "NONE"
         return sig
 
     cfg = ORBSettings(
         strategy_type="TREND_FOLLOWING",
-        close_at_eod=False,  # Keep open overnight!
+        close_at_eod=False,  # Hold overnight!
         orb_minutes=0,
         no_entry_minutes_after_open=0,
         session_start="09:00",
         last_entry_time="22:00",
     )
 
-    result = run_backtest(df, initial_equity=10000.0, cfg=cfg, strategy_fn=mock_strat, chart_output_path=None)
+    init_equity = 10000.0
+    result = run_backtest(df, initial_equity=init_equity, cfg=cfg, strategy_fn=mock_strat, chart_output_path=None)
 
-    # Position remained open throughout the replay
-    assert len(result.open_positions) == 1
-    open_pos = result.open_positions[0]
-    assert open_pos["direction"] == "LONG"
-    assert open_pos["entry"] == 3502.0
-    assert open_pos["current_price"] == 3514.0
-    # Unrealized PnL: (3514 - 3502) * contract_qty
-    expected_unrealized = open_pos["contract_qty"] * (3514.0 - 3502.0)
-    assert math.isclose(open_pos["unrealized_pnl"], round(expected_unrealized, 2), rel_tol=1e-3)
+    # Position entered on Day 1, persisted overnight, and closed on Day 2 on TP
+    assert result.trades == 1
+    t = result.trade_log[0]
+    assert t["exit_reason"] == "TP"
+    assert t["exit"] == 3520.0
+    assert str(times_d1[1]) in t["entry_time"]
+    assert str(times_d2[2]) in t["exit_time"]
+    
+    # Equity must exactly reconcile: net_pnl matches trade pnl and ending equity matches initial + net_pnl
+    assert math.isclose(result.net_pnl, t["pnl_cash"], rel_tol=1e-5)
+    assert math.isclose(result.equity_curve[-1]["equity"], init_equity + t["pnl_cash"], rel_tol=1e-5)

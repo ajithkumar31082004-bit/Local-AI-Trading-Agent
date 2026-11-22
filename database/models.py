@@ -41,6 +41,7 @@ class TradeRecord:
     fee: float = 0.0
     slippage: float = 0.0
     total_cost: float = 0.0
+    realized_pnl: float = 0.0
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     strategy: str = "MANUAL"
     status: str = OrderStatus.FILLED.value

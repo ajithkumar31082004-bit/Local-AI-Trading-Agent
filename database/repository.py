@@ -82,12 +82,18 @@ class DatabaseRepository:
                     fee REAL NOT NULL,
                     slippage REAL NOT NULL,
                     total_cost REAL NOT NULL,
+                    realized_pnl REAL NOT NULL DEFAULT 0.0,
                     timestamp TEXT NOT NULL,
                     strategy TEXT NOT NULL,
                     status TEXT NOT NULL,
                     notes TEXT
                 );
             """)
+
+            cursor.execute("PRAGMA table_info(trades);")
+            trade_cols = [row["name"] for row in cursor.fetchall()]
+            if "realized_pnl" not in trade_cols:
+                cursor.execute("ALTER TABLE trades ADD COLUMN realized_pnl REAL NOT NULL DEFAULT 0.0;")
 
             # Daily snapshots for performance and drawdown tracking
             cursor.execute("""
@@ -250,8 +256,8 @@ class DatabaseRepository:
 
             # 1. Insert trade record
             cursor.execute("""
-                INSERT INTO trades (symbol, side, quantity, price, fee, slippage, total_cost, timestamp, strategy, status, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                INSERT INTO trades (symbol, side, quantity, price, fee, slippage, total_cost, realized_pnl, timestamp, strategy, status, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """, (
                 trade.symbol.upper(),
                 trade.side,
@@ -260,6 +266,7 @@ class DatabaseRepository:
                 trade.fee,
                 trade.slippage,
                 trade.total_cost,
+                getattr(trade, "realized_pnl", 0.0),
                 trade.timestamp or now_str,
                 trade.strategy,
                 trade.status,
@@ -377,6 +384,9 @@ class DatabaseRepository:
             rows = cursor.fetchall()
             trades = []
             for r in rows:
+                pnl_val = 0.0
+                if "realized_pnl" in r.keys() and r["realized_pnl"] is not None:
+                    pnl_val = float(r["realized_pnl"])
                 trades.append(TradeRecord(
                     id=r["id"],
                     symbol=r["symbol"],
@@ -386,6 +396,7 @@ class DatabaseRepository:
                     fee=r["fee"],
                     slippage=r["slippage"],
                     total_cost=r["total_cost"],
+                    realized_pnl=pnl_val,
                     timestamp=r["timestamp"],
                     strategy=r["strategy"],
                     status=r["status"],
@@ -393,27 +404,42 @@ class DatabaseRepository:
                 ))
             return trades
 
-    def get_today_realized_loss(self) -> float:
+    def get_today_realized_loss(self, timezone_str: Optional[str] = None) -> float:
         """Calculate total losses incurred today for daily loss limit checking.
         
         Uses the authoritative closed-trade ledger in trades table for executions today,
-        aggregating individual net losses (including fees and slippage) without duplicate counting
-        or conflation with multi-day position carrying balances.
+        aggregating individual net losses (including fees and slippage) from the structured
+        numeric realized_pnl field for closed executions (status='FILLED', side='SELL', realized_pnl < 0)
+        in the designated exchange/account timezone.
         """
-        today_prefix = datetime.now().strftime("%Y-%m-%d")
+        from zoneinfo import ZoneInfo
+        tz_name = timezone_str or getattr(settings, "timezone", "Asia/Kolkata")
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("Asia/Kolkata")
+
+        today_prefix = datetime.now(tz).strftime("%Y-%m-%d")
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             total_loss = 0.0
 
             cursor.execute("""
-                SELECT notes FROM trades
-                WHERE timestamp LIKE ? AND notes LIKE '%Realized PnL: -%';
+                SELECT realized_pnl, notes FROM trades
+                WHERE timestamp LIKE ?
+                  AND status = 'FILLED'
+                  AND (side = 'SELL' OR notes LIKE '%Realized PnL%');
             """, (f"{today_prefix}%",))
+
             import re
             for tr in cursor.fetchall():
-                match = re.search(r"Realized PnL:\s*-\$?([0-9,.]+)", tr["notes"] or "")
-                if match:
-                    loss_amt = float(match.group(1).replace(",", ""))
-                    total_loss += loss_amt
+                pnl_val = float(tr["realized_pnl"]) if tr["realized_pnl"] is not None else 0.0
+                if pnl_val < 0:
+                    total_loss += abs(pnl_val)
+                elif pnl_val == 0.0 and tr["notes"]:
+                    match = re.search(r"Realized PnL:\s*-\$?([0-9,.]+)", tr["notes"] or "")
+                    if match:
+                        loss_amt = float(match.group(1).replace(",", ""))
+                        total_loss += loss_amt
 
             return round(total_loss, 2)
