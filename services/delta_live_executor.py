@@ -83,6 +83,17 @@ class DeltaLiveExecutor(BaseExecutionEngine):
         
         Returns (is_approved, reason, details_dict).
         """
+        # Gate 0: Strict Direction Validation and Price Geometry
+        clean_dir = str(direction).strip().upper() if direction else ""
+        if clean_dir not in ("LONG", "SHORT"):
+            return False, f"Live executor rejected: invalid trade direction '{direction}'. Must be LONG or SHORT.", None
+
+        if clean_dir == "LONG" and not (stop_loss < entry < take_profit):
+            return False, f"Invalid LONG price geometry: SL (${stop_loss}) must be below Entry (${entry}) and TP (${take_profit}) above Entry.", None
+
+        if clean_dir == "SHORT" and not (take_profit < entry < stop_loss):
+            return False, f"Invalid SHORT price geometry: SL (${stop_loss}) must be above Entry (${entry}) and TP (${take_profit}) below Entry.", None
+
         # Gate 1: Check Mode is LIVE
         if self.cfg.mode != "LIVE":
             return False, f"Live executor rejected: mode is '{self.cfg.mode}', not 'LIVE'.", None
@@ -166,9 +177,18 @@ class DeltaLiveExecutor(BaseExecutionEngine):
         notes: str = "",
     ) -> Dict[str, Any]:
         """Execute a real live order on Delta Exchange with attached protective bracket SL/TP."""
-        side = "buy" if direction.upper() == "LONG" else "sell"
+        clean_dir = str(direction).strip().upper() if direction else ""
+        if clean_dir not in ("LONG", "SHORT"):
+            logger.error("Live executor rejected: invalid trade direction '%s'. Must be LONG or SHORT.", direction)
+            return {
+                "success": False,
+                "error": f"Invalid trade direction '{direction}'. Must be LONG or SHORT.",
+                "status": "REJECTED",
+                "details": None,
+            }
+        side = "buy" if clean_dir == "LONG" else "sell"
         audit_ok, audit_msg, details = self.validate_preflight(
-            direction=direction,
+            direction=clean_dir,
             entry=entry,
             stop_loss=stop_loss,
             take_profit=take_profit,

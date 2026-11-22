@@ -394,31 +394,26 @@ class DatabaseRepository:
             return trades
 
     def get_today_realized_loss(self) -> float:
-        """Calculate total losses incurred today for daily loss limit checking."""
+        """Calculate total losses incurred today for daily loss limit checking.
+        
+        Uses the authoritative closed-trade ledger in trades table for executions today,
+        aggregating individual net losses (including fees and slippage) without duplicate counting
+        or conflation with multi-day position carrying balances.
+        """
         today_prefix = datetime.now().strftime("%Y-%m-%d")
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             total_loss = 0.0
 
-            # 1. Calculate from active or closed positions updated today with negative realized P&L
-            cursor.execute("""
-                SELECT realized_pnl FROM positions
-                WHERE updated_at LIKE ? AND realized_pnl < 0;
-            """, (f"{today_prefix}%",))
-            rows = cursor.fetchall()
-            for r in rows:
-                total_loss += abs(r["realized_pnl"])
-
-            # 2. Also calculate from closed SELL trades today to capture liquidated positions
             cursor.execute("""
                 SELECT notes FROM trades
-                WHERE timestamp LIKE ? AND side = 'SELL' AND notes LIKE '%Realized PnL: -%';
+                WHERE timestamp LIKE ? AND notes LIKE '%Realized PnL: -%';
             """, (f"{today_prefix}%",))
             import re
             for tr in cursor.fetchall():
                 match = re.search(r"Realized PnL:\s*-\$?([0-9,.]+)", tr["notes"] or "")
                 if match:
                     loss_amt = float(match.group(1).replace(",", ""))
-                    total_loss = max(total_loss, loss_amt)
+                    total_loss += loss_amt
 
             return round(total_loss, 2)

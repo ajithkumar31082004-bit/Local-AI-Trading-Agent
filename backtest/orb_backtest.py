@@ -155,9 +155,9 @@ def run_backtest(
     last_entry_t = time_of_day.fromisoformat(getattr(cfg, "last_entry_time", "22:00"))
     session_end_t = time_of_day.fromisoformat(getattr(cfg, "session_end", "23:30"))
 
+    pending_trade = None
     for day in days:
         day_frame = day_groups[day]
-        pending_trade = None
         day_r = 0.0
         trades_today = 0
         last_loss_exit_i: Optional[int] = None
@@ -167,7 +167,7 @@ def run_backtest(
             candle = day_frame.iloc[i - 1]
 
             # If in an active position, check if current bar hits Stop Loss or Take Profit or Session End
-            if pending_trade and (i - 1) > pending_trade["entry_i"]:
+            if pending_trade and (ts > pending_trade["time"]):
                 side = pending_trade["direction"]
                 sl = pending_trade["sl"]
                 tp = pending_trade["tp"]
