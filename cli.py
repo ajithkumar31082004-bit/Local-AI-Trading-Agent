@@ -51,6 +51,9 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
     elif chosen_strat in ("SWEEP", "LIQUIDITY_SWEEP"):
         from strategy.liquidity_sweep import evaluate_liquidity_sweep
         sig = evaluate_liquidity_sweep(frame, settings)
+    elif chosen_strat in ("SMC", "SMC_STRUCTURE", "SMC_MARKET_STRUCTURE"):
+        from strategy.smc_market_structure import evaluate_smc_structure
+        sig = evaluate_smc_structure(frame, settings)
     elif chosen_strat in ("MULTI", "MULTI_STRATEGY", "PORTFOLIO", "ARBITRATED"):
         from strategy.arbitrator import arbitrate_strategies
         arb_res = arbitrate_strategies(frame, settings)
@@ -194,7 +197,12 @@ def main():
     live.add_argument("--candles", type=int, default=500, help="Number of lookback candles to fetch")
     live.add_argument("--symbol", default=settings.symbol, help="Exchange product symbol")
     live.add_argument("--equity", type=float, default=10000.0, help="Paper account equity in USD")
-    live.add_argument("--strategy", default=getattr(settings, "strategy_type", "PORTFOLIO"), choices=["PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA"], help="Strategy model to evaluate")
+    STRAT_CHOICES = [
+        "PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA",
+        "BB", "BB_RSI", "BREAKOUT", "ATR_COMPRESSION_BREAKOUT",
+        "SWEEP", "LIQUIDITY_SWEEP", "SMC", "SMC_MARKET_STRUCTURE"
+    ]
+    live.add_argument("--strategy", default=getattr(settings, "strategy_type", "PORTFOLIO"), choices=STRAT_CHOICES, help="Strategy model to evaluate")
 
     # 2. Continuous watch mode
     watch = sub.add_parser("watch", help="Poll completed 5m candles and alert on each new completed bar")
@@ -202,13 +210,13 @@ def main():
     watch.add_argument("--symbol", default=settings.symbol)
     watch.add_argument("--equity", type=float, default=10000.0)
     watch.add_argument("--poll-seconds", type=int, default=60, help="Polling interval in seconds (minimum 10s)")
-    watch.add_argument("--strategy", default=getattr(settings, "strategy_type", "PORTFOLIO"), choices=["PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA"], help="Strategy model to watch")
+    watch.add_argument("--strategy", default=getattr(settings, "strategy_type", "PORTFOLIO"), choices=STRAT_CHOICES, help="Strategy model to watch")
 
     # 2b. Real-time WebSocket Paper Trading Mode
     paper_cmd = sub.add_parser("paper-live", help="Start continuous real-time PAPER trading with live Delta Exchange WebSocket feed")
     paper_cmd.add_argument("--symbol", default=settings.symbol, help="Exchange product symbol")
     paper_cmd.add_argument("--equity", type=float, default=10000.0, help="Simulated initial paper equity in USD")
-    paper_cmd.add_argument("--strategy", default="PORTFOLIO", choices=["PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA"], help="Strategy model to execute")
+    paper_cmd.add_argument("--strategy", default="PORTFOLIO", choices=STRAT_CHOICES, help="Strategy model to execute")
     paper_cmd.add_argument("--candles", type=int, default=getattr(settings, "bootstrap_lookback_candles", 450), help="Historical 5m candles to bootstrap for indicator readiness (min 450 recommended)")
 
     # 3. CSV evaluation
