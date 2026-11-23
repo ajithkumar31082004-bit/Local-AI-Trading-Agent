@@ -134,81 +134,135 @@ def evaluate_smc_structure(frame: pd.DataFrame, cfg: ORBSettings = settings) -> 
     current_vol_avg = float(vol_prior_avg.iloc[-1]) if not vol_prior_avg.empty and not pd.isna(vol_prior_avg.iloc[-1]) else 1000.0
     current_vol = float(current_bar["Volume"])
 
-    # 3. Step 2 & 3: Check for Liquidity Sweep and CHOCH / BOS
-    # Look back over trailing 15 bars for a confirmed liquidity sweep
-    lookback_bars = df_5m.iloc[-16:-1]  # prior completed bars excluding current
-    if len(lookback_bars) < 5:
-        return _no_trade("NO TRADE: insufficient trailing bars for sweep lookback.", "INSUFFICIENT_LOOKBACK")
+    # 3. 3-State Chronological Institutional SMC Cycle:
+    # State 1: Liquidity Sweep (t_sweep <= t_now - 2)
+    # State 2: Change of Character (t_sweep < t_choch <= t_now - 1)
+    # State 3: Break of Structure on Current Completed Bar (t_bos = t_now)
+    # Rejects setups where CHOCH and BOS occur simultaneously on the same candle.
+    n_bars = len(df_5m)
+    if n_bars < 25:
+        return _no_trade("NO TRADE: insufficient trailing bars for SMC cycle lookback.", "INSUFFICIENT_LOOKBACK")
 
-    # A. BULLISH SETUP:
-    # 1) Liquidity Sweep: Price pierced below a prior swing low or internal HL/LL and rejected (wick >= 30%)
-    # 2) Bullish CHOCH: Price breaks and closes above last minor LH
-    # 3) Bullish BOS: Price breaks and closes above minor high
-    bullish_sweep_found = False
+    search_start = max(0, n_bars - 25)
+    search_end = n_bars - 2  # up to n_bars - 3 inclusive (at least 2 bars prior to current bar n_bars - 1)
+
+    # A. BULLISH SETUP
+    bullish_sweep_idx = None
     bullish_sweep_low = float("inf")
+    candidate_lows = [s.price for s in structure.all_minor_lows]
+    if structure.major_low and structure.major_low.price not in candidate_lows:
+        candidate_lows.append(structure.major_low.price)
+    if not candidate_lows and structure.last_minor_hl:
+        candidate_lows.append(structure.last_minor_hl.price)
 
-    # Test for sweep of minor low or major low
-    test_low_level = structure.last_minor_hl.price if structure.last_minor_hl else structure.major_low.price
-    for idx_b, b in lookback_bars.iterrows():
+    for idx in range(search_start, search_end):
+        b = df_5m.iloc[idx]
         b_low = float(b["Low"])
-        b_close = float(b["Close"])
         b_high = float(b["High"])
+        b_close = float(b["Close"])
         b_open = float(b["Open"])
-        if b_low < test_low_level:
-            c_range = max(b_high - b_low, 1e-4)
-            bottom_wick = min(b_open, b_close) - b_low
-            if (bottom_wick / c_range) >= 0.25 and b_close >= (test_low_level - 0.2 * current_atr):
-                bullish_sweep_found = True
-                bullish_sweep_low = min(bullish_sweep_low, b_low)
+        for test_low in candidate_lows:
+            if b_low < test_low:
+                c_range = max(b_high - b_low, 1e-4)
+                bottom_wick = min(b_open, b_close) - b_low
+                if (bottom_wick / c_range) >= 0.25 and b_close >= (test_low - 0.2 * current_atr):
+                    bullish_sweep_idx = idx
+                    bullish_sweep_low = min(bullish_sweep_low, b_low)
+                    break
 
-    # B. BEARISH SETUP:
-    # 1) Liquidity Sweep: Price pierced above a prior swing high or internal LH/HH and rejected (wick >= 30%)
-    # 2) Bearish CHOCH: Price breaks and closes below last minor HL
-    # 3) Bearish BOS: Price breaks and closes below minor low
-    bearish_sweep_found = False
+    bullish_choch_idx = None
+    bullish_choch_target = structure.last_minor_lh.price if structure.last_minor_lh else (structure.major_high.price if structure.major_high else None)
+    if bullish_sweep_idx is not None and bullish_choch_target is not None:
+        for idx in range(bullish_sweep_idx + 1, n_bars - 1):
+            bar_candidate = df_5m.iloc[idx]
+            res = evaluate_break_validity(bar_candidate, bullish_choch_target, "BULLISH", min_buffer=0.05 * current_atr)
+            if res["valid_break"]:
+                bullish_choch_idx = idx
+                break
+
+    # B. BEARISH SETUP
+    bearish_sweep_idx = None
     bearish_sweep_high = float("-inf")
+    candidate_highs = [s.price for s in structure.all_minor_highs]
+    if structure.major_high and structure.major_high.price not in candidate_highs:
+        candidate_highs.append(structure.major_high.price)
+    if not candidate_highs and structure.last_minor_lh:
+        candidate_highs.append(structure.last_minor_lh.price)
 
-    test_high_level = structure.last_minor_lh.price if structure.last_minor_lh else structure.major_high.price
-    for idx_b, b in lookback_bars.iterrows():
+    for idx in range(search_start, search_end):
+        b = df_5m.iloc[idx]
         b_high = float(b["High"])
-        b_close = float(b["Close"])
         b_low = float(b["Low"])
+        b_close = float(b["Close"])
         b_open = float(b["Open"])
-        if b_high > test_high_level:
-            c_range = max(b_high - b_low, 1e-4)
-            top_wick = b_high - max(b_open, b_close)
-            if (top_wick / c_range) >= 0.25 and b_close <= (test_high_level + 0.2 * current_atr):
-                bearish_sweep_found = True
-                bearish_sweep_high = max(bearish_sweep_high, b_high)
+        for test_high in candidate_highs:
+            if b_high > test_high:
+                c_range = max(b_high - b_low, 1e-4)
+                top_wick = b_high - max(b_open, b_close)
+                if (top_wick / c_range) >= 0.25 and b_close <= (test_high + 0.2 * current_atr):
+                    bearish_sweep_idx = idx
+                    bearish_sweep_high = max(bearish_sweep_high, b_high)
+                    break
 
-    # Evaluate Trade Direction
+    bearish_choch_idx = None
+    bearish_choch_target = structure.last_minor_hl.price if structure.last_minor_hl else (structure.major_low.price if structure.major_low else None)
+    if bearish_sweep_idx is not None and bearish_choch_target is not None:
+        for idx in range(bearish_sweep_idx + 1, n_bars - 1):
+            bar_candidate = df_5m.iloc[idx]
+            res = evaluate_break_validity(bar_candidate, bearish_choch_target, "BEARISH", min_buffer=0.05 * current_atr)
+            if res["valid_break"]:
+                bearish_choch_idx = idx
+                break
+
+    # Evaluate Trade Direction across sequential states
     direction = "NO TRADE"
     entry = None
     sl = None
     tp = None
     sweep_price = None
 
-    # Check Bullish Case: External is BULLISH (or Major CHOCH active), Sweep confirmed, and current bar breaks internal level
-    if bullish_sweep_found and structure.last_minor_lh:
-        choch_res = evaluate_break_validity(current_bar, structure.last_minor_lh.price, "BULLISH", min_buffer=0.05 * current_atr)
-        if choch_res["valid_break"]:
+    # Check Bullish Sequence: t_sweep < t_choch < t_bos (current bar)
+    if bullish_sweep_idx is not None and bullish_choch_idx is not None:
+        post_choch_high = float(df_5m["High"].iloc[bullish_choch_idx : n_bars - 1].max())
+        bos_target = max(post_choch_high, bullish_choch_target if bullish_choch_target else 0.0)
+        bos_res = evaluate_break_validity(current_bar, bos_target, "BULLISH", min_buffer=0.05 * current_atr)
+        if bos_res["valid_break"]:
             direction = "LONG"
             checklist["liquidity_sweep_detected"] = True
             checklist["choch_confirmed"] = True
             checklist["bos_confirmed"] = True
             sweep_price = bullish_sweep_low
 
-    # Check Bearish Case: External is BEARISH (or Major CHOCH active), Sweep confirmed, and current bar breaks internal level
-    elif bearish_sweep_found and structure.last_minor_hl:
-        choch_res = evaluate_break_validity(current_bar, structure.last_minor_hl.price, "BEARISH", min_buffer=0.05 * current_atr)
-        if choch_res["valid_break"]:
+    # Check Bearish Sequence: t_sweep < t_choch < t_bos (current bar)
+    elif bearish_sweep_idx is not None and bearish_choch_idx is not None:
+        post_choch_low = float(df_5m["Low"].iloc[bearish_choch_idx : n_bars - 1].min())
+        bos_target = min(post_choch_low, bearish_choch_target if bearish_choch_target else float("inf"))
+        bos_res = evaluate_break_validity(current_bar, bos_target, "BEARISH", min_buffer=0.05 * current_atr)
+        if bos_res["valid_break"]:
             direction = "SHORT"
             checklist["liquidity_sweep_detected"] = True
             checklist["choch_confirmed"] = True
             checklist["bos_confirmed"] = True
             sweep_price = bearish_sweep_high
 
+    # Detect Simultaneous or Incomplete Sequences for clear diagnostic feedback
     if direction == "NO TRADE":
+        # Check if current bar attempted a simultaneous CHOCH and BOS
+        if bullish_sweep_idx is not None and bullish_choch_idx is None and bullish_choch_target is not None:
+            curr_choch = evaluate_break_validity(current_bar, bullish_choch_target, "BULLISH", min_buffer=0.05 * current_atr)
+            if curr_choch["valid_break"]:
+                return _no_trade(
+                    "NO TRADE: simultaneous CHOCH and BOS on same candle rejected (requires t_sweep < t_choch < t_bos).",
+                    "SMC_SEQUENCE_INCOMPLETE"
+                )
+        if bearish_sweep_idx is not None and bearish_choch_idx is None and bearish_choch_target is not None:
+            curr_choch = evaluate_break_validity(current_bar, bearish_choch_target, "BEARISH", min_buffer=0.05 * current_atr)
+            if curr_choch["valid_break"]:
+                return _no_trade(
+                    "NO TRADE: simultaneous CHOCH and BOS on same candle rejected (requires t_sweep < t_choch < t_bos).",
+                    "SMC_SEQUENCE_INCOMPLETE"
+                )
+
         return _no_trade(
             f"NO TRADE: no valid SMC CHOCH/BOS setup. ExtBias={structure.external_bias}, IntBias={structure.internal_bias}.",
             "NO_SMC_BREAKOUT"

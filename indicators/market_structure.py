@@ -35,6 +35,10 @@ class MarketStructureState:
     last_minor_hl: Optional[SwingPoint] = None  # Key internal bullish invalidation (Bearish CHOCH)
     last_minor_lh: Optional[SwingPoint] = None  # Key internal bearish invalidation (Bullish CHOCH)
     is_aligned: bool = False  # external_bias == internal_bias
+    all_minor_highs: List[SwingPoint] = field(default_factory=list)
+    all_minor_lows: List[SwingPoint] = field(default_factory=list)
+    all_major_highs: List[SwingPoint] = field(default_factory=list)
+    all_major_lows: List[SwingPoint] = field(default_factory=list)
 
 
 def find_swing_points(
@@ -203,6 +207,10 @@ def analyze_market_structure(
         last_minor_hl=last_minor_hl or (int_lows[-1] if int_lows else None),
         last_minor_lh=last_minor_lh or (int_highs[-1] if int_highs else None),
         is_aligned=(ext_bias == int_bias and ext_bias in ("BULLISH", "BEARISH")),
+        all_minor_highs=int_highs,
+        all_minor_lows=int_lows,
+        all_major_highs=ext_highs,
+        all_major_lows=ext_lows,
     )
 
 

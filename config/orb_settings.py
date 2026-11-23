@@ -86,7 +86,7 @@ class ORBSettings:
     fee_scenario: str = os.getenv("DELTA_FEE_SCENARIO", "MAKER_MAKER").upper()
     apply_gst: bool = os.getenv("DELTA_APPLY_GST", "false").lower() == "true"
     enable_multi_stage_exits: bool = os.getenv("ENABLE_MULTI_STAGE_EXITS", "false").lower() == "true"
-    breakeven_trigger_r: float = _float("BREAKEVEN_TRIGGER_R", 1.0)
+    breakeven_trigger_r: float = _float("BREAKEVEN_TRIGGER_R", 0.8)
     close_at_eod: bool = os.getenv("ORB_CLOSE_AT_EOD", "true").lower() == "true"
     state_path: Path = ROOT / "data" / "orb_risk_state.json"
     journal_path: Path = ROOT / "data" / "orb_journal.sqlite3"

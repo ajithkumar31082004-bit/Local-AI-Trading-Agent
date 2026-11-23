@@ -156,11 +156,18 @@ def test_05_smc_strategy_4_step_cycle_evaluation():
     lows[70] = 3510.0  # Deep sweep
     closes[70] = 3520.0  # Closes back above
 
+    # Intermediate CHOCH at bar 74 (strictly between sweep at 70 and current bar 79):
+    # Closes above last minor LH (3522.0) with body close
+    opens[74] = 3521.0
+    highs[74] = 3526.0
+    lows[74] = 3520.0
+    closes[74] = 3525.0
+
     # Decisive breakout candle at bar 79 (current bar):
-    opens[79] = 3522.0
+    opens[79] = 3524.0
     highs[79] = 3535.0
-    lows[79] = 3521.0
-    closes[79] = 3534.0  # Decisive body close above previous levels
+    lows[79] = 3523.0
+    closes[79] = 3534.0  # Decisive body close above post-choch high of 3526.0
     volumes[79] = 2500.0  # High breakout volume
 
     df = pd.DataFrame({
@@ -205,3 +212,83 @@ def test_06_arbitrator_registers_and_evaluates_smc_strategy():
     assert "SMC_MARKET_STRUCTURE" in result.all_signals
     smc_sig = result.all_signals["SMC_MARKET_STRUCTURE"]
     assert smc_sig.strategy_name == "SMC_MARKET_STRUCTURE"
+
+
+def test_07_smc_rejects_simultaneous_choch_and_bos():
+    """Verify that evaluate_smc_structure rejects setups attempting simultaneous CHOCH and BOS on same bar."""
+    times = pd.date_range("2026-11-20 10:00:00", periods=80, freq="5min", tz="Asia/Kolkata")
+    opens = np.full(80, 3520.0)
+    highs = np.full(80, 3525.0)
+    lows = np.full(80, 3515.0)
+    closes = np.full(80, 3520.0)
+    volumes = np.full(80, 1000.0)
+
+    for i in range(50):
+        base = 3500.0 + (i * 0.5)
+        opens[i] = base
+        highs[i] = base + 3.0
+        lows[i] = base - 3.0
+        closes[i] = base + 1.0
+
+    lows[45] = 3512.0
+
+    # Sweep at bar 70
+    opens[70] = 3519.0
+    highs[70] = 3521.0
+    lows[70] = 3505.0
+    closes[70] = 3515.0
+
+    # Bars 71-78 stay low: NO intermediate CHOCH
+    for j in range(71, 79):
+        opens[j] = 3519.0
+        highs[j] = 3521.0  # Does not reach 3522.0
+        lows[j] = 3517.0
+        closes[j] = 3519.5
+
+    # Bar 79 attempts simultaneous CHOCH + BOS directly from below
+    opens[79] = 3520.0
+    highs[79] = 3535.0
+    lows[79] = 3519.0
+    closes[79] = 3534.0
+    volumes[79] = 2500.0
+
+    df = pd.DataFrame({
+        "Open": opens,
+        "High": highs,
+        "Low": lows,
+        "Close": closes,
+        "Volume": volumes,
+    }, index=times)
+
+    cfg = ORBSettings(
+        session_start="09:00",
+        session_end="23:30",
+        no_entry_minutes_after_open=0,
+    )
+
+    sig = evaluate_smc_structure(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "SMC_SEQUENCE_INCOMPLETE"
+    assert "simultaneous CHOCH and BOS" in sig.reason
+
+
+def test_08_smc_rejects_missing_choch():
+    """Verify that if liquidity sweep occurred but no CHOCH ever happened, trade is rejected."""
+    times = pd.date_range("2026-11-20 10:00:00", periods=80, freq="5min", tz="Asia/Kolkata")
+    df = pd.DataFrame({
+        "Open": [3500.0] * 80,
+        "High": [3505.0] * 80,
+        "Low": [3495.0] * 80,
+        "Close": [3502.0] * 80,
+        "Volume": [1000.0] * 80,
+    }, index=times)
+
+    cfg = ORBSettings(
+        session_start="09:00",
+        session_end="23:30",
+        no_entry_minutes_after_open=0,
+    )
+
+    sig = evaluate_smc_structure(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code in ("NO_SMC_BREAKOUT", "NO_EXTERNAL_STRUCTURE")
