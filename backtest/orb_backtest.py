@@ -171,6 +171,29 @@ def run_backtest(
                 side = pending_trade["direction"]
                 sl = pending_trade["sl"]
                 tp = pending_trade["tp"]
+                initial_sl = pending_trade.get("initial_sl", sl)
+                current_stage = pending_trade.get("stage", 0)
+
+                # Multi-stage stop ratchet (matches DeltaLiveExecutor live execution mechanics)
+                if getattr(cfg, "enable_multi_stage_exits", False):
+                    risk_dist = abs(pending_trade["entry"] - initial_sl)
+                    if risk_dist > 0:
+                        c_high = float(candle["High"])
+                        c_low = float(candle["Low"])
+                        favorable = (c_high - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - c_low)
+                        r_achieved = favorable / risk_dist
+                        be_trigger = getattr(cfg, "breakeven_trigger_r", 1.0)
+
+                        if r_achieved >= 1.6 and current_stage < 2:
+                            current_stage = 2
+                            pending_trade["stage"] = 2
+                            sl = round(pending_trade["entry"] + (1.0 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (1.0 * risk_dist), 2)
+                            pending_trade["sl"] = sl
+                        elif r_achieved >= be_trigger and current_stage < 1:
+                            current_stage = 1
+                            pending_trade["stage"] = 1
+                            sl = round(pending_trade["entry"] + 0.10, 2) if side == "LONG" else round(pending_trade["entry"] - 0.10, 2)
+                            pending_trade["sl"] = sl
 
                 hit_sl = float(candle["Low"]) <= sl if side == "LONG" else float(candle["High"]) >= sl
                 hit_tp = float(candle["High"]) >= tp if side == "LONG" else float(candle["Low"]) <= tp
@@ -180,7 +203,7 @@ def run_backtest(
                     # Conservative rule: if both SL and TP are touched in the same 5m bar, SL wins
                     if hit_sl:
                         exit_price = sl
-                        exit_reason = "SL"
+                        exit_reason = "SL" if current_stage == 0 else ("BE" if current_stage == 1 else "TRAILING_SL")
                     elif hit_tp:
                         exit_price = tp
                         exit_reason = "TP"
@@ -278,8 +301,10 @@ def run_backtest(
                             "strategy_name": getattr(sig, "strategy_name", getattr(cfg, "strategy_type", "ORB")),
                             "entry": float(sig.entry),
                             "sl": float(sig.sl),
+                            "initial_sl": float(sig.sl),
                             "tp": float(sig.tp),
                             "lots": decision.lots,
+                            "stage": 0,
                             "entry_i": i - 1,
                             "time": ts,
                         }

@@ -39,6 +39,8 @@ class ORBSettings:
     daily_loss_limit_r: float = _float("ORB_DAILY_LOSS_LIMIT_R", 2.0)
     use_regime_filter: bool = os.getenv("USE_REGIME_FILTER", "false").lower() == "true"
     min_15m_adx: float = _float("MIN_15M_ADX", 22.0)
+    min_15m_adx_long: float = _float("MIN_15M_ADX_LONG", 26.0)
+    min_continuation_volume_ratio_long: float = _float("MIN_CONTINUATION_VOLUME_RATIO_LONG", 1.0)
     min_ema_separation_atr: float = _float("MIN_EMA_SEPARATION_ATR", 0.3)
     min_stop_distance_atr: float = _float("MIN_STOP_DISTANCE_ATR", 1.0)
     max_friction_to_risk_ratio: float = _float("MAX_FRICTION_TO_RISK_RATIO", 0.25)
@@ -53,7 +55,7 @@ class ORBSettings:
     atr_compression_ratio: float = _float("ATR_COMPRESSION_RATIO", 0.85)
     liquidity_sweep_lookback: int = _int("LIQUIDITY_SWEEP_LOOKBACK", 20)
     liquidity_sweep_min_buffer_atr: float = _float("LIQUIDITY_SWEEP_MIN_BUFFER_ATR", 0.1)
-    min_signal_quality_score: float = _float("MIN_SIGNAL_QUALITY_SCORE", 0.65)
+    min_signal_quality_score: float = _float("MIN_SIGNAL_QUALITY_SCORE", 0.75)
     orb_minutes: int = _int("ORB_MINUTES", 15)
     ema_period: int = _int("ORB_EMA_PERIOD", 20)
     ema_fast_period: int = _int("ORB_EMA_FAST_PERIOD", 20)

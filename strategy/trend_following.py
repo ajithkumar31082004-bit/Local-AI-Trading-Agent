@@ -155,10 +155,11 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
     df_15m["ADX"] = adx(df_15m["High"], df_15m["Low"], df_15m["Close"], 14)
     adx_15m = float(df_15m["ADX"].iloc[-1]) if pd.notna(df_15m["ADX"].iloc[-1]) else 0.0
 
-    # Empirical finding: Long setups in gold require confirmed macro trend strength (ADX >= 24)
-    if macro_trend == "LONG" and adx_15m < 24.0:
+    # Empirical finding: Long setups in gold require confirmed macro trend strength (ADX >= 26.0)
+    min_adx_long = getattr(cfg, "min_15m_adx_long", 26.0)
+    if macro_trend == "LONG" and adx_15m < min_adx_long:
         return _no_trade(
-            f"NO TRADE: bullish trend strength insufficient (15m ADX {adx_15m:.1f} < 24.0).",
+            f"NO TRADE: bullish trend strength insufficient (15m ADX {adx_15m:.1f} < {min_adx_long:.1f}).",
             "WEAK_BULLISH_TREND_ADX",
             {"regime_trending": "WEAK_BULLISH_TREND_ADX"}
         )
@@ -272,8 +273,9 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
             return _no_trade("NO TRADE: waiting for confirmed bullish rejection candle closing in upper 45% of range above 5m EMA20.", "REJECTION_NOT_CONFIRMED")
         checklist["continuation_candle"] = True
 
-        if curr_vol < (0.8 * vol_avg):
-            return _no_trade(f"NO TRADE: continuation volume ({curr_vol:,.0f}) below 80% of average ({vol_avg:,.0f}).", "VOLUME_BELOW_THRESHOLD")
+        min_vol_long = getattr(cfg, "min_continuation_volume_ratio_long", 1.0)
+        if curr_vol < (min_vol_long * vol_avg):
+            return _no_trade(f"NO TRADE: continuation volume ({curr_vol:,.0f}) below {min_vol_long*100:.0f}% of average ({vol_avg:,.0f}).", "VOLUME_BELOW_THRESHOLD")
         checklist["volume_confirmed"] = True
 
         recent_low = float(df_5m_ind["Low"].iloc[-5:].min())
@@ -305,6 +307,20 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         return _no_trade(f"NO TRADE: reward-to-risk ratio ({net_r:.2f}R) after fees and slippage is below 1:2.", "RISK_REWARD_BELOW_MINIMUM")
     checklist["rr_ok"] = True
 
+    # Calculate Signal Quality Score (0.0 to 1.0)
+    quality_score = 0.60
+    if adx_15m >= 28.0:
+        quality_score += 0.15
+    elif adx_15m >= 25.0:
+        quality_score += 0.10
+    if curr_vol >= (1.30 * vol_avg):
+        quality_score += 0.15
+    elif curr_vol >= (1.0 * vol_avg):
+        quality_score += 0.10
+    if dist_from_ema <= (1.2 * curr_atr):
+        quality_score += 0.10
+    quality_score = min(1.0, round(quality_score, 2))
+
     return Signal(
         direction=macro_trend,
         entry=round(curr_close, 4),
@@ -316,5 +332,7 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         timestamp=str(now),
         diagnostic_code="SIGNAL_CONFIRMED",
         checklist_reasons={k: "PASSED" for k in checklist.keys() if k != "risk_ok"},
+        strategy_name="TREND_FOLLOWING",
+        quality_score=quality_score,
     )
 

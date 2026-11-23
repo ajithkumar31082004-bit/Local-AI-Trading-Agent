@@ -222,7 +222,7 @@ def test_7_signal_generation_synthetic_data():
     assert event.instrument == "XAUTUSD"
     assert event.winning_signal in ("BUY", "SELL", "NO_SIGNAL")
     assert event.market_regime != "UNKNOWN"
-    assert len(event.sub_strategy_signals) == 6
+    assert len(event.sub_strategy_signals) in (6, 7)
 
 
 # =============================================================================

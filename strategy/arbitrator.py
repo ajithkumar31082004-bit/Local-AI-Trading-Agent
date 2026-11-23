@@ -235,8 +235,22 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
         )
 
     # 5. Select Best Eligible Signal by Quality Score
-    min_quality = getattr(cfg, "min_signal_quality_score", 0.60)
-    high_quality_signals = [s for s in eligible if s.quality_score >= min_quality]
+    base_min_quality = getattr(cfg, "min_signal_quality_score", 0.75)
+    high_quality_signals = []
+    for s in eligible:
+        # Require higher quality threshold (0.75+) for LONG entries to exploit Gold's short-side edge
+        req_quality = base_min_quality
+        if s.direction == "LONG":
+            req_quality = max(base_min_quality, getattr(cfg, "min_signal_quality_score_long", 0.75))
+            # In volatile or ranging regimes, require 0.80 for long setups unless ADX is strong
+            regime_adx = regime_res.metrics.get("adx_15m", 20.0)
+            if regime_res.regime in (MarketRegime.VOLATILE_BREAKOUT, MarketRegime.RANGING) and regime_adx < 25.0:
+                req_quality = max(req_quality, 0.80)
+
+        if s.quality_score >= req_quality:
+            high_quality_signals.append(s)
+        else:
+            rejected.append((s.strategy_name or "UNKNOWN", f"QUALITY_SCORE_{s.quality_score:.2f}_BELOW_{req_quality:.2f}"))
 
     if not high_quality_signals:
         no_trade_sig = Signal(
@@ -245,7 +259,7 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
             sl=None,
             tp=None,
             r_multiple=0.0,
-            reason=f"NO TRADE: no eligible strategy passed regime filters and quality score threshold (min {min_quality:.2f}).",
+            reason=f"NO TRADE: no eligible strategy passed regime filters and quality score threshold (base min {base_min_quality:.2f}).",
             checklist={k: False for k in ["quality_threshold"]},
             timestamp=str(frame.index[-1]) if not frame.empty else None,
             diagnostic_code="NO_ELIGIBLE_HIGH_QUALITY_SIGNAL",
