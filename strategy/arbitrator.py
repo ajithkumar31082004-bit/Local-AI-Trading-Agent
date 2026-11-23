@@ -26,6 +26,7 @@ from strategy.vwap_ema import evaluate_vwap_ema
 from strategy.bb_rsi_mean_reversion import evaluate_bb_rsi
 from strategy.atr_compression_breakout import evaluate_atr_compression_breakout
 from strategy.liquidity_sweep import evaluate_liquidity_sweep
+from strategy.smc_market_structure import evaluate_smc_structure
 
 
 @dataclass
@@ -73,7 +74,10 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
             diagnostic_code = "REGIME_UNCERTAIN"
             reason_msg = f"NO TRADE: market regime is UNCERTAIN ({regime_res.rationale}). All strategies blocked for capital preservation."
 
-        all_strat_names = ["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP"]
+        all_strat_names = [
+            "ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION",
+            "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP", "SMC_MARKET_STRUCTURE"
+        ]
         dummy_signals = {
             name: Signal(
                 direction="NO TRADE",
@@ -123,6 +127,7 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
         "BB_RSI_MEAN_REVERSION": evaluate_bb_rsi,
         "ATR_COMPRESSION_BREAKOUT": evaluate_atr_compression_breakout,
         "LIQUIDITY_SWEEP": evaluate_liquidity_sweep,
+        "SMC_MARKET_STRUCTURE": evaluate_smc_structure,
     }
 
     raw_signals: Dict[str, Signal] = {}

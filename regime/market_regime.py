@@ -61,7 +61,7 @@ def detect_market_regime(
         regime=MarketRegime.UNCERTAIN,
         confidence=0.0,
         allowed_strategies=[],
-        disallowed_strategies=["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP"],
+        disallowed_strategies=["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP", "SMC_MARKET_STRUCTURE"],
         rationale="Insufficient completed candle data for regime detection.",
         metrics={},
     )
@@ -103,7 +103,7 @@ def detect_market_regime(
             regime=MarketRegime.UNCERTAIN,
             confidence=0.0,
             allowed_strategies=[],
-            disallowed_strategies=["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP"],
+            disallowed_strategies=["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP", "SMC_MARKET_STRUCTURE"],
             rationale=f"WARMING_UP: {missing_str}",
             metrics={"readiness": readiness.to_dict()},
         )
@@ -183,7 +183,7 @@ def detect_market_regime(
             regime=MarketRegime.SHOCK_CRASH,
             confidence=0.99,
             allowed_strategies=[],
-            disallowed_strategies=["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP"],
+            disallowed_strategies=["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP", "SMC_MARKET_STRUCTURE"],
             rationale="SHOCK_CRASH detected: extreme price collapse or candle range expansion (> 3.0x ATR). All new order entries blocked.",
             metrics=metrics,
         )
@@ -195,7 +195,7 @@ def detect_market_regime(
         return RegimeDetectionResult(
             regime=MarketRegime.VOLATILE_BREAKOUT,
             confidence=round(confidence, 2),
-            allowed_strategies=["ATR_COMPRESSION_BREAKOUT", "ORB"],
+            allowed_strategies=["ATR_COMPRESSION_BREAKOUT", "ORB", "SMC_MARKET_STRUCTURE"],
             disallowed_strategies=["BB_RSI_MEAN_REVERSION"],
             rationale=f"Volatile breakout detected: ATR expansion ({atr_ratio:.2f}x), Bandwidth expansion ({bw_ratio:.2f}x), Volume ({metrics['vol_ratio']:.1f}x), breakout beyond 15-bar range.",
             metrics=metrics,
@@ -209,7 +209,7 @@ def detect_market_regime(
         return RegimeDetectionResult(
             regime=MarketRegime.TRENDING_BULLISH,
             confidence=round(confidence, 2),
-            allowed_strategies=["TREND_FOLLOWING", "VWAP_EMA", "ATR_COMPRESSION_BREAKOUT"],
+            allowed_strategies=["TREND_FOLLOWING", "VWAP_EMA", "ATR_COMPRESSION_BREAKOUT", "SMC_MARKET_STRUCTURE"],
             disallowed_strategies=["BB_RSI_MEAN_REVERSION"],
             rationale=f"Bullish trend confirmed: 15m Close ({c_15m:.2f}) > EMA20 ({ema20_15m:.2f}) > EMA50 ({ema50_15m:.2f}), Price > VWAP, 15m ADX={adx_15m:.1f}.",
             metrics=metrics,
@@ -223,7 +223,7 @@ def detect_market_regime(
         return RegimeDetectionResult(
             regime=MarketRegime.TRENDING_BEARISH,
             confidence=round(confidence, 2),
-            allowed_strategies=["TREND_FOLLOWING", "VWAP_EMA", "ATR_COMPRESSION_BREAKOUT"],
+            allowed_strategies=["TREND_FOLLOWING", "VWAP_EMA", "ATR_COMPRESSION_BREAKOUT", "SMC_MARKET_STRUCTURE"],
             disallowed_strategies=["BB_RSI_MEAN_REVERSION"],
             rationale=f"Bearish trend confirmed: 15m Close ({c_15m:.2f}) < EMA20 ({ema20_15m:.2f}) < EMA50 ({ema50_15m:.2f}), Price < VWAP, 15m ADX={adx_15m:.1f}.",
             metrics=metrics,
@@ -238,7 +238,7 @@ def detect_market_regime(
         return RegimeDetectionResult(
             regime=MarketRegime.RANGING,
             confidence=round(confidence, 2),
-            allowed_strategies=["BB_RSI_MEAN_REVERSION", "LIQUIDITY_SWEEP"],
+            allowed_strategies=["BB_RSI_MEAN_REVERSION", "LIQUIDITY_SWEEP", "SMC_MARKET_STRUCTURE"],
             disallowed_strategies=["TREND_FOLLOWING", "VWAP_EMA"],
             rationale=f"Ranging/Choppy regime detected: 15m ADX={adx_15m:.1f} < 22, {crosses_20} EMA crosses in 20 bars, price hugging VWAP (diff: {c_5m - vwap_5m:+.2f}).",
             metrics=metrics,
@@ -249,7 +249,7 @@ def detect_market_regime(
         regime=MarketRegime.UNCERTAIN,
         confidence=0.45,
         allowed_strategies=[],
-        disallowed_strategies=["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP"],
+        disallowed_strategies=["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP", "SMC_MARKET_STRUCTURE"],
         rationale=f"Market regime uncertain: conflicting trend/momentum metrics (15m ADX={adx_15m:.1f}, crosses={crosses_20}, VWAP diff={c_5m - vwap_5m:+.2f}).",
         metrics=metrics,
     )
