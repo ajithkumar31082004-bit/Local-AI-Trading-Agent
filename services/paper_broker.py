@@ -3,6 +3,7 @@
 import threading
 from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from config.settings import settings
 from database.models import (
@@ -93,15 +94,21 @@ class PaperBroker:
             trade_value = round(quantity * effective_price, 2)
 
             # 3. Calculate position transitions and cash delta
-            now_str = datetime.now().isoformat()
+            try:
+                tz = ZoneInfo(getattr(settings, "timezone", "Asia/Kolkata"))
+            except Exception:
+                tz = ZoneInfo("Asia/Kolkata")
+            now_str = datetime.now(tz).isoformat()
             realized_pnl_delta = 0.0
 
             if clean_side == OrderSide.BUY.value:
-                total_trade_outflow = trade_value + fee
+                total_trade_outflow = round(trade_value + fee, 2)
                 if cash_balance < total_trade_outflow - 1e-4:
                     return False, f"Insufficient cash for trade: required ${total_trade_outflow:,.2f}, have ${cash_balance:,.2f}.", None
 
                 new_cash = round(cash_balance - total_trade_outflow, 2)
+                existing_entry_fee = getattr(existing_pos, "entry_fee", 0.0) if existing_pos else 0.0
+                accum_entry_fee = round(existing_entry_fee + fee, 4)
 
                 if existing_pos and existing_qty > 0:
                     new_qty = existing_qty + quantity
@@ -120,6 +127,7 @@ class PaperBroker:
                         unrealized_pnl=unrealized,
                         unrealized_pnl_pct=unrealized_pct,
                         realized_pnl=existing_pos.realized_pnl,
+                        entry_fee=accum_entry_fee,
                         stop_loss=norm_sl or existing_pos.stop_loss,
                         take_profit=norm_tp or existing_pos.take_profit,
                         opened_at=existing_pos.opened_at,
@@ -136,6 +144,7 @@ class PaperBroker:
                         unrealized_pnl=0.0,
                         unrealized_pnl_pct=0.0,
                         realized_pnl=0.0,
+                        entry_fee=accum_entry_fee,
                         stop_loss=norm_sl,
                         take_profit=norm_tp,
                         opened_at=now_str,
@@ -149,10 +158,18 @@ class PaperBroker:
                 net_inflow = round(trade_value - fee, 2)
                 new_cash = round(cash_balance + net_inflow, 2)
 
-                # Realized P&L calculation: (effective_sell_price - avg_entry_price) * quantity - fee
+                # Realized P&L calculation: (effective_sell_price - avg_entry_price) * quantity - exit_fee - allocated_entry_fee
+                existing_entry_fee = getattr(existing_pos, "entry_fee", 0.0) if existing_pos else 0.0
+                if existing_qty > 0:
+                    alloc_entry_fee = round((quantity / existing_qty) * existing_entry_fee, 4)
+                    remaining_entry_fee = max(0.0, round(existing_entry_fee - alloc_entry_fee, 4))
+                else:
+                    alloc_entry_fee = 0.0
+                    remaining_entry_fee = 0.0
+
                 cost_basis = quantity * existing_pos.avg_entry_price
                 gross_pnl = trade_value - cost_basis
-                net_pnl = round(gross_pnl - fee, 2)
+                net_pnl = round(gross_pnl - fee - alloc_entry_fee, 2)
                 realized_pnl_delta = net_pnl
 
                 rem_qty = round(existing_qty - quantity, 6)
@@ -165,7 +182,8 @@ class PaperBroker:
                         market_value=0.0,
                         unrealized_pnl=0.0,
                         unrealized_pnl_pct=0.0,
-                        realized_pnl=existing_pos.realized_pnl + realized_pnl_delta,
+                        realized_pnl=round(existing_pos.realized_pnl + realized_pnl_delta, 2),
+                        entry_fee=0.0,
                         updated_at=now_str,
                     )
                 else:
@@ -180,7 +198,8 @@ class PaperBroker:
                         market_value=new_mkt_val,
                         unrealized_pnl=unrealized,
                         unrealized_pnl_pct=unrealized_pct,
-                        realized_pnl=existing_pos.realized_pnl + realized_pnl_delta,
+                        realized_pnl=round(existing_pos.realized_pnl + realized_pnl_delta, 2),
+                        entry_fee=remaining_entry_fee,
                         stop_loss=existing_pos.stop_loss,
                         take_profit=existing_pos.take_profit,
                         opened_at=existing_pos.opened_at,
@@ -209,12 +228,14 @@ class PaperBroker:
                 notes=trade_notes,
             )
 
+            cash_delta = net_inflow if clean_side == OrderSide.SELL.value else -total_trade_outflow
             trade_id = self.repo.record_trade_and_update_portfolio(
                 trade=trade,
                 new_cash=new_cash,
                 updated_position=updated_position,
                 realized_pnl_delta=realized_pnl_delta,
                 fee_delta=fee,
+                cash_delta=cash_delta,
             )
             trade.id = trade_id
 

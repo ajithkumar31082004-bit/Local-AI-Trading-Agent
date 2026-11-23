@@ -197,7 +197,9 @@ def run_backtest(
                     entry_fee = pending_trade["entry"] * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
                     exit_fee = exit_price * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
                     fee_cost_per_lot = entry_fee + exit_fee
-                    total_friction = (fee_cost_per_lot + spread_slip_cost) * pending_trade["lots"]
+                    gst_rate = getattr(cfg, "gst_rate_pct", 18.0) if getattr(cfg, "apply_gst", False) else 0.0
+                    gst_cost_per_lot = fee_cost_per_lot * (gst_rate / 100.0)
+                    total_friction = (fee_cost_per_lot + gst_cost_per_lot + spread_slip_cost) * pending_trade["lots"]
                     pnl_cash = gross_pnl_cash - total_friction
 
                     risk_budget = equity * (cfg.risk_pct / 100.0)
@@ -221,6 +223,7 @@ def run_backtest(
                         "contract_qty": round(contract_qty, 4),
                         "gross_pnl": round(gross_pnl_cash, 2),
                         "fee_cost": round(fee_cost_per_lot * pending_trade["lots"], 4),
+                        "gst_cost": round(gst_cost_per_lot * pending_trade["lots"], 4),
                         "spread_slip_cost": round(spread_slip_cost * pending_trade["lots"], 4),
                         "total_friction": round(total_friction, 4),
                         "r": round(net_r, 4),

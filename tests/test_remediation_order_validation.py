@@ -318,9 +318,10 @@ def test_concurrent_paper_broker_order_execution_and_balance_conservation(tmp_pa
     """Verify that multiple independent PaperBroker instances preserve exact account balance without race conditions."""
     db_file = tmp_path / "test_concurrent_broker.db"
     repo = DatabaseRepository(db_path=db_file)
+    rm = RiskManager(default_slippage_pct=0.0)
     
     # Use 3 distinct broker instances operating concurrently on the shared repository
-    brokers = [PaperBroker(repo=repo) for _ in range(3)]
+    brokers = [PaperBroker(repo=repo, risk_manager=rm) for _ in range(3)]
 
     initial_state = repo.get_account_state()
     initial_cash = initial_state["cash_balance"]
@@ -361,14 +362,59 @@ def test_concurrent_paper_broker_order_execution_and_balance_conservation(tmp_pa
     final_account = repo.get_account_state()
     
     # Verify exact balance conservation:
-    # final_cash == initial_cash + total_realized_pnl - total_fees_paid (or net realized PnL added to cash)
-    # In PaperBroker, sell adds net_inflow = trade_value - fee = (price * qty) - fee
-    # Total rounds = 6 workers * 5 round trips = 30 round trips
-    # Each round trip bought 1.0 @ 3500 ($3500 + fee) and sold 1.0 @ 3550 ($3550 - fee)
-    # Gross gain per trip = $50.00. Net gain per trip = $50.00 - buy_fee - sell_fee.
-    assert final_account["cash_balance"] > initial_cash
-    assert final_account["total_fees_paid"] > 0
-    assert final_account["realized_pnl"] > 0
+    # 6 workers * 5 round trips = 30 BUY and 30 SELL = 60 total trades
+    trades = repo.get_trades(limit=100)
+    assert len(trades) == 60
+
+    expected_cash_delta = round(sum(
+        (t.total_cost - t.fee) if t.side == "SELL" else -(t.total_cost + t.fee)
+        for t in trades
+    ), 2)
+    expected_total_fees = round(sum(t.fee for t in trades), 2)
+    expected_realized_pnl = round(sum(t.realized_pnl for t in trades if t.side == "SELL"), 2)
+
+    # 1. Exact Cash Balance Conservation
+    assert math.isclose(final_account["cash_balance"], initial_cash + expected_cash_delta, abs_tol=1e-2)
+    # 2. Exact Total Fees Paid Conservation
+    assert math.isclose(final_account["total_fees_paid"], expected_total_fees, abs_tol=1e-2)
+    # 3. Exact Realized PnL Conservation
+    assert math.isclose(final_account["realized_pnl"], expected_realized_pnl, abs_tol=1e-2)
+    # 4. Exact Net Cash Change = Net Realized PnL (since all positions are closed and round-trip fees are fully accounted)
+    assert math.isclose(final_account["cash_balance"] - initial_cash, final_account["realized_pnl"], abs_tol=1e-2)
+    # 5. Exact Analytical Conservation: 30 trips * ($50 gross gain) - total fees
+    assert math.isclose(final_account["realized_pnl"], (30 * 50.0) - expected_total_fees, abs_tol=1e-2)
+
+
+def test_paper_broker_round_trip_entry_fee_deduction_and_realized_loss(tmp_path):
+    """Verify that PaperBroker includes entry fee in net realized PnL and daily loss upon position closure."""
+    db_file = tmp_path / "test_roundtrip_fee.db"
+    repo = DatabaseRepository(db_path=db_file)
+    rm = RiskManager(default_slippage_pct=0.0)
+    broker = PaperBroker(repo=repo, risk_manager=rm)
+
+    # 1. Buy 1.0 @ $3500. Entry fee = $0.35 (at 0.01% of $3500).
+    ok_buy, _, trade_buy = broker.execute_order(
+        symbol="XAUTUSD", side="BUY", quantity=1.0, current_price=3500.0, bypass_risk=True
+    )
+    assert ok_buy
+    pos = repo.get_position("XAUTUSD")
+    assert pos.entry_fee == trade_buy.fee
+
+    # 2. Sell 1.0 @ $3500 (flat price, zero gross PnL).
+    # Net realized PnL must be -(exit_fee + entry_fee) = -($0.35 + $0.35) = -$0.70.
+    ok_sell, _, trade_sell = broker.execute_order(
+        symbol="XAUTUSD", side="SELL", quantity=1.0, current_price=3500.0, bypass_risk=True
+    )
+    assert ok_sell
+    assert trade_sell.realized_pnl == round(-(trade_buy.fee + trade_sell.fee), 2)
+
+    # 3. Daily realized loss ledger must aggregate this exact round-trip loss
+    today_loss = repo.get_today_realized_loss(timezone_str="Asia/Kolkata")
+    assert today_loss == round(trade_buy.fee + trade_sell.fee, 2)
+
+    # 4. Cash balance conservation: initial_cash - (entry_fee + exit_fee)
+    state = repo.get_account_state()
+    assert math.isclose(state["cash_balance"], 100000.0 - (trade_buy.fee + trade_sell.fee), abs_tol=1e-2)
 
 
 def test_backtest_independent_fee_gst_and_pnl_reconciliation():
@@ -407,6 +453,8 @@ def test_backtest_independent_fee_gst_and_pnl_reconciliation():
         fee_pct_per_side=0.01,
         spread_pct_round_trip=0.02,
         slippage_pct_round_trip=0.02,
+        apply_gst=True,
+        gst_rate_pct=18.0,
     )
 
     result = run_backtest(df, initial_equity=10000.0, cfg=cfg, strategy_fn=mock_strat, chart_output_path=None)
@@ -422,23 +470,28 @@ def test_backtest_independent_fee_gst_and_pnl_reconciliation():
     exit_val = t["exit"] * cfg.contract_size_xaut * t["lots"]
     expected_entry_fee = entry_val * (cfg.fee_pct_per_side / 100.0)
     expected_exit_fee = exit_val * (cfg.fee_pct_per_side / 100.0)
-    expected_total_fee = expected_entry_fee + expected_exit_fee
-    assert math.isclose(t["fee_cost"], round(expected_total_fee, 4), rel_tol=1e-3)
+    expected_base_fee = expected_entry_fee + expected_exit_fee
+    assert math.isclose(t["fee_cost"], round(expected_base_fee, 4), rel_tol=1e-3)
 
-    # 2. Independent Spread & Slippage Friction Component:
+    # 2. Independent GST (18%) on Transaction Fees:
+    expected_gst = expected_base_fee * (cfg.gst_rate_pct / 100.0)
+    assert math.isclose(t["gst_cost"], round(expected_gst, 4), rel_tol=1e-3)
+
+    # 3. Independent Spread & Slippage Friction Component:
     expected_spread_cost = entry_val * (cfg.spread_pct_round_trip / 100.0)
     expected_slippage_cost = entry_val * (cfg.slippage_pct_round_trip / 100.0)
     expected_spread_slip = expected_spread_cost + expected_slippage_cost
     assert math.isclose(t["spread_slip_cost"], round(expected_spread_slip, 4), rel_tol=1e-3)
 
-    # 3. Independent Total Friction Reconciliation:
-    assert math.isclose(t["total_friction"], round(expected_total_fee + expected_spread_slip, 4), rel_tol=1e-3)
+    # 4. Independent Total Friction Reconciliation:
+    expected_total_friction = expected_base_fee + expected_gst + expected_spread_slip
+    assert math.isclose(t["total_friction"], round(expected_total_friction, 4), rel_tol=1e-3)
 
-    # 4. Independent Gross and Net PnL Reconciliation:
+    # 5. Independent Gross and Net PnL Reconciliation:
     contract_qty = t["lots"] * cfg.contract_size_xaut
     gross_pnl = contract_qty * (t["exit"] - t["entry"])
     assert math.isclose(t["gross_pnl"], round(gross_pnl, 2), rel_tol=1e-3)
-    assert math.isclose(t["pnl_cash"], round(gross_pnl - t["total_friction"], 2), rel_tol=1e-3)
+    assert math.isclose(t["pnl_cash"], round(gross_pnl - expected_total_friction, 2), rel_tol=1e-3)
 
 
 def test_multi_day_overnight_position_equity_and_realized_exit_reconciliation():

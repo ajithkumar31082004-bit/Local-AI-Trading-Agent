@@ -4,6 +4,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Optional, List, Dict, Any
+from zoneinfo import ZoneInfo
+
+from config.settings import settings
+
+
+def get_kolkata_iso_timestamp() -> str:
+    """Return timezone-aware ISO-8601 timestamp string in Asia/Kolkata."""
+    tz_name = getattr(settings, "timezone", "Asia/Kolkata")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Kolkata")
+    return datetime.now(tz).isoformat()
 
 
 class OrderSide(str, Enum):
@@ -42,7 +55,7 @@ class TradeRecord:
     slippage: float = 0.0
     total_cost: float = 0.0
     realized_pnl: float = 0.0
-    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    timestamp: str = field(default_factory=get_kolkata_iso_timestamp)
     strategy: str = "MANUAL"
     status: str = OrderStatus.FILLED.value
     notes: str = ""
@@ -60,16 +73,17 @@ class PositionRecord:
     unrealized_pnl: float = 0.0
     unrealized_pnl_pct: float = 0.0
     realized_pnl: float = 0.0
+    entry_fee: float = 0.0
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
-    opened_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    opened_at: str = field(default_factory=get_kolkata_iso_timestamp)
+    updated_at: str = field(default_factory=get_kolkata_iso_timestamp)
 
 
 @dataclass
 class AccountSnapshot:
     """Represents the portfolio state at a given point in time."""
-    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    timestamp: str = field(default_factory=get_kolkata_iso_timestamp)
     initial_balance: float = 100000.0
     cash_balance: float = 100000.0
     positions_value: float = 0.0
@@ -90,7 +104,7 @@ class StrategySignal:
     signal: SignalType
     strength: float = 1.0  # 0.0 to 1.0
     price: float = 0.0
-    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    timestamp: str = field(default_factory=get_kolkata_iso_timestamp)
     indicators: Dict[str, Any] = field(default_factory=dict)
     rationale: str = ""
     invalidation_criteria: str = ""
