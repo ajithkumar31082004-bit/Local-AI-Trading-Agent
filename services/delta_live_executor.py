@@ -420,7 +420,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
         if not getattr(self.cfg, "enable_multi_stage_exits", True):
             return None
 
-        be_trigger_r = float(getattr(self.cfg, "breakeven_trigger_r", 0.8))
+        be_trigger_r = float(getattr(self.cfg, "breakeven_trigger_r", 0.6))
 
         try:
             pos_res = self.account_service._fetch_open_positions(self.cfg.product_id)
@@ -495,18 +495,18 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                     target_stage = 0
                     stage_desc = ""
 
-                    if r_achieved >= 2.2 and current_stage < 4:
-                        target_sl = round(entry_price + (1.70 * risk_dist), 2)
+                    if r_achieved >= 1.8 and current_stage < 4:
+                        target_sl = round(entry_price + (1.30 * risk_dist), 2)
                         target_stage = 4
-                        stage_desc = f"Ratcheted LONG Stop-Loss to Lock +1.70R Profit (${target_sl:.2f})"
-                    elif r_achieved >= 1.6 and current_stage < 3:
-                        target_sl = round(entry_price + (1.10 * risk_dist), 2)
+                        stage_desc = f"Ratcheted LONG Stop-Loss to Lock +1.30R Profit (${target_sl:.2f})"
+                    elif r_achieved >= 1.4 and current_stage < 3:
+                        target_sl = round(entry_price + (0.90 * risk_dist), 2)
                         target_stage = 3
-                        stage_desc = f"Ratcheted LONG Stop-Loss to Lock +1.10R Profit (${target_sl:.2f})"
+                        stage_desc = f"Ratcheted LONG Stop-Loss to Lock +0.90R Profit (${target_sl:.2f})"
                     elif r_achieved >= 1.0 and current_stage < 2:
-                        target_sl = round(entry_price + (0.50 * risk_dist), 2)
+                        target_sl = round(entry_price + (0.40 * risk_dist), 2)
                         target_stage = 2
-                        stage_desc = f"Ratcheted LONG Stop-Loss to Lock +0.50R Profit (${target_sl:.2f})"
+                        stage_desc = f"Ratcheted LONG Stop-Loss to Lock +0.40R Profit (${target_sl:.2f})"
                     elif (r_achieved >= be_trigger_r or is_stagnant_in_profit) and current_stage < 1:
                         target_sl = round(entry_price + 0.10, 2)
                         target_stage = 1
@@ -533,7 +533,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                                     f"• <b>Entry:</b> ${entry_price:.2f}\n"
                                     f"• <b>New Stop:</b> ${target_sl:.2f}\n"
                                     f"• <b>Excursion:</b> +{r_achieved:.2f}R\n"
-                                    f"• <b>Protection Stage:</b> {target_stage}/3"
+                                    f"• <b>Protection Stage:</b> {target_stage}/4"
                                 )
                             except Exception:
                                 pass
@@ -552,18 +552,18 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                     target_stage = 0
                     stage_desc = ""
 
-                    if r_achieved >= 2.2 and current_stage < 4:
-                        target_sl = round(entry_price - (1.70 * risk_dist), 2)
+                    if r_achieved >= 1.8 and current_stage < 4:
+                        target_sl = round(entry_price - (1.30 * risk_dist), 2)
                         target_stage = 4
-                        stage_desc = f"Ratcheted SHORT Stop-Loss to Lock +1.70R Profit (${target_sl:.2f})"
-                    elif r_achieved >= 1.6 and current_stage < 3:
-                        target_sl = round(entry_price - (1.10 * risk_dist), 2)
+                        stage_desc = f"Ratcheted SHORT Stop-Loss to Lock +1.30R Profit (${target_sl:.2f})"
+                    elif r_achieved >= 1.4 and current_stage < 3:
+                        target_sl = round(entry_price - (0.90 * risk_dist), 2)
                         target_stage = 3
-                        stage_desc = f"Ratcheted SHORT Stop-Loss to Lock +1.10R Profit (${target_sl:.2f})"
+                        stage_desc = f"Ratcheted SHORT Stop-Loss to Lock +0.90R Profit (${target_sl:.2f})"
                     elif r_achieved >= 1.0 and current_stage < 2:
-                        target_sl = round(entry_price - (0.50 * risk_dist), 2)
+                        target_sl = round(entry_price - (0.40 * risk_dist), 2)
                         target_stage = 2
-                        stage_desc = f"Ratcheted SHORT Stop-Loss to Lock +0.50R Profit (${target_sl:.2f})"
+                        stage_desc = f"Ratcheted SHORT Stop-Loss to Lock +0.40R Profit (${target_sl:.2f})"
                     elif (r_achieved >= be_trigger_r or is_stagnant_in_profit) and current_stage < 1:
                         target_sl = round(entry_price - 0.10, 2)
                         target_stage = 1
@@ -590,7 +590,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                                     f"• <b>Entry:</b> ${entry_price:.2f}\n"
                                     f"• <b>New Stop:</b> ${target_sl:.2f}\n"
                                     f"• <b>Excursion:</b> +{r_achieved:.2f}R\n"
-                                    f"• <b>Protection Stage:</b> {target_stage}/3"
+                                    f"• <b>Protection Stage:</b> {target_stage}/4"
                                 )
                             except Exception:
                                 pass

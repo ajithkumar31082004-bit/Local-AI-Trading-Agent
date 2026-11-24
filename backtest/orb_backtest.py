@@ -259,20 +259,20 @@ def run_backtest(
                             r_achieved = favorable / risk_dist
                             be_trigger = getattr(cfg, "breakeven_trigger_r", 1.0)
 
-                            # Identical 4-stage ladder matching DeltaLiveExecutor exactly:
-                            # Stage 4: +2.2R -> lock +1.70R
-                            # Stage 3: +1.6R -> lock +1.10R
-                            # Stage 2: +1.0R -> lock +0.50R
-                            # Stage 1: +be_trigger_r -> Breakeven (+/- 0.10)
-                            if r_achieved >= 2.2 and current_stage < 4:
+                            # Calibrated 4-stage ladder matching DeltaLiveExecutor within [0, 2.0R] target window:
+                            # Stage 4: +1.8R -> lock +1.30R (reachable prior to +2.0R Take-Profit)
+                            # Stage 3: +1.4R -> lock +0.90R
+                            # Stage 2: +1.0R -> lock +0.40R
+                            # Stage 1: +be_trigger (>=0.60R) -> Breakeven (+/- 0.10)
+                            if r_achieved >= 1.8 and current_stage < 4:
                                 pending_trade["stage"] = 4
-                                pending_trade["sl"] = round(pending_trade["entry"] + (1.70 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (1.70 * risk_dist), 2)
-                            elif r_achieved >= 1.6 and current_stage < 3:
+                                pending_trade["sl"] = round(pending_trade["entry"] + (1.30 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (1.30 * risk_dist), 2)
+                            elif r_achieved >= 1.4 and current_stage < 3:
                                 pending_trade["stage"] = 3
-                                pending_trade["sl"] = round(pending_trade["entry"] + (1.10 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (1.10 * risk_dist), 2)
+                                pending_trade["sl"] = round(pending_trade["entry"] + (0.90 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (0.90 * risk_dist), 2)
                             elif r_achieved >= 1.0 and current_stage < 2:
                                 pending_trade["stage"] = 2
-                                pending_trade["sl"] = round(pending_trade["entry"] + (0.50 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (0.50 * risk_dist), 2)
+                                pending_trade["sl"] = round(pending_trade["entry"] + (0.40 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (0.40 * risk_dist), 2)
                             elif r_achieved >= be_trigger and current_stage < 1:
                                 pending_trade["stage"] = 1
                                 pending_trade["sl"] = round(pending_trade["entry"] + 0.10, 2) if side == "LONG" else round(pending_trade["entry"] - 0.10, 2)

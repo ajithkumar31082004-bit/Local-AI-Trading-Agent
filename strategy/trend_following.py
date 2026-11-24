@@ -235,15 +235,16 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         upper_wick = curr_high - max(curr_open, curr_close)
         body = max(abs(curr_close - curr_open), 1e-6)
         has_rejection_wick = (upper_wick >= 0.25 * total_range) or (upper_wick >= 0.5 * body)
-        closes_in_lower_portion = close_position <= 0.45
+        closes_in_lower_portion = close_position <= 0.40
 
         if not (is_bearish_rejection and has_rejection_wick and closes_in_lower_portion):
-            return _no_trade("NO TRADE: waiting for confirmed bearish rejection candle closing in lower 45% of range below 5m EMA20.", "REJECTION_NOT_CONFIRMED")
+            return _no_trade("NO TRADE: waiting for confirmed bearish rejection candle closing in lower 40% of range below 5m EMA20.", "REJECTION_NOT_CONFIRMED")
         checklist["continuation_candle"] = True
 
-        # Volume Confirmation: Current bar volume >= 0.8 * 20-bar average
-        if curr_vol < (0.8 * vol_avg):
-            return _no_trade(f"NO TRADE: continuation volume ({curr_vol:,.0f}) below 80% of average ({vol_avg:,.0f}).", "VOLUME_BELOW_THRESHOLD")
+        # Volume Confirmation: Current bar volume >= min_continuation_volume_ratio_short * 20-bar average
+        min_vol_short = getattr(cfg, "min_continuation_volume_ratio_short", 1.0)
+        if curr_vol < (min_vol_short * vol_avg):
+            return _no_trade(f"NO TRADE: continuation volume ({curr_vol:,.0f}) below {min_vol_short*100:.0f}% of average ({vol_avg:,.0f}).", "VOLUME_BELOW_THRESHOLD")
         checklist["volume_confirmed"] = True
 
         # Stop loss: Swing high of recent 5 bars + buffer, enforcing minimum stop distance

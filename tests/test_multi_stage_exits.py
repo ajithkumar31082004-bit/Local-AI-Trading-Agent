@@ -298,22 +298,22 @@ def test_live_executor_progressive_profit_locking(tmp_path):
     assert "Ratcheted LONG Stop-Loss to Breakeven" in msg1
     assert mock_client.change_order.call_args[1]["stop_price"] == 3500.10
 
-    # Stage 2: Price surges to 3511.0 (+1.1R >= 1.0R) -> triggers +0.50R Profit Lock
+    # Stage 2: Price surges to 3511.0 (+1.1R >= 1.0R) -> triggers +0.40R Profit Lock
     msg2 = executor.manage_open_positions(current_price=3511.0)
     assert msg2 is not None
-    assert "Lock +0.50R Profit" in msg2
-    assert mock_client.change_order.call_args[1]["stop_price"] == 3505.00
+    assert "Lock +0.40R Profit" in msg2
+    assert mock_client.change_order.call_args[1]["stop_price"] == 3504.00
 
-    # Stage 3: Price surges to 3517.0 (+1.7R >= 1.6R) -> triggers +1.10R Profit Lock
-    msg3 = executor.manage_open_positions(current_price=3517.0)
+    # Stage 3: Price surges to 3515.0 (+1.5R >= 1.4R) -> triggers +0.90R Profit Lock
+    msg3 = executor.manage_open_positions(current_price=3515.0)
     assert msg3 is not None
-    assert "Lock +1.10R Profit" in msg3
-    assert mock_client.change_order.call_args[1]["stop_price"] == 3511.00
+    assert "Lock +0.90R Profit" in msg3
+    assert mock_client.change_order.call_args[1]["stop_price"] == 3509.00
 
-    # Stage 4: Price surges to 3523.0 (+2.3R >= 2.2R) -> triggers +1.70R Profit Lock
-    msg4 = executor.manage_open_positions(current_price=3523.0)
+    # Stage 4: Price surges to 3519.0 (+1.9R >= 1.8R) -> triggers +1.30R Profit Lock
+    msg4 = executor.manage_open_positions(current_price=3519.0)
     assert msg4 is not None
-    assert "Lock +1.70R Profit" in msg4
-    assert mock_client.change_order.call_args[1]["stop_price"] == 3517.00
+    assert "Lock +1.30R Profit" in msg4
+    assert mock_client.change_order.call_args[1]["stop_price"] == 3513.00
 
 

@@ -41,6 +41,7 @@ class ORBSettings:
     min_15m_adx: float = _float("MIN_15M_ADX", 22.0)
     min_15m_adx_long: float = _float("MIN_15M_ADX_LONG", 26.0)
     min_continuation_volume_ratio_long: float = _float("MIN_CONTINUATION_VOLUME_RATIO_LONG", 1.0)
+    min_continuation_volume_ratio_short: float = _float("MIN_CONTINUATION_VOLUME_RATIO_SHORT", 1.0)
     min_ema_separation_atr: float = _float("MIN_EMA_SEPARATION_ATR", 0.3)
     min_stop_distance_atr: float = _float("MIN_STOP_DISTANCE_ATR", 1.0)
     max_friction_to_risk_ratio: float = _float("MAX_FRICTION_TO_RISK_RATIO", 0.25)
@@ -86,7 +87,7 @@ class ORBSettings:
     fee_scenario: str = os.getenv("DELTA_FEE_SCENARIO", "MAKER_MAKER").upper()
     apply_gst: bool = os.getenv("DELTA_APPLY_GST", "false").lower() == "true"
     enable_multi_stage_exits: bool = os.getenv("ENABLE_MULTI_STAGE_EXITS", "false").lower() == "true"
-    breakeven_trigger_r: float = _float("BREAKEVEN_TRIGGER_R", 0.8)
+    breakeven_trigger_r: float = _float("BREAKEVEN_TRIGGER_R", 0.6)
     allowed_trade_directions: str = os.getenv("ALLOWED_TRADE_DIRECTIONS", "BOTH").upper()
     close_at_eod: bool = os.getenv("ORB_CLOSE_AT_EOD", "true").lower() == "true"
     state_path: Path = ROOT / "data" / "orb_risk_state.json"

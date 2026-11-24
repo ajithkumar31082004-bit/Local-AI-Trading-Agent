@@ -67,10 +67,10 @@ def test_02_arbitrator_quality_threshold_enforcement():
 
 
 def test_03_backtest_multi_stage_ratchet_breakeven():
-    """Verify that when enable_multi_stage_exits=True, a trade achieving +1.0R excursion moves SL to Breakeven."""
+    """Verify that when enable_multi_stage_exits=True, a trade achieving +0.6R excursion moves SL to Breakeven."""
     cfg = ORBSettings(
         enable_multi_stage_exits=True,
-        breakeven_trigger_r=0.8,
+        breakeven_trigger_r=0.6,
         session_start="00:00",
         session_end="23:59",
         no_entry_minutes_after_open=0,
@@ -78,7 +78,7 @@ def test_03_backtest_multi_stage_ratchet_breakeven():
         strategy_type="ORB",
     )
 
-    # 1. Create a controlled day where entry triggers, price rises to +0.85R, then pulls back to entry
+    # 1. Create a controlled day where entry triggers, price rises to +0.65R, then pulls back to entry
     start = datetime(2026, 11, 23, 0, 0, tzinfo=timezone.utc)
     ts_list = [start + timedelta(minutes=5 * i) for i in range(50)]
 
@@ -108,9 +108,9 @@ def test_03_backtest_multi_stage_ratchet_breakeven():
             )
         return Signal(direction="NO TRADE", entry=None, sl=None, tp=None, r_multiple=0.0, reason="", checklist={}, timestamp=str(current_ts))
 
-    # Bar 11 pushes up to 2658.5 (excursion = +8.5 > 0.8R trigger of 8.0, but < 1.0R) -> ratchets SL to 2650.10
-    df.loc[ts_list[11], "High"] = 2658.5
-    df.loc[ts_list[11], "Close"] = 2658.0
+    # Bar 11 pushes up to 2656.5 (excursion = +6.5 > 0.6R trigger of 6.0, but < 1.0R) -> ratchets SL to 2650.10
+    df.loc[ts_list[11], "High"] = 2656.5
+    df.loc[ts_list[11], "Close"] = 2656.0
 
     # Bar 12 pulls back to 2649.5 (hits ratcheted breakeven SL at 2650.10, NOT the original 2640.0 SL)
     df.loc[ts_list[12], "Low"] = 2649.5
@@ -126,10 +126,10 @@ def test_03_backtest_multi_stage_ratchet_breakeven():
 
 
 def test_04_backtest_multi_stage_ratchet_profit_lock():
-    """Verify that when a trade achieves +1.6R excursion, SL is ratcheted to lock in +1.10R profit."""
+    """Verify that when a trade achieves +1.4R excursion, SL is ratcheted to lock in +0.90R profit."""
     cfg = ORBSettings(
         enable_multi_stage_exits=True,
-        breakeven_trigger_r=0.8,
+        breakeven_trigger_r=0.6,
         session_start="00:00",
         session_end="23:59",
         no_entry_minutes_after_open=0,
@@ -164,19 +164,19 @@ def test_04_backtest_multi_stage_ratchet_profit_lock():
             )
         return Signal(direction="NO TRADE", entry=None, sl=None, tp=None, r_multiple=0.0, reason="", checklist={}, timestamp=str(current_ts))
 
-    # Bar 11 pushes up to 2667.0 (excursion = +17.0 > 1.6R of 10.0) -> ratchets SL to lock +1.10R profit at 2661.0
-    df.loc[ts_list[11], "High"] = 2667.0
-    df.loc[ts_list[11], "Close"] = 2666.0
+    # Bar 11 pushes up to 2665.0 (excursion = +15.0 > 1.4R of 10.0, but < 1.8R) -> ratchets SL to lock +0.90R profit at 2659.0
+    df.loc[ts_list[11], "High"] = 2665.0
+    df.loc[ts_list[11], "Close"] = 2664.0
 
-    # Bar 12 pulls back to 2658.0 (hits ratcheted trailing SL at 2661.0)
+    # Bar 12 pulls back to 2658.0 (hits ratcheted trailing SL at 2659.0)
     df.loc[ts_list[12], "Low"] = 2658.0
-    df.loc[ts_list[12], "Close"] = 2659.0
+    df.loc[ts_list[12], "Close"] = 2658.5
 
     res = run_backtest(df, initial_equity=10000.0, cfg=cfg, strategy_fn=dummy_strategy)
     assert res.trades == 1
     trade = res.trade_log[0]
     assert trade["exit_reason"] == "TRAILING_SL"
-    assert trade["exit"] == 2661.0
+    assert trade["exit"] == 2659.0
     # Profit was locked: positive gross and net cash PnL!
     assert trade["gross_pnl"] > 0.0
     assert trade["pnl_cash"] > 0.0
@@ -344,14 +344,14 @@ def test_07_arbitrator_asymmetric_long_guard_in_ranging_regime(monkeypatch):
 
 
 def test_08_live_executor_4_stage_ratchet_ladder_parity():
-    """Verify DeltaLiveExecutor.manage_open_positions executes the exact 4-stage stop ladder."""
+    """Verify DeltaLiveExecutor.manage_open_positions executes the exact calibrated 4-stage stop ladder."""
     from unittest.mock import MagicMock
     from services.delta_live_executor import DeltaLiveExecutor
 
     cfg = ORBSettings(
         mode="LIVE",
         enable_multi_stage_exits=True,
-        breakeven_trigger_r=0.8,
+        breakeven_trigger_r=0.6,
         product_id=131253,
     )
 
@@ -371,8 +371,8 @@ def test_08_live_executor_4_stage_ratchet_ladder_parity():
         "result": [{"id": 9991, "stop_price": 2590.0, "side": "sell", "order_type": "stop_order"}],
     }
 
-    # Stage 1: Excursion = +0.85R (Price = 2608.5) -> Stop moved to Entry + 0.10 (2600.10)
-    msg1 = executor.manage_open_positions(current_price=2608.5)
+    # Stage 1: Excursion = +0.65R (Price = 2606.5) -> Stop moved to Entry + 0.10 (2600.10)
+    msg1 = executor.manage_open_positions(current_price=2606.5)
     assert msg1 is not None
     assert "Breakeven" in msg1
     mock_client.change_order.assert_called_with(
@@ -385,40 +385,40 @@ def test_08_live_executor_4_stage_ratchet_ladder_parity():
         "result": [{"id": 9991, "stop_price": 2600.10, "side": "sell", "order_type": "stop_order"}],
     }
 
-    # Stage 2: Excursion = +1.05R (Price = 2610.5) -> Stop moved to Entry + 0.50R (2605.00)
+    # Stage 2: Excursion = +1.05R (Price = 2610.5) -> Stop moved to Entry + 0.40R (2604.00)
     msg2 = executor.manage_open_positions(current_price=2610.5)
     assert msg2 is not None
-    assert "0.50R" in msg2
+    assert "0.40R" in msg2
     mock_client.change_order.assert_called_with(
-        order_id="9991", product_id=131253, stop_price=2605.00, limit_price=2604.95
+        order_id="9991", product_id=131253, stop_price=2604.00, limit_price=2603.95
     )
 
     # Update stop order reflection
     mock_acct._fetch_open_orders.return_value = {
         "success": True,
-        "result": [{"id": 9991, "stop_price": 2605.00, "side": "sell", "order_type": "stop_order"}],
+        "result": [{"id": 9991, "stop_price": 2604.00, "side": "sell", "order_type": "stop_order"}],
     }
 
-    # Stage 3: Excursion = +1.65R (Price = 2616.5) -> Stop moved to Entry + 1.10R (2611.00)
-    msg3 = executor.manage_open_positions(current_price=2616.5)
+    # Stage 3: Excursion = +1.45R (Price = 2614.5) -> Stop moved to Entry + 0.90R (2609.00)
+    msg3 = executor.manage_open_positions(current_price=2614.5)
     assert msg3 is not None
-    assert "1.10R" in msg3
+    assert "0.90R" in msg3
     mock_client.change_order.assert_called_with(
-        order_id="9991", product_id=131253, stop_price=2611.00, limit_price=2610.95
+        order_id="9991", product_id=131253, stop_price=2609.00, limit_price=2608.95
     )
 
     # Update stop order reflection
     mock_acct._fetch_open_orders.return_value = {
         "success": True,
-        "result": [{"id": 9991, "stop_price": 2611.00, "side": "sell", "order_type": "stop_order"}],
+        "result": [{"id": 9991, "stop_price": 2609.00, "side": "sell", "order_type": "stop_order"}],
     }
 
-    # Stage 4: Excursion = +2.25R (Price = 2622.5) -> Stop moved to Entry + 1.70R (2617.00)
-    msg4 = executor.manage_open_positions(current_price=2622.5)
+    # Stage 4: Excursion = +1.85R (Price = 2618.5) -> Stop moved to Entry + 1.30R (2613.00)
+    msg4 = executor.manage_open_positions(current_price=2618.5)
     assert msg4 is not None
-    assert "1.70R" in msg4
+    assert "1.30R" in msg4
     mock_client.change_order.assert_called_with(
-        order_id="9991", product_id=131253, stop_price=2617.00, limit_price=2616.95
+        order_id="9991", product_id=131253, stop_price=2613.00, limit_price=2612.95
     )
 
 
@@ -430,20 +430,20 @@ def test_09_backtest_vs_live_ratchet_identical_stop_levels():
 
     # Backtest ladder rules from backtest/orb_backtest.py:
     bt_stg1 = round(entry + 0.10, 2)
-    bt_stg2 = round(entry + (0.50 * risk_dist), 2)
-    bt_stg3 = round(entry + (1.10 * risk_dist), 2)
-    bt_stg4 = round(entry + (1.70 * risk_dist), 2)
+    bt_stg2 = round(entry + (0.40 * risk_dist), 2)
+    bt_stg3 = round(entry + (0.90 * risk_dist), 2)
+    bt_stg4 = round(entry + (1.30 * risk_dist), 2)
 
     # Live executor ladder rules from services/delta_live_executor.py:
     live_stg1 = round(entry + 0.10, 2)
-    live_stg2 = round(entry + (0.50 * risk_dist), 2)
-    live_stg3 = round(entry + (1.10 * risk_dist), 2)
-    live_stg4 = round(entry + (1.70 * risk_dist), 2)
+    live_stg2 = round(entry + (0.40 * risk_dist), 2)
+    live_stg3 = round(entry + (0.90 * risk_dist), 2)
+    live_stg4 = round(entry + (1.30 * risk_dist), 2)
 
     assert bt_stg1 == live_stg1 == 3600.10
-    assert bt_stg2 == live_stg2 == 3607.50
-    assert bt_stg3 == live_stg3 == 3616.50
-    assert bt_stg4 == live_stg4 == 3625.50
+    assert bt_stg2 == live_stg2 == 3606.00
+    assert bt_stg3 == live_stg3 == 3613.50
+    assert bt_stg4 == live_stg4 == 3619.50
 
 
 def test_10_arbitrator_short_only_direction_filter(monkeypatch):
@@ -508,4 +508,50 @@ def test_11_live_executor_short_only_direction_filter():
     )
     assert approved is False
     assert "LONG trades are disabled by configuration" in reason
+
+
+def test_12_short_trend_following_tight_rejection_and_volume():
+    """Verify trend following SHORT enforces close in lower 40% of range and 1.0x volume."""
+    from strategy.trend_following import evaluate_trend_following
+
+    start = datetime(2026, 11, 23, 0, 0, tzinfo=timezone.utc)
+    ts = pd.date_range(start, periods=200, freq="5min")
+
+    # Downward sloping price below EMA20 (strong bearish 15m trend)
+    closes = [3650.0 - (i * 0.5) for i in range(200)]
+    df = pd.DataFrame({
+        "Open": [c + 0.2 for c in closes],
+        "High": [c + 1.0 for c in closes],
+        "Low": [c - 1.0 for c in closes],
+        "Close": closes,
+        "Volume": [1000.0] * 200,
+    }, index=ts)
+
+    # Ensure a recent bar pulled back to touch EMA20
+    df.loc[ts[-3], "High"] = 3600.0
+
+    cfg = ORBSettings(min_continuation_volume_ratio_short=1.0, session_start="00:00", session_end="23:59", last_entry_time="23:59")
+
+    # Last bar: High=3552.0, Low=3548.0 (range=4.0).
+    # Close at 3550.5 -> close_position = (3550.5 - 3548.0)/4.0 = 0.625 (> 0.40 threshold -> REJECTION_NOT_CONFIRMED)
+    df.loc[ts[-1], "Open"] = 3551.5
+    df.loc[ts[-1], "High"] = 3552.0
+    df.loc[ts[-1], "Low"] = 3548.0
+    df.loc[ts[-1], "Close"] = 3550.5
+    df.loc[ts[-1], "Volume"] = 1200.0
+
+    sig_fail_close = evaluate_trend_following(df, cfg)
+    assert sig_fail_close.direction == "NO TRADE"
+    assert sig_fail_close.diagnostic_code == "REJECTION_NOT_CONFIRMED"
+
+    # Close at 3549.0 -> close_position = (3549.0 - 3548.0)/4.0 = 0.25 (<= 0.40) and upper wick is 0.5 (>= 25% range or 50% body).
+    # But Volume = 800.0 (< 1000.0 average -> VOLUME_BELOW_THRESHOLD)
+    df.loc[ts[-1], "Open"] = 3549.5
+    df.loc[ts[-1], "High"] = 3552.0
+    df.loc[ts[-1], "Low"] = 3548.0
+    df.loc[ts[-1], "Close"] = 3549.0
+    df.loc[ts[-1], "Volume"] = 800.0
+    sig_fail_vol = evaluate_trend_following(df, cfg)
+    assert sig_fail_vol.direction == "NO TRADE"
+    assert sig_fail_vol.diagnostic_code == "VOLUME_BELOW_THRESHOLD"
 
