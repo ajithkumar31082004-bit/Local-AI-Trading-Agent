@@ -106,6 +106,13 @@ class DeltaLiveExecutor(BaseExecutionEngine):
         if self.cfg.kill_switch_active:
             return False, "CRITICAL: Emergency Kill Switch is ACTIVE. Order execution blocked.", None
 
+        # Gate 3.1: Direction Restriction Check
+        allowed_dir = getattr(self.cfg, "allowed_trade_directions", "BOTH").upper()
+        if allowed_dir in {"SHORT_ONLY", "SHORT"} and clean_dir == "LONG":
+            return False, "Live executor rejected: LONG trades are disabled by configuration (ALLOWED_TRADE_DIRECTIONS=SHORT_ONLY).", None
+        elif allowed_dir in {"LONG_ONLY", "LONG"} and clean_dir == "SHORT":
+            return False, "Live executor rejected: SHORT trades are disabled by configuration (ALLOWED_TRADE_DIRECTIONS=LONG_ONLY).", None
+
         # Gate 4: API Credentials present & non-placeholder
         if not self.client.api_key or self.client.api_key.startswith("<") or not self.client.api_secret or self.client.api_secret.startswith("<"):
             return False, "Live executor rejected: API credentials missing or placeholder.", None

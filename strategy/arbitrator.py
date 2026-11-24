@@ -175,6 +175,15 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
             rejected.append((name, sig.diagnostic_code or "NO_SIGNAL"))
             continue
 
+        # Check configured allowed trade directions (e.g. SHORT_ONLY or LONG_ONLY)
+        allowed_dir = getattr(cfg, "allowed_trade_directions", "BOTH").upper()
+        if allowed_dir in {"SHORT_ONLY", "SHORT"} and sig.direction == "LONG":
+            rejected.append((name, "LONG_TRADES_DISABLED_BY_CONFIG"))
+            continue
+        elif allowed_dir in {"LONG_ONLY", "LONG"} and sig.direction == "SHORT":
+            rejected.append((name, "SHORT_TRADES_DISABLED_BY_CONFIG"))
+            continue
+
         # Check regime compatibility
         if name in regime_res.disallowed_strategies:
             rejected.append((name, f"DISALLOWED_IN_{regime_res.regime.value}"))

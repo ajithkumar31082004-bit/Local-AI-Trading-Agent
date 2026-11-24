@@ -11,6 +11,7 @@ os.environ["ORB_LIVE_TRADING_ENABLED"] = "false"
 os.environ["ORB_MAX_RISK_PCT"] = "0.5"
 os.environ["ORB_MAX_TRADES_PER_DAY"] = "1"
 os.environ["MAX_TRADES_PER_DAY"] = "1"
+os.environ["ALLOWED_TRADE_DIRECTIONS"] = "BOTH"
 
 import config.orb_settings
 config.orb_settings.settings = config.orb_settings.ORBSettings(
@@ -18,6 +19,7 @@ config.orb_settings.settings = config.orb_settings.ORBSettings(
     risk_pct=0.5,
     max_trades_per_day=1,
     live_trading_enabled=False,
+    allowed_trade_directions="BOTH",
 )
 
 from services.governance_supervisor import GovernanceSupervisor
@@ -40,6 +42,7 @@ def isolate_test_governance_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("ORB_MAX_RISK_PCT", "0.5")
     monkeypatch.setenv("ORB_MAX_TRADES_PER_DAY", "1")
     monkeypatch.setenv("MAX_TRADES_PER_DAY", "1")
+    monkeypatch.setenv("ALLOWED_TRADE_DIRECTIONS", "BOTH")
 
     # Isolate dry_run_runner from local uncommitted .env file
     dummy_env_dir = tmp_path / "dummy_root"

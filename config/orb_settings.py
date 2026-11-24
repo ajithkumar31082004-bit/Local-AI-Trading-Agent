@@ -87,6 +87,7 @@ class ORBSettings:
     apply_gst: bool = os.getenv("DELTA_APPLY_GST", "false").lower() == "true"
     enable_multi_stage_exits: bool = os.getenv("ENABLE_MULTI_STAGE_EXITS", "false").lower() == "true"
     breakeven_trigger_r: float = _float("BREAKEVEN_TRIGGER_R", 0.8)
+    allowed_trade_directions: str = os.getenv("ALLOWED_TRADE_DIRECTIONS", "BOTH").upper()
     close_at_eod: bool = os.getenv("ORB_CLOSE_AT_EOD", "true").lower() == "true"
     state_path: Path = ROOT / "data" / "orb_risk_state.json"
     journal_path: Path = ROOT / "data" / "orb_journal.sqlite3"
@@ -143,6 +144,13 @@ def validate_settings(cfg: ORBSettings) -> None:
 
     if cfg.orb_minutes != 15:
         raise ConfigurationError(f"orb_minutes must be exactly 15 for 3x5m ORB strategy, got {cfg.orb_minutes}")
+
+    clean_allowed = getattr(cfg, "allowed_trade_directions", "BOTH").upper()
+    if clean_allowed not in {"BOTH", "SHORT_ONLY", "SHORT", "LONG_ONLY", "LONG"}:
+        raise ConfigurationError(
+            f"Invalid allowed_trade_directions: '{cfg.allowed_trade_directions}'. "
+            "Supported values are: BOTH, SHORT_ONLY (or SHORT), LONG_ONLY (or LONG)."
+        )
 
 
 settings = ORBSettings()

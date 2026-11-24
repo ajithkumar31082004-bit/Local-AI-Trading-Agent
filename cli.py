@@ -81,6 +81,17 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
             return sig
         effective_equity = float(account_state.equity)
 
+    # Check configured trade directions (e.g. SHORT_ONLY)
+    allowed_dir = getattr(settings, "allowed_trade_directions", "BOTH").upper()
+    if allowed_dir in {"SHORT_ONLY", "SHORT"} and sig.direction == "LONG":
+        sig.direction, sig.entry, sig.sl, sig.tp, sig.r_multiple = "NO TRADE", None, None, None, 0.0
+        sig.reason = "NO TRADE: LONG trades are disabled by configuration (ALLOWED_TRADE_DIRECTIONS=SHORT_ONLY)."
+        sig.diagnostic_code = "LONG_TRADES_DISABLED_BY_CONFIG"
+    elif allowed_dir in {"LONG_ONLY", "LONG"} and sig.direction == "SHORT":
+        sig.direction, sig.entry, sig.sl, sig.tp, sig.r_multiple = "NO TRADE", None, None, None, 0.0
+        sig.reason = "NO TRADE: SHORT trades are disabled by configuration (ALLOWED_TRADE_DIRECTIONS=LONG_ONLY)."
+        sig.diagnostic_code = "SHORT_TRADES_DISABLED_BY_CONFIG"
+
     if sig.direction in {"LONG", "SHORT"}:
         allowed, reason, guard_state = risk_state.can_trade(now)
         if not allowed:

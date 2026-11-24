@@ -57,7 +57,7 @@ def test_02_arbitrator_quality_threshold_enforcement():
     df["Low"] = [c - 1.0 for c in closes]
     df["Volume"] = 150.0
 
-    cfg = ORBSettings(min_signal_quality_score=0.75)
+    cfg = ORBSettings(min_signal_quality_score=0.75, allowed_trade_directions="BOTH")
     arb_res = arbitrate_strategies(df, cfg)
     assert isinstance(arb_res, ArbitrationResult)
 
@@ -194,7 +194,7 @@ def test_05_arbitrator_negative_test_rejects_sub_threshold_quality(monkeypatch):
         "Volume": [1000.0] * 70,
     }, index=ts)
 
-    cfg = ORBSettings(min_signal_quality_score=0.75)
+    cfg = ORBSettings(min_signal_quality_score=0.75, allowed_trade_directions="BOTH")
 
     # Force regime to TRENDING_BULLISH where ORB is allowed
     regime_res = RegimeDetectionResult(
@@ -242,7 +242,7 @@ def test_06_arbitrator_positive_test_accepts_above_threshold_quality(monkeypatch
         "Volume": [1000.0] * 70,
     }, index=ts)
 
-    cfg = ORBSettings(min_signal_quality_score=0.75)
+    cfg = ORBSettings(min_signal_quality_score=0.75, allowed_trade_directions="BOTH")
 
     regime_res = RegimeDetectionResult(
         regime=MarketRegime.TRENDING_BULLISH,
@@ -288,7 +288,7 @@ def test_07_arbitrator_asymmetric_long_guard_in_ranging_regime(monkeypatch):
         "Volume": [1000.0] * 70,
     }, index=ts)
 
-    cfg = ORBSettings(min_signal_quality_score=0.75)
+    cfg = ORBSettings(min_signal_quality_score=0.75, allowed_trade_directions="BOTH")
 
     # Ranging regime with ADX = 21.0 (< 25.0)
     regime_res = RegimeDetectionResult(
@@ -444,4 +444,68 @@ def test_09_backtest_vs_live_ratchet_identical_stop_levels():
     assert bt_stg2 == live_stg2 == 3607.50
     assert bt_stg3 == live_stg3 == 3616.50
     assert bt_stg4 == live_stg4 == 3625.50
+
+
+def test_10_arbitrator_short_only_direction_filter(monkeypatch):
+    """Verify that Arbitrator rejects all LONG signals when allowed_trade_directions='SHORT_ONLY'."""
+    start = datetime(2026, 11, 23, 10, 0, tzinfo=timezone.utc)
+    ts = pd.date_range(start, periods=70, freq="5min")
+    df = pd.DataFrame({
+        "Open": [2600.0] * 70,
+        "High": [2605.0] * 70,
+        "Low": [2595.0] * 70,
+        "Close": [2602.0] * 70,
+        "Volume": [1000.0] * 70,
+    }, index=ts)
+
+    cfg = ORBSettings(allowed_trade_directions="SHORT_ONLY")
+
+    regime_res = RegimeDetectionResult(
+        regime=MarketRegime.TRENDING_BULLISH,
+        confidence=0.90,
+        rationale="Synthetic uptrend",
+        metrics={"adx_15m": 30.0},
+        allowed_strategies=["ORB"],
+        disallowed_strategies=[],
+    )
+    monkeypatch.setattr("strategy.arbitrator.detect_market_regime", lambda f, c: regime_res)
+
+    long_sig = Signal(
+        direction="LONG",
+        entry=2602.0,
+        sl=2592.0,
+        tp=2622.0,
+        r_multiple=2.0,
+        reason="Bullish setup",
+        checklist={},
+        timestamp=str(ts[-1]),
+        diagnostic_code="ORB_LONG_VALID",
+        strategy_name="ORB",
+        quality_score=0.85,
+    )
+    monkeypatch.setattr("strategy.arbitrator.evaluate_orb", lambda f, c: long_sig)
+
+    arb_res = arbitrate_strategies(df, cfg)
+    assert arb_res.winning_signal.direction == "NO TRADE"
+    assert ("ORB", "LONG_TRADES_DISABLED_BY_CONFIG") in arb_res.rejected_strategies
+
+
+def test_11_live_executor_short_only_direction_filter():
+    """Verify that DeltaLiveExecutor pre-flight audit blocks LONG orders when allowed_trade_directions='SHORT_ONLY'."""
+    from services.delta_live_executor import DeltaLiveExecutor
+    cfg = ORBSettings(
+        mode="LIVE",
+        live_trading_acknowledged="YES",
+        allowed_trade_directions="SHORT_ONLY",
+    )
+    executor = DeltaLiveExecutor(cfg=cfg)
+    approved, reason, details = executor.validate_preflight(
+        direction="LONG",
+        entry=3600.0,
+        stop_loss=3580.0,
+        take_profit=3640.0,
+        candle_timestamp="2026-11-24T10:00:00Z",
+    )
+    assert approved is False
+    assert "LONG trades are disabled by configuration" in reason
 
