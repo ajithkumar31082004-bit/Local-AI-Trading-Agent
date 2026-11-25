@@ -26,7 +26,6 @@ from strategy.vwap_ema import evaluate_vwap_ema
 from strategy.bb_rsi_mean_reversion import evaluate_bb_rsi
 from strategy.atr_compression_breakout import evaluate_atr_compression_breakout
 from strategy.liquidity_sweep import evaluate_liquidity_sweep
-from strategy.smc_market_structure import evaluate_smc_structure
 
 
 @dataclass
@@ -74,10 +73,7 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
             diagnostic_code = "REGIME_UNCERTAIN"
             reason_msg = f"NO TRADE: market regime is UNCERTAIN ({regime_res.rationale}). All strategies blocked for capital preservation."
 
-        all_strat_names = [
-            "ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION",
-            "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP", "SMC_MARKET_STRUCTURE"
-        ]
+        all_strat_names = ["ORB", "TREND_FOLLOWING", "VWAP_EMA", "BB_RSI_MEAN_REVERSION", "ATR_COMPRESSION_BREAKOUT", "LIQUIDITY_SWEEP"]
         dummy_signals = {
             name: Signal(
                 direction="NO TRADE",
@@ -127,7 +123,6 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
         "BB_RSI_MEAN_REVERSION": evaluate_bb_rsi,
         "ATR_COMPRESSION_BREAKOUT": evaluate_atr_compression_breakout,
         "LIQUIDITY_SWEEP": evaluate_liquidity_sweep,
-        "SMC_MARKET_STRUCTURE": evaluate_smc_structure,
     }
 
     raw_signals: Dict[str, Signal] = {}
@@ -173,15 +168,6 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
     for name, sig in raw_signals.items():
         if sig.direction not in {"LONG", "SHORT"}:
             rejected.append((name, sig.diagnostic_code or "NO_SIGNAL"))
-            continue
-
-        # Check configured allowed trade directions (e.g. SHORT_ONLY or LONG_ONLY)
-        allowed_dir = getattr(cfg, "allowed_trade_directions", "BOTH").upper()
-        if allowed_dir in {"SHORT_ONLY", "SHORT"} and sig.direction == "LONG":
-            rejected.append((name, "LONG_TRADES_DISABLED_BY_CONFIG"))
-            continue
-        elif allowed_dir in {"LONG_ONLY", "LONG"} and sig.direction == "SHORT":
-            rejected.append((name, "SHORT_TRADES_DISABLED_BY_CONFIG"))
             continue
 
         # Check regime compatibility
@@ -244,22 +230,8 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
         )
 
     # 5. Select Best Eligible Signal by Quality Score
-    base_min_quality = getattr(cfg, "min_signal_quality_score", 0.75)
-    high_quality_signals = []
-    for s in eligible:
-        # Require higher quality threshold (0.75+) for LONG entries to exploit Gold's short-side edge
-        req_quality = base_min_quality
-        if s.direction == "LONG":
-            req_quality = max(base_min_quality, getattr(cfg, "min_signal_quality_score_long", 0.75))
-            # In volatile or ranging regimes, require 0.80 for long setups unless ADX is strong
-            regime_adx = regime_res.metrics.get("adx_15m", 20.0)
-            if regime_res.regime in (MarketRegime.VOLATILE_BREAKOUT, MarketRegime.RANGING) and regime_adx < 25.0:
-                req_quality = max(req_quality, 0.80)
-
-        if s.quality_score >= req_quality:
-            high_quality_signals.append(s)
-        else:
-            rejected.append((s.strategy_name or "UNKNOWN", f"QUALITY_SCORE_{s.quality_score:.2f}_BELOW_{req_quality:.2f}"))
+    min_quality = getattr(cfg, "min_signal_quality_score", 0.60)
+    high_quality_signals = [s for s in eligible if s.quality_score >= min_quality]
 
     if not high_quality_signals:
         no_trade_sig = Signal(
@@ -268,7 +240,7 @@ def arbitrate_strategies(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Ar
             sl=None,
             tp=None,
             r_multiple=0.0,
-            reason=f"NO TRADE: no eligible strategy passed regime filters and quality score threshold (base min {base_min_quality:.2f}).",
+            reason=f"NO TRADE: no eligible strategy passed regime filters and quality score threshold (min {min_quality:.2f}).",
             checklist={k: False for k in ["quality_threshold"]},
             timestamp=str(frame.index[-1]) if not frame.empty else None,
             diagnostic_code="NO_ELIGIBLE_HIGH_QUALITY_SIGNAL",

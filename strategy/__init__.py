@@ -5,7 +5,6 @@ from .vwap_ema import evaluate_vwap_ema
 from .bb_rsi_mean_reversion import evaluate_bb_rsi
 from .atr_compression_breakout import evaluate_atr_compression_breakout
 from .liquidity_sweep import evaluate_liquidity_sweep
-from .smc_market_structure import evaluate_smc_structure
 from .arbitrator import arbitrate_strategies, evaluate_arbitrated_portfolio, ArbitrationResult
 
 __all__ = [
@@ -15,7 +14,6 @@ __all__ = [
     "evaluate_bb_rsi",
     "evaluate_atr_compression_breakout",
     "evaluate_liquidity_sweep",
-    "evaluate_smc_structure",
     "arbitrate_strategies",
     "evaluate_arbitrated_portfolio",
     "ArbitrationResult",

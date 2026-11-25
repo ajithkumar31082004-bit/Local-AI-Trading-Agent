@@ -155,11 +155,10 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
     df_15m["ADX"] = adx(df_15m["High"], df_15m["Low"], df_15m["Close"], 14)
     adx_15m = float(df_15m["ADX"].iloc[-1]) if pd.notna(df_15m["ADX"].iloc[-1]) else 0.0
 
-    # Empirical finding: Long setups in gold require confirmed macro trend strength (ADX >= 26.0)
-    min_adx_long = getattr(cfg, "min_15m_adx_long", 26.0)
-    if macro_trend == "LONG" and adx_15m < min_adx_long:
+    # Empirical finding: Long setups in gold require confirmed macro trend strength (ADX >= 24)
+    if macro_trend == "LONG" and adx_15m < 24.0:
         return _no_trade(
-            f"NO TRADE: bullish trend strength insufficient (15m ADX {adx_15m:.1f} < {min_adx_long:.1f}).",
+            f"NO TRADE: bullish trend strength insufficient (15m ADX {adx_15m:.1f} < 24.0).",
             "WEAK_BULLISH_TREND_ADX",
             {"regime_trending": "WEAK_BULLISH_TREND_ADX"}
         )
@@ -235,16 +234,15 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         upper_wick = curr_high - max(curr_open, curr_close)
         body = max(abs(curr_close - curr_open), 1e-6)
         has_rejection_wick = (upper_wick >= 0.25 * total_range) or (upper_wick >= 0.5 * body)
-        closes_in_lower_portion = close_position <= 0.40
+        closes_in_lower_portion = close_position <= 0.45
 
         if not (is_bearish_rejection and has_rejection_wick and closes_in_lower_portion):
-            return _no_trade("NO TRADE: waiting for confirmed bearish rejection candle closing in lower 40% of range below 5m EMA20.", "REJECTION_NOT_CONFIRMED")
+            return _no_trade("NO TRADE: waiting for confirmed bearish rejection candle closing in lower 45% of range below 5m EMA20.", "REJECTION_NOT_CONFIRMED")
         checklist["continuation_candle"] = True
 
-        # Volume Confirmation: Current bar volume >= min_continuation_volume_ratio_short * 20-bar average
-        min_vol_short = getattr(cfg, "min_continuation_volume_ratio_short", 1.0)
-        if curr_vol < (min_vol_short * vol_avg):
-            return _no_trade(f"NO TRADE: continuation volume ({curr_vol:,.0f}) below {min_vol_short*100:.0f}% of average ({vol_avg:,.0f}).", "VOLUME_BELOW_THRESHOLD")
+        # Volume Confirmation: Current bar volume >= 0.8 * 20-bar average
+        if curr_vol < (0.8 * vol_avg):
+            return _no_trade(f"NO TRADE: continuation volume ({curr_vol:,.0f}) below 80% of average ({vol_avg:,.0f}).", "VOLUME_BELOW_THRESHOLD")
         checklist["volume_confirmed"] = True
 
         # Stop loss: Swing high of recent 5 bars + buffer, enforcing minimum stop distance
@@ -274,9 +272,8 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
             return _no_trade("NO TRADE: waiting for confirmed bullish rejection candle closing in upper 45% of range above 5m EMA20.", "REJECTION_NOT_CONFIRMED")
         checklist["continuation_candle"] = True
 
-        min_vol_long = getattr(cfg, "min_continuation_volume_ratio_long", 1.0)
-        if curr_vol < (min_vol_long * vol_avg):
-            return _no_trade(f"NO TRADE: continuation volume ({curr_vol:,.0f}) below {min_vol_long*100:.0f}% of average ({vol_avg:,.0f}).", "VOLUME_BELOW_THRESHOLD")
+        if curr_vol < (0.8 * vol_avg):
+            return _no_trade(f"NO TRADE: continuation volume ({curr_vol:,.0f}) below 80% of average ({vol_avg:,.0f}).", "VOLUME_BELOW_THRESHOLD")
         checklist["volume_confirmed"] = True
 
         recent_low = float(df_5m_ind["Low"].iloc[-5:].min())
@@ -308,20 +305,6 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         return _no_trade(f"NO TRADE: reward-to-risk ratio ({net_r:.2f}R) after fees and slippage is below 1:2.", "RISK_REWARD_BELOW_MINIMUM")
     checklist["rr_ok"] = True
 
-    # Calculate Signal Quality Score (0.0 to 1.0)
-    quality_score = 0.60
-    if adx_15m >= 28.0:
-        quality_score += 0.15
-    elif adx_15m >= 25.0:
-        quality_score += 0.10
-    if curr_vol >= (1.30 * vol_avg):
-        quality_score += 0.15
-    elif curr_vol >= (1.0 * vol_avg):
-        quality_score += 0.10
-    if dist_from_ema <= (1.2 * curr_atr):
-        quality_score += 0.10
-    quality_score = min(1.0, round(quality_score, 2))
-
     return Signal(
         direction=macro_trend,
         entry=round(curr_close, 4),
@@ -333,7 +316,5 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         timestamp=str(now),
         diagnostic_code="SIGNAL_CONFIRMED",
         checklist_reasons={k: "PASSED" for k in checklist.keys() if k != "risk_ok"},
-        strategy_name="TREND_FOLLOWING",
-        quality_score=quality_score,
     )
 

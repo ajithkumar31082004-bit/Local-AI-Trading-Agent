@@ -171,10 +171,7 @@ def run_backtest(
                 side = pending_trade["direction"]
                 sl = pending_trade["sl"]
                 tp = pending_trade["tp"]
-                initial_sl = pending_trade.get("initial_sl", sl)
-                current_stage = pending_trade.get("stage", 0)
 
-                # Strict chronological causality: check exit against existing SL/TP from bar i-1 FIRST
                 hit_sl = float(candle["Low"]) <= sl if side == "LONG" else float(candle["High"]) >= sl
                 hit_tp = float(candle["High"]) >= tp if side == "LONG" else float(candle["Low"]) <= tp
                 hit_session_end = ts.time() >= session_end_t
@@ -183,7 +180,7 @@ def run_backtest(
                     # Conservative rule: if both SL and TP are touched in the same 5m bar, SL wins
                     if hit_sl:
                         exit_price = sl
-                        exit_reason = "SL" if current_stage == 0 else ("BE" if current_stage == 1 else "TRAILING_SL")
+                        exit_reason = "SL"
                     elif hit_tp:
                         exit_price = tp
                         exit_reason = "TP"
@@ -196,7 +193,7 @@ def run_backtest(
                     price_delta = (exit_price - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - exit_price)
                     gross_pnl_cash = contract_qty * price_delta
 
-                    _, _, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], initial_sl, cfg)
+                    _, _, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], sl, cfg)
                     entry_fee = pending_trade["entry"] * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
                     exit_fee = exit_price * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
                     fee_cost_per_lot = entry_fee + exit_fee
@@ -248,34 +245,6 @@ def run_backtest(
                     daily_loss_limit = getattr(cfg, "daily_loss_limit_r", 2.0)
                     if trades_today >= max_trades or day_r <= -daily_loss_limit:
                         break
-                else:
-                    # Trade survived current candle: now evaluate excursion in bar i to ratchet SL for subsequent bar i+1
-                    if getattr(cfg, "enable_multi_stage_exits", False):
-                        risk_dist = abs(pending_trade["entry"] - initial_sl)
-                        if risk_dist > 0:
-                            c_high = float(candle["High"])
-                            c_low = float(candle["Low"])
-                            favorable = (c_high - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - c_low)
-                            r_achieved = favorable / risk_dist
-                            be_trigger = getattr(cfg, "breakeven_trigger_r", 1.0)
-
-                            # Calibrated 4-stage ladder matching DeltaLiveExecutor within [0, 2.0R] target window:
-                            # Stage 4: +1.8R -> lock +1.30R (reachable prior to +2.0R Take-Profit)
-                            # Stage 3: +1.4R -> lock +0.90R
-                            # Stage 2: +1.0R -> lock +0.40R
-                            # Stage 1: +be_trigger (>=0.60R) -> Breakeven (+/- 0.10)
-                            if r_achieved >= 1.8 and current_stage < 4:
-                                pending_trade["stage"] = 4
-                                pending_trade["sl"] = round(pending_trade["entry"] + (1.30 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (1.30 * risk_dist), 2)
-                            elif r_achieved >= 1.4 and current_stage < 3:
-                                pending_trade["stage"] = 3
-                                pending_trade["sl"] = round(pending_trade["entry"] + (0.90 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (0.90 * risk_dist), 2)
-                            elif r_achieved >= 1.0 and current_stage < 2:
-                                pending_trade["stage"] = 2
-                                pending_trade["sl"] = round(pending_trade["entry"] + (0.40 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (0.40 * risk_dist), 2)
-                            elif r_achieved >= be_trigger and current_stage < 1:
-                                pending_trade["stage"] = 1
-                                pending_trade["sl"] = round(pending_trade["entry"] + 0.10, 2) if side == "LONG" else round(pending_trade["entry"] - 0.10, 2)
 
             # If no active trade and past last entry cutoff, skip remaining bars of the day
             if pending_trade is None and ts.time() > last_entry_t:
@@ -309,10 +278,8 @@ def run_backtest(
                             "strategy_name": getattr(sig, "strategy_name", getattr(cfg, "strategy_type", "ORB")),
                             "entry": float(sig.entry),
                             "sl": float(sig.sl),
-                            "initial_sl": float(sig.sl),
                             "tp": float(sig.tp),
                             "lots": decision.lots,
-                            "stage": 0,
                             "entry_i": i - 1,
                             "time": ts,
                         }
