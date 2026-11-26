@@ -21,6 +21,7 @@ class DeltaExchangeClient:
         api_secret: Optional[str] = None,
         base_url: Optional[str] = None,
         enabled: Optional[bool] = None,
+        timeout: int = 10,
     ):
         self.api_key = api_key or settings.delta_exchange_api_key
         self.api_secret = api_secret or settings.delta_exchange_api_secret
@@ -29,6 +30,7 @@ class DeltaExchangeClient:
             base = "https://api.india.delta.exchange"
         self.base_url = base
         self.enabled = enabled if enabled is not None else settings.delta_exchange_enabled
+        self.timeout = int(timeout)
 
     def _generate_signature(self, method: str, path: str, timestamp: str, payload: str = "", query_string: str = "") -> str:
         """Create HMAC-SHA256 signature required by Delta Exchange.

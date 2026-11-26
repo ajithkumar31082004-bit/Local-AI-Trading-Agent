@@ -77,3 +77,27 @@ def test_account_reset(test_repo):
     assert account["cash_balance"] == 50000.0
     assert len(test_repo.get_positions()) == 0
     assert len(test_repo.get_trades()) == 0
+
+
+def test_portfolio_service_summary_no_fee_double_count_and_numeric_stats(test_repo):
+    import math
+    broker = PaperBroker(repo=test_repo)
+    port_service = PortfolioService(repo=test_repo)
+
+    # Winning round trip: BUY 10 @ $100, SELL 10 @ $110
+    ok_b1, _, _ = broker.execute_order(symbol="AAPL", side="BUY", quantity=10.0, current_price=100.0, bypass_risk=True)
+    ok_s1, _, _ = broker.execute_order(symbol="AAPL", side="SELL", quantity=10.0, current_price=110.0, bypass_risk=True)
+    assert ok_b1 and ok_s1
+
+    # Losing round trip: BUY 10 @ $100, SELL 10 @ $95
+    ok_b2, _, _ = broker.execute_order(symbol="MSFT", side="BUY", quantity=10.0, current_price=100.0, bypass_risk=True)
+    ok_s2, _, _ = broker.execute_order(symbol="MSFT", side="SELL", quantity=10.0, current_price=95.0, bypass_risk=True)
+    assert ok_b2 and ok_s2
+
+    summary = port_service.get_summary()
+    assert summary.winning_trades_count == 1
+    assert summary.losing_trades_count == 1
+    assert summary.win_rate_pct == 50.0
+    assert summary.profit_factor > 1.0
+    # Total PnL must equal total_equity - initial_balance (no double deduction of closed-trade fees)
+    assert math.isclose(summary.total_pnl, summary.total_equity - summary.initial_balance, abs_tol=1e-2)

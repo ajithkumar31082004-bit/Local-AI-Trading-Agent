@@ -51,6 +51,9 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
     elif chosen_strat in ("SWEEP", "LIQUIDITY_SWEEP"):
         from strategy.liquidity_sweep import evaluate_liquidity_sweep
         sig = evaluate_liquidity_sweep(frame, settings)
+    elif chosen_strat in ("HTF_SWING_BREAKOUT", "HTF_BREAKOUT"):
+        from strategy.htf_swing_breakout import evaluate_htf_swing_breakout
+        sig = evaluate_htf_swing_breakout(frame, settings)
     elif chosen_strat in ("MULTI", "MULTI_STRATEGY", "PORTFOLIO", "ARBITRATED"):
         from strategy.arbitrator import arbitrate_strategies
         arb_res = arbitrate_strategies(frame, settings)
@@ -134,7 +137,12 @@ def show_signal(frame: pd.DataFrame, equity: float = 10000.0, reserve_alert: boo
     mode_tag = f"MODE: {settings.mode}"
     if settings.kill_switch_active:
         mode_tag += " | ⚠️ KILL SWITCH ACTIVE"
-    strat_title = "TREND-FOLLOWING (15m Trend + 5m Pullback)" if chosen_strat in ("TREND", "TREND_FOLLOWING") else "ORB + EMA20 + VOLUME"
+    if chosen_strat in ("TREND", "TREND_FOLLOWING"):
+        strat_title = "TREND-FOLLOWING (15m Trend + 5m Pullback)"
+    elif chosen_strat in ("HTF_SWING_BREAKOUT", "HTF_BREAKOUT"):
+        strat_title = "HTF SWING BREAKOUT (1h Trend + 15m Donchian)"
+    else:
+        strat_title = "ORB + EMA20 + VOLUME"
     print("\n" + "=" * 70)
     print(f"XAUTUSD (TETHER GOLD) {strat_title} | {mode_tag}")
     print("=" * 70)
@@ -194,7 +202,7 @@ def main():
     live.add_argument("--candles", type=int, default=500, help="Number of lookback candles to fetch")
     live.add_argument("--symbol", default=settings.symbol, help="Exchange product symbol")
     live.add_argument("--equity", type=float, default=10000.0, help="Paper account equity in USD")
-    live.add_argument("--strategy", default=getattr(settings, "strategy_type", "PORTFOLIO"), choices=["PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA"], help="Strategy model to evaluate")
+    live.add_argument("--strategy", default=getattr(settings, "strategy_type", "PORTFOLIO"), choices=["PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA", "HTF_SWING_BREAKOUT"], help="Strategy model to evaluate")
 
     # 2. Continuous watch mode
     watch = sub.add_parser("watch", help="Poll completed 5m candles and alert on each new completed bar")
@@ -202,13 +210,13 @@ def main():
     watch.add_argument("--symbol", default=settings.symbol)
     watch.add_argument("--equity", type=float, default=10000.0)
     watch.add_argument("--poll-seconds", type=int, default=60, help="Polling interval in seconds (minimum 10s)")
-    watch.add_argument("--strategy", default=getattr(settings, "strategy_type", "PORTFOLIO"), choices=["PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA"], help="Strategy model to watch")
+    watch.add_argument("--strategy", default=getattr(settings, "strategy_type", "PORTFOLIO"), choices=["PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA", "HTF_SWING_BREAKOUT"], help="Strategy model to watch")
 
     # 2b. Real-time WebSocket Paper Trading Mode
     paper_cmd = sub.add_parser("paper-live", help="Start continuous real-time PAPER trading with live Delta Exchange WebSocket feed")
     paper_cmd.add_argument("--symbol", default=settings.symbol, help="Exchange product symbol")
     paper_cmd.add_argument("--equity", type=float, default=10000.0, help="Simulated initial paper equity in USD")
-    paper_cmd.add_argument("--strategy", default="PORTFOLIO", choices=["PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA"], help="Strategy model to execute")
+    paper_cmd.add_argument("--strategy", default="PORTFOLIO", choices=["PORTFOLIO", "ORB", "TREND", "TREND_FOLLOWING", "VWAP", "VWAP_EMA", "HTF_SWING_BREAKOUT"], help="Strategy model to execute")
     paper_cmd.add_argument("--candles", type=int, default=getattr(settings, "bootstrap_lookback_candles", 450), help="Historical 5m candles to bootstrap for indicator readiness (min 450 recommended)")
 
     # 3. CSV evaluation
@@ -220,7 +228,7 @@ def main():
     bt = sub.add_parser("backtest", help="Replay a CSV of historical 5m candles with cost and risk rules")
     bt.add_argument("path", help="Path to local OHLCV CSV")
     bt.add_argument("--equity", type=float, default=10000.0)
-    bt.add_argument("--strategy", default=getattr(settings, "strategy_type", "ORB"), choices=["ORB", "TREND", "TREND_FOLLOWING"], help="Strategy model to backtest")
+    bt.add_argument("--strategy", default=getattr(settings, "strategy_type", "ORB"), choices=["ORB", "TREND", "TREND_FOLLOWING", "HTF_SWING_BREAKOUT"], help="Strategy model to backtest")
     bt.add_argument("--chart", default="data/orb_equity_curve.html", help="Path to save Plotly equity curve HTML")
 
     # 5. Record result
@@ -298,8 +306,9 @@ def main():
         print("=" * 70)
 
     if args.command == "once":
+        fetch_candles = max(args.candles, 800) if args.strategy.upper() in ("HTF_SWING_BREAKOUT", "HTF_BREAKOUT") else args.candles
         try:
-            frame = fetch_5m_candles(args.symbol, args.candles)
+            frame = fetch_5m_candles(args.symbol, fetch_candles)
         except DeltaCandleError as exc:
             raise SystemExit(f"Market Data Error: {exc}")
         show_signal(frame, args.equity, reserve_alert=True, strategy=args.strategy)
@@ -307,6 +316,7 @@ def main():
     elif args.command == "watch":
         if args.poll_seconds < 10:
             raise SystemExit("--poll-seconds must be at least 10 to avoid excessive API requests.")
+        watch_candles = max(args.candles, 800) if args.strategy.upper() in ("HTF_SWING_BREAKOUT", "HTF_BREAKOUT") else args.candles
         print(f"Starting continuous alert polling for {args.symbol} [Strategy: {args.strategy}] (interval: {args.poll_seconds}s). Press Ctrl+C to stop.\n{get_mode_banner(settings.mode, settings.kill_switch_active)}")
         last_timestamp = None
         last_direction = None
@@ -319,7 +329,7 @@ def main():
                 secs_left = sec_to_next_bar % 60
 
                 try:
-                    frame = fetch_5m_candles(args.symbol, args.candles)
+                    frame = fetch_5m_candles(args.symbol, watch_candles)
                     cur_ts = str(frame.index[-1]) if not frame.empty else None
                     cur_price = float(frame["Close"].iloc[-1]) if not frame.empty else 0.0
 
@@ -389,6 +399,7 @@ def main():
             strategy_type=args.strategy,
             paper_initial_equity=args.equity,
         )
+        boot_candles = max(args.candles, 800) if args.strategy.upper() in ("HTF_SWING_BREAKOUT", "HTF_BREAKOUT") else args.candles
 
         bot = DeltaPaperBot.get_instance(cfg=bot_cfg)
         print("=" * 80)
@@ -398,10 +409,10 @@ def main():
         print("=" * 80)
         print(f"Symbol: {bot_cfg.symbol} | Strategy: {args.strategy} | Session: {bot_cfg.session_start} - {bot_cfg.session_end} {bot_cfg.timezone}")
         print(f"Risk Per Trade: {bot_cfg.risk_pct}% | Daily Loss Limit: {bot_cfg.daily_loss_limit_r}R | Cooldown: {bot_cfg.cooldown_bars_after_loss} bars")
-        print(f"Bootstrapping {args.candles} historical 5m candles to warm up 15m & 5m indicators...")
+        print(f"Bootstrapping {boot_candles} historical 5m candles to warm up 15m & 5m indicators...")
         print("Connecting to live WebSocket feed at wss://socket.india.delta.exchange...")
 
-        bot.start(bootstrap_lookback=args.candles)
+        bot.start(bootstrap_lookback=boot_candles)
         print("\n[OK] Real-time data feed & Strategy Intelligence V2 active. Press Ctrl+C to stop.\n")
 
         try:
@@ -460,6 +471,10 @@ def main():
             from strategy.trend_following import evaluate_trend_following
             strat_fn = evaluate_trend_following
             title = "XAUTUSD TREND-FOLLOWING (15m Trend + 5m Pullback) BACKTEST RESULTS"
+        elif strat in ("HTF_SWING_BREAKOUT", "HTF_BREAKOUT"):
+            from strategy.htf_swing_breakout import evaluate_htf_swing_breakout
+            strat_fn = evaluate_htf_swing_breakout
+            title = "XAUTUSD HTF SWING BREAKOUT (1h Trend + 15m Donchian) BACKTEST RESULTS"
         else:
             strat_fn = evaluate_orb
             title = "XAUTUSD ORB STRATEGY BACKTEST RESULTS"

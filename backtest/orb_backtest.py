@@ -4,7 +4,7 @@ import tempfile
 from dataclasses import dataclass, asdict, field
 from datetime import time as time_of_day
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import pandas as pd
 from config.orb_settings import ORBSettings, settings
 from strategy.orb_ema_volume import evaluate_orb
@@ -77,6 +77,59 @@ def save_equity_curve_html(equity_curve: List[Dict[str, Any]], output_path: str 
         return None
 
 
+def _build_backtest_trade_record(
+    pending_trade: Dict[str, Any],
+    exit_price: float,
+    exit_ts: Any,
+    day: Any,
+    equity: float,
+    exit_reason: str,
+    cfg: ORBSettings,
+) -> Tuple[Dict[str, Any], float, float]:
+    """Compute friction-adjusted P&L, R-multiple, and trade log dict for a closed backtest trade."""
+    side = pending_trade["direction"]
+    lots = pending_trade["lots"]
+    initial_sl = pending_trade.get("initial_sl", pending_trade["sl"])
+    contract_qty = lots * cfg.contract_size_xaut
+    price_delta = (exit_price - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - exit_price)
+    gross_pnl_cash = contract_qty * price_delta
+
+    _, _, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], initial_sl, cfg)
+    entry_fee = pending_trade["entry"] * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
+    exit_fee = exit_price * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
+    fee_cost_per_lot = entry_fee + exit_fee
+    gst_rate = getattr(cfg, "gst_rate_pct", 18.0) if getattr(cfg, "apply_gst", False) else 0.0
+    gst_cost_per_lot = fee_cost_per_lot * (gst_rate / 100.0)
+    total_friction = (fee_cost_per_lot + gst_cost_per_lot + spread_slip_cost) * lots
+    pnl_cash = gross_pnl_cash - total_friction
+
+    risk_budget = equity * (cfg.risk_pct / 100.0)
+    net_r = pnl_cash / risk_budget if risk_budget > 0 else 0.0
+
+    record = {
+        "date": str(day),
+        "direction": side,
+        "strategy_name": pending_trade.get("strategy_name", getattr(cfg, "strategy_type", "ORB")),
+        "entry_time": str(pending_trade["time"]),
+        "exit_time": str(exit_ts),
+        "entry": pending_trade["entry"],
+        "sl": pending_trade["sl"],
+        "tp": pending_trade["tp"],
+        "exit": exit_price,
+        "lots": lots,
+        "contract_qty": round(contract_qty, 4),
+        "gross_pnl": round(gross_pnl_cash, 2),
+        "fee_cost": round(fee_cost_per_lot * lots, 4),
+        "gst_cost": round(gst_cost_per_lot * lots, 4),
+        "spread_slip_cost": round(spread_slip_cost * lots, 4),
+        "total_friction": round(total_friction, 4),
+        "r": round(net_r, 4),
+        "pnl_cash": round(pnl_cash, 2),
+        "exit_reason": exit_reason,
+    }
+    return record, pnl_cash, net_r
+
+
 def run_backtest(
     candles: pd.DataFrame,
     initial_equity: float = 10000.0,
@@ -113,6 +166,9 @@ def run_backtest(
         elif strat_type in {"SWEEP", "LIQUIDITY_SWEEP"}:
             from strategy.liquidity_sweep import evaluate_liquidity_sweep
             strategy_eval_fn = evaluate_liquidity_sweep
+        elif strat_type in {"HTF_SWING_BREAKOUT", "HTF_BREAKOUT"}:
+            from strategy.htf_swing_breakout import evaluate_htf_swing_breakout
+            strategy_eval_fn = evaluate_htf_swing_breakout
         elif strat_type in {"MULTI", "MULTI_STRATEGY", "PORTFOLIO", "ARBITRATED"}:
             from strategy.arbitrator import evaluate_arbitrated_portfolio
             strategy_eval_fn = evaluate_arbitrated_portfolio
@@ -171,16 +227,19 @@ def run_backtest(
                 side = pending_trade["direction"]
                 sl = pending_trade["sl"]
                 tp = pending_trade["tp"]
+                initial_sl = pending_trade.get("initial_sl", sl)
+                current_stage = pending_trade.get("stage", 0)
 
+                # Strict chronological causality: check exit against existing SL/TP from bar i-1 FIRST
                 hit_sl = float(candle["Low"]) <= sl if side == "LONG" else float(candle["High"]) >= sl
                 hit_tp = float(candle["High"]) >= tp if side == "LONG" else float(candle["Low"]) <= tp
-                hit_session_end = ts.time() >= session_end_t
+                hit_session_end = getattr(cfg, "close_at_eod", True) and (ts.time() >= session_end_t)
 
                 if hit_sl or hit_tp or hit_session_end:
                     # Conservative rule: if both SL and TP are touched in the same 5m bar, SL wins
                     if hit_sl:
                         exit_price = sl
-                        exit_reason = "SL"
+                        exit_reason = "SL" if current_stage == 0 else ("BE" if current_stage == 1 else "TRAILING_SL")
                     elif hit_tp:
                         exit_price = tp
                         exit_reason = "TP"
@@ -188,48 +247,13 @@ def run_backtest(
                         exit_price = float(candle["Close"])
                         exit_reason = "SESSION_END"
 
-                    # Deduct trading friction (fees + spread + slippage)
-                    contract_qty = pending_trade["lots"] * cfg.contract_size_xaut
-                    price_delta = (exit_price - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - exit_price)
-                    gross_pnl_cash = contract_qty * price_delta
-
-                    _, _, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], sl, cfg)
-                    entry_fee = pending_trade["entry"] * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
-                    exit_fee = exit_price * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
-                    fee_cost_per_lot = entry_fee + exit_fee
-                    gst_rate = getattr(cfg, "gst_rate_pct", 18.0) if getattr(cfg, "apply_gst", False) else 0.0
-                    gst_cost_per_lot = fee_cost_per_lot * (gst_rate / 100.0)
-                    total_friction = (fee_cost_per_lot + gst_cost_per_lot + spread_slip_cost) * pending_trade["lots"]
-                    pnl_cash = gross_pnl_cash - total_friction
-
-                    risk_budget = equity * (cfg.risk_pct / 100.0)
-                    net_r = pnl_cash / risk_budget if risk_budget > 0 else 0.0
-
+                    record, pnl_cash, net_r = _build_backtest_trade_record(
+                        pending_trade, exit_price, ts, day, equity, exit_reason, cfg
+                    )
                     equity += pnl_cash
                     day_r += net_r
                     trades_today += 1
-
-                    trades.append({
-                        "date": str(day),
-                        "direction": side,
-                        "strategy_name": pending_trade.get("strategy_name", getattr(cfg, "strategy_type", "ORB")),
-                        "entry_time": str(pending_trade["time"]),
-                        "exit_time": str(ts),
-                        "entry": pending_trade["entry"],
-                        "sl": sl,
-                        "tp": tp,
-                        "exit": exit_price,
-                        "lots": pending_trade["lots"],
-                        "contract_qty": round(contract_qty, 4),
-                        "gross_pnl": round(gross_pnl_cash, 2),
-                        "fee_cost": round(fee_cost_per_lot * pending_trade["lots"], 4),
-                        "gst_cost": round(gst_cost_per_lot * pending_trade["lots"], 4),
-                        "spread_slip_cost": round(spread_slip_cost * pending_trade["lots"], 4),
-                        "total_friction": round(total_friction, 4),
-                        "r": round(net_r, 4),
-                        "pnl_cash": round(pnl_cash, 2),
-                        "exit_reason": exit_reason,
-                    })
+                    trades.append(record)
 
                     if net_r < 0:
                         current_losing_streak += 1
@@ -245,6 +269,33 @@ def run_backtest(
                     daily_loss_limit = getattr(cfg, "daily_loss_limit_r", 2.0)
                     if trades_today >= max_trades or day_r <= -daily_loss_limit:
                         break
+                elif getattr(cfg, "enable_multi_stage_exits", False):
+                    # Trade survived bar i: evaluate excursion to ratchet SL for subsequent bar i+1
+                    risk_dist = abs(pending_trade["entry"] - initial_sl)
+                    if risk_dist > 0:
+                        c_high = float(candle["High"])
+                        c_low = float(candle["Low"])
+                        favorable = (c_high - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - c_low)
+                        r_achieved = favorable / risk_dist
+                        be_trigger = getattr(cfg, "breakeven_trigger_r", 1.0)
+
+                        # Calibrated 4-stage ladder matching DeltaLiveExecutor within [0, 2.0R] target window:
+                        # Stage 4: +1.8R -> lock +1.30R (reachable prior to +2.0R Take-Profit)
+                        # Stage 3: +1.4R -> lock +0.90R
+                        # Stage 2: +1.0R -> lock +0.40R
+                        # Stage 1: +be_trigger -> Breakeven (+/- 0.10)
+                        if r_achieved >= 1.8 and current_stage < 4:
+                            pending_trade["stage"] = 4
+                            pending_trade["sl"] = round(pending_trade["entry"] + (1.30 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (1.30 * risk_dist), 2)
+                        elif r_achieved >= 1.4 and current_stage < 3:
+                            pending_trade["stage"] = 3
+                            pending_trade["sl"] = round(pending_trade["entry"] + (0.90 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (0.90 * risk_dist), 2)
+                        elif r_achieved >= 1.0 and current_stage < 2:
+                            pending_trade["stage"] = 2
+                            pending_trade["sl"] = round(pending_trade["entry"] + (0.40 * risk_dist), 2) if side == "LONG" else round(pending_trade["entry"] - (0.40 * risk_dist), 2)
+                        elif r_achieved >= be_trigger and current_stage < 1:
+                            pending_trade["stage"] = 1
+                            pending_trade["sl"] = round(pending_trade["entry"] + 0.10, 2) if side == "LONG" else round(pending_trade["entry"] - 0.10, 2)
 
             # If no active trade and past last entry cutoff, skip remaining bars of the day
             if pending_trade is None and ts.time() > last_entry_t:
@@ -267,7 +318,8 @@ def run_backtest(
 
             if can_evaluate:
                 loc = ts_to_iloc[ts]
-                prefix = df.iloc[max(0, loc - 300):loc + 1]
+                lookback_bars = 900 if strat_type in {"HTF_SWING_BREAKOUT", "HTF_BREAKOUT"} else 300
+                prefix = df.iloc[max(0, loc - lookback_bars):loc + 1]
                 sig = strategy_eval_fn(prefix, cfg)
                 if sig.direction in {"LONG", "SHORT"} and sig.timestamp == str(ts):
                     # Size trade with risk engine
@@ -278,8 +330,10 @@ def run_backtest(
                             "strategy_name": getattr(sig, "strategy_name", getattr(cfg, "strategy_type", "ORB")),
                             "entry": float(sig.entry),
                             "sl": float(sig.sl),
+                            "initial_sl": float(sig.sl),
                             "tp": float(sig.tp),
                             "lots": decision.lots,
+                            "stage": 0,
                             "entry_i": i - 1,
                             "time": ts,
                         }
@@ -289,45 +343,13 @@ def run_backtest(
         if pending_trade is not None and close_at_eod:
             last_ts = day_frame.index[-1]
             exit_price = float(day_frame["Close"].iloc[-1])
-            side = pending_trade["direction"]
-            contract_qty = pending_trade["lots"] * cfg.contract_size_xaut
-            price_delta = (exit_price - pending_trade["entry"]) if side == "LONG" else (pending_trade["entry"] - exit_price)
-            gross_pnl_cash = contract_qty * price_delta
-
-            _, _, spread_slip_cost = estimate_lot_risk(pending_trade["entry"], pending_trade["sl"], cfg)
-            entry_fee = pending_trade["entry"] * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
-            exit_fee = exit_price * cfg.contract_size_xaut * (cfg.fee_pct_per_side / 100.0)
-            fee_cost_per_lot = entry_fee + exit_fee
-            total_friction = (fee_cost_per_lot + spread_slip_cost) * pending_trade["lots"]
-            pnl_cash = gross_pnl_cash - total_friction
-
-            risk_budget = equity * (cfg.risk_pct / 100.0)
-            net_r = pnl_cash / risk_budget if risk_budget > 0 else 0.0
-
+            record, pnl_cash, net_r = _build_backtest_trade_record(
+                pending_trade, exit_price, last_ts, day, equity, "END_OF_DAY", cfg
+            )
             equity += pnl_cash
             day_r += net_r
             trades_today += 1
-
-            trades.append({
-                "date": str(day),
-                "direction": side,
-                "strategy_name": pending_trade.get("strategy_name", getattr(cfg, "strategy_type", "ORB")),
-                "entry_time": str(pending_trade["time"]),
-                "exit_time": str(last_ts),
-                "entry": pending_trade["entry"],
-                "sl": pending_trade["sl"],
-                "tp": pending_trade["tp"],
-                "exit": exit_price,
-                "lots": pending_trade["lots"],
-                "contract_qty": round(contract_qty, 4),
-                "gross_pnl": round(gross_pnl_cash, 2),
-                "fee_cost": round(fee_cost_per_lot * pending_trade["lots"], 4),
-                "spread_slip_cost": round(spread_slip_cost * pending_trade["lots"], 4),
-                "total_friction": round(total_friction, 4),
-                "r": round(net_r, 4),
-                "pnl_cash": round(pnl_cash, 2),
-                "exit_reason": "END_OF_DAY",
-            })
+            trades.append(record)
 
             if net_r < 0:
                 current_losing_streak += 1

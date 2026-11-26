@@ -305,6 +305,20 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         return _no_trade(f"NO TRADE: reward-to-risk ratio ({net_r:.2f}R) after fees and slippage is below 1:2.", "RISK_REWARD_BELOW_MINIMUM")
     checklist["rr_ok"] = True
 
+    # Transparent Signal Quality Score (0.0 to 1.0)
+    quality_score = 0.60
+    if adx_15m >= 28.0:
+        quality_score += 0.15
+    elif adx_15m >= 25.0:
+        quality_score += 0.10
+    if curr_vol >= (1.30 * vol_avg):
+        quality_score += 0.15
+    elif curr_vol >= (1.0 * vol_avg):
+        quality_score += 0.10
+    if dist_from_ema <= (1.2 * curr_atr):
+        quality_score += 0.10
+    quality_score = min(1.0, round(quality_score, 2))
+
     return Signal(
         direction=macro_trend,
         entry=round(curr_close, 4),
@@ -316,5 +330,7 @@ def evaluate_trend_following(frame: pd.DataFrame, cfg: ORBSettings = settings) -
         timestamp=str(now),
         diagnostic_code="SIGNAL_CONFIRMED",
         checklist_reasons={k: "PASSED" for k in checklist.keys() if k != "risk_ok"},
+        strategy_name="TREND_FOLLOWING",
+        quality_score=quality_score,
     )
 

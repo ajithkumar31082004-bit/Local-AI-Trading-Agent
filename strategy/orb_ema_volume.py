@@ -407,6 +407,22 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
                 break
 
             checklist["rr_ok"] = True
+            vol_ratio = vol / max(float(vol_avg), 1e-6)
+            quality_score = 0.60
+            if vol_ratio >= 1.50:
+                quality_score += 0.15
+            elif vol_ratio >= 1.15:
+                quality_score += 0.10
+            if crosses == 0:
+                quality_score += 0.15
+            elif crosses == 1:
+                quality_score += 0.08
+            if net_r >= 2.2:
+                quality_score += 0.10
+            elif net_r >= 2.0:
+                quality_score += 0.05
+            quality_score = min(1.0, round(quality_score, 2))
+
             latest_signal = Signal(
                 direction=breakout_dir,
                 entry=round(close, 4),
@@ -420,6 +436,8 @@ def evaluate_orb(frame: pd.DataFrame, cfg: ORBSettings = settings) -> Signal:
                 orb_low=orb_low,
                 diagnostic_code="SIGNAL_CONFIRMED",
                 checklist_reasons={k: "PASSED" for k in checklist.keys() if k != "risk_ok"},
+                strategy_name="ORB",
+                quality_score=quality_score,
             )
             break
 

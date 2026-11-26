@@ -373,6 +373,9 @@ def test_executor_mocked_order_submission_payload(tmp_path, monkeypatch):
 
     assert result["success"] is True
     assert result["exchange_order_id"] == "DELTA_ORD_9999"
+    rec = rec_svc.get_order(result["client_order_id"])
+    assert rec is not None
+    assert rec.filled_size == 0
 
     # Verify payload format sent to exchange
     assert len(intercepted_requests) == 1

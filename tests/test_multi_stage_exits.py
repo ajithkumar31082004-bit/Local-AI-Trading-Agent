@@ -298,22 +298,71 @@ def test_live_executor_progressive_profit_locking(tmp_path):
     assert "Ratcheted LONG Stop-Loss to Breakeven" in msg1
     assert mock_client.change_order.call_args[1]["stop_price"] == 3500.10
 
-    # Stage 2: Price surges to 3511.0 (+1.1R >= 1.0R) -> triggers +0.50R Profit Lock
+    # Stage 2: Price surges to 3511.0 (+1.1R >= 1.0R) -> triggers +0.40R Profit Lock
     msg2 = executor.manage_open_positions(current_price=3511.0)
     assert msg2 is not None
-    assert "Lock +0.50R Profit" in msg2
-    assert mock_client.change_order.call_args[1]["stop_price"] == 3505.00
+    assert "Lock +0.40R Profit" in msg2
+    assert mock_client.change_order.call_args[1]["stop_price"] == 3504.00
 
-    # Stage 3: Price surges to 3517.0 (+1.7R >= 1.6R) -> triggers +1.10R Profit Lock
-    msg3 = executor.manage_open_positions(current_price=3517.0)
+    # Stage 3: Price surges to 3515.0 (+1.5R >= 1.4R) -> triggers +0.90R Profit Lock
+    msg3 = executor.manage_open_positions(current_price=3515.0)
     assert msg3 is not None
-    assert "Lock +1.10R Profit" in msg3
-    assert mock_client.change_order.call_args[1]["stop_price"] == 3511.00
+    assert "Lock +0.90R Profit" in msg3
+    assert mock_client.change_order.call_args[1]["stop_price"] == 3509.00
 
-    # Stage 4: Price surges to 3523.0 (+2.3R >= 2.2R) -> triggers +1.70R Profit Lock
-    msg4 = executor.manage_open_positions(current_price=3523.0)
+    # Stage 4: Price surges to 3519.0 (+1.9R >= 1.8R) -> triggers +1.30R Profit Lock
+    msg4 = executor.manage_open_positions(current_price=3519.0)
     assert msg4 is not None
-    assert "Lock +1.70R Profit" in msg4
-    assert mock_client.change_order.call_args[1]["stop_price"] == 3517.00
+    assert "Lock +1.30R Profit" in msg4
+    assert mock_client.change_order.call_args[1]["stop_price"] == 3513.00
+
+
+def test_backtest_multi_stage_ratchet_parity_and_no_intrabar_lookahead():
+    """Verify backtest ratchets SL chronologically across bars without intrabar lookahead."""
+    import pandas as pd
+    from backtest.orb_backtest import run_backtest
+
+    times = pd.date_range("2026-11-20 10:00:00", periods=5, freq="5min", tz="Asia/Kolkata")
+    # Bar 1: entry at 3500 (SL=3450, TP=3600, risk=50)
+    # Bar 2: spikes to 3555 (+1.1R -> ratchets SL to 3520 for bar 3) without hitting SL/TP
+    # Bar 3: drops to 3515 -> triggers ratcheted TRAILING_SL at 3520.0!
+    df = pd.DataFrame({
+        "Open": [3498.0, 3500.0, 3502.0, 3550.0, 3520.0],
+        "High": [3501.0, 3502.0, 3555.0, 3555.0, 3525.0],
+        "Low": [3496.0, 3499.0, 3498.0, 3515.0, 3510.0],
+        "Close": [3500.0, 3501.0, 3550.0, 3520.0, 3512.0],
+        "Volume": [1000, 1200, 1500, 1400, 1100],
+    }, index=times)
+
+    class FixedSig:
+        direction = "LONG"
+        timestamp = str(times[1])
+        entry = 3500.0
+        sl = 3450.0
+        tp = 3600.0
+        strategy_name = "TREND_FOLLOWING"
+
+    def mock_strat(prefix, cfg):
+        if len(prefix) >= 2 and str(prefix.index[-1]) == str(times[1]):
+            return FixedSig()
+        s = FixedSig()
+        s.direction = "NONE"
+        return s
+
+    cfg = ORBSettings(
+        strategy_type="TREND_FOLLOWING",
+        orb_minutes=0,
+        no_entry_minutes_after_open=0,
+        session_start="09:00",
+        last_entry_time="22:00",
+        enable_multi_stage_exits=True,
+        breakeven_trigger_r=0.5,
+    )
+    res = run_backtest(df, initial_equity=10000.0, cfg=cfg, strategy_fn=mock_strat, chart_output_path=None)
+    assert res.trades == 1
+    t = res.trade_log[0]
+    assert t["exit_reason"] == "TRAILING_SL"
+    assert t["exit"] == 3520.0
+    assert t["gross_pnl"] > 0
 
 

@@ -386,6 +386,9 @@ class DeltaPaperBot:
             sig = evaluate_vwap_ema(df_candles, self.cfg)
         elif strat == "ORB":
             sig = evaluate_orb(df_candles, self.cfg)
+        elif strat in ("HTF_SWING_BREAKOUT", "HTF_BREAKOUT"):
+            from strategy.htf_swing_breakout import evaluate_htf_swing_breakout
+            sig = evaluate_htf_swing_breakout(df_candles, self.cfg)
         else:  # PORTFOLIO / ARBITRATED
             arb_res = arbitrate_strategies(df_candles, self.cfg)
             self._last_arbitration = arb_res
