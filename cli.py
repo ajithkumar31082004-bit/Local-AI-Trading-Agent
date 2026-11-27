@@ -1,6 +1,8 @@
 """CLI entry point for XAUTUSD ORB + EMA20 + Volume. Alert-only; never places live orders."""
 import argparse
+import dataclasses
 import json
+import os
 import time
 from pathlib import Path
 from datetime import datetime, timezone
@@ -467,6 +469,7 @@ def main():
     elif args.command == "backtest":
         frame = load_candles_csv(args.path, settings.timezone)
         strat = getattr(args, "strategy", "ORB").upper()
+        bt_cfg = settings
         if strat in ("TREND", "TREND_FOLLOWING"):
             from strategy.trend_following import evaluate_trend_following
             strat_fn = evaluate_trend_following
@@ -474,11 +477,16 @@ def main():
         elif strat in ("HTF_SWING_BREAKOUT", "HTF_BREAKOUT"):
             from strategy.htf_swing_breakout import evaluate_htf_swing_breakout
             strat_fn = evaluate_htf_swing_breakout
+            bt_cfg = dataclasses.replace(
+                settings,
+                strategy_type="HTF_SWING_BREAKOUT",
+                close_at_eod=(os.getenv("ORB_CLOSE_AT_EOD", "false").lower() == "true"),
+            )
             title = "XAUTUSD HTF SWING BREAKOUT (1h Trend + 15m Donchian) BACKTEST RESULTS"
         else:
             strat_fn = evaluate_orb
             title = "XAUTUSD ORB STRATEGY BACKTEST RESULTS"
-        result = run_backtest(frame, args.equity, chart_output_path=args.chart, strategy_fn=strat_fn)
+        result = run_backtest(frame, args.equity, cfg=bt_cfg, chart_output_path=args.chart, strategy_fn=strat_fn)
         print("\n" + "=" * 60)
         print(title)
         print("=" * 60)

@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
+from typing import Optional
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,7 +86,7 @@ class ORBSettings:
     apply_gst: bool = os.getenv("DELTA_APPLY_GST", "false").lower() == "true"
     enable_multi_stage_exits: bool = os.getenv("ENABLE_MULTI_STAGE_EXITS", "false").lower() == "true"
     breakeven_trigger_r: float = _float("BREAKEVEN_TRIGGER_R", 1.0)
-    close_at_eod: bool = os.getenv("ORB_CLOSE_AT_EOD", "true").lower() == "true"
+    close_at_eod: Optional[bool] = None
     state_path: Path = ROOT / "data" / "orb_risk_state.json"
     journal_path: Path = ROOT / "data" / "orb_journal.sqlite3"
     api_base_url: str = os.getenv("ORB_DELTA_API_BASE_URL", os.getenv("DELTA_EXCHANGE_BASE_URL", "https://api.india.delta.exchange")).rstrip("/").replace("https://india.delta.exchange", "https://api.india.delta.exchange")
@@ -97,6 +98,16 @@ class ORBSettings:
     bootstrap_lookback_candles: int = _int("BOOTSTRAP_LOOKBACK_CANDLES", 450)
     min_completed_15m_bars: int = _int("MIN_COMPLETED_15M_BARS", 50)
     min_completed_5m_bars: int = _int("MIN_COMPLETED_5M_BARS", 150)
+
+    def __post_init__(self) -> None:
+        """Resolve strategy-appropriate defaults while keeping explicit overrides intact."""
+        if self.close_at_eod is None:
+            env_val = os.getenv("ORB_CLOSE_AT_EOD")
+            if env_val is not None:
+                resolved = env_val.strip().lower() == "true"
+            else:
+                resolved = self.strategy_type.upper() not in {"HTF_SWING_BREAKOUT", "HTF_BREAKOUT"}
+            object.__setattr__(self, "close_at_eod", resolved)
 
     @property
     def trading_mode(self) -> str:

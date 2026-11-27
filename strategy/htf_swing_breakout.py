@@ -51,8 +51,11 @@ def evaluate_htf_swing_breakout(frame: pd.DataFrame, cfg: ORBSettings = settings
     checklist: Dict[str, Any] = {
         "htf_15m_close": False,
         "trend_1h_aligned": False,
+        "htf_1h_ema_slope": False,
         "adx_1h_ok": False,
         "breakout_15m_close": False,
+        "ltf_15m_trend_aligned": False,
+        "anti_chase_ok": False,
         "volume_confirmed": False,
         "friction_ok": False,
         "rr_ok": False,
@@ -119,7 +122,7 @@ def evaluate_htf_swing_breakout(frame: pd.DataFrame, cfg: ORBSettings = settings
     df_15m = _resample_completed_htf(df_5m, "15min", 3)
     df_1h = _resample_completed_htf(df_5m, "1h", 12)
 
-    if len(df_15m) < 40 or len(df_1h) < 50:
+    if len(df_15m) < 50 or len(df_1h) < 50:
         return _no_trade("NO TRADE: insufficient completed 15m or 1h bars.", "INSUFFICIENT_HTF_BARS")
 
     # Only trigger once when a 15m candle finishes at `now`
@@ -134,10 +137,11 @@ def evaluate_htf_swing_breakout(frame: pd.DataFrame, cfg: ORBSettings = settings
 
     last_1h = df_1h.iloc[-1]
     ema20_1h = float(last_1h["EMA20"]) if pd.notna(last_1h["EMA20"]) else float("nan")
+    ema20_1h_prev3 = float(df_1h["EMA20"].iloc[-4]) if len(df_1h) >= 4 and pd.notna(df_1h["EMA20"].iloc[-4]) else float("nan")
     ema50_1h = float(last_1h["EMA50"]) if pd.notna(last_1h["EMA50"]) else float("nan")
     adx_1h = float(last_1h["ADX14"]) if pd.notna(last_1h["ADX14"]) else 0.0
 
-    if np.isnan(ema20_1h) or np.isnan(ema50_1h):
+    if np.isnan(ema20_1h) or np.isnan(ema20_1h_prev3) or np.isnan(ema50_1h):
         return _no_trade("NO TRADE: 1h EMA indicators warming up.", "HTF_WARMING_UP")
 
     is_bull_1h = ema20_1h > ema50_1h
@@ -146,12 +150,18 @@ def evaluate_htf_swing_breakout(frame: pd.DataFrame, cfg: ORBSettings = settings
         return _no_trade("NO TRADE: 1h EMA20 and EMA50 flat/equal.", "HTF_TREND_NEUTRAL")
     checklist["trend_1h_aligned"] = True
 
+    if is_bull_1h and not (ema20_1h > ema20_1h_prev3):
+        return _no_trade("NO TRADE: 1h EMA20 is not rising vs EMA20[-4].", "HTF_1H_EMA_NOT_RISING")
+    checklist["htf_1h_ema_slope"] = True
+
     min_adx_1h = 20.0
     if adx_1h < min_adx_1h:
         return _no_trade(f"NO TRADE: 1h ADX ({adx_1h:.1f}) below {min_adx_1h:.1f}.", "HTF_ADX_WEAK")
     checklist["adx_1h_ok"] = True
 
-    # 15m Breakout Indicators (32-bar / 8h prior high/low strictly excluding current bar)
+    # 15m Trend & Breakout Indicators (32-bar / 8h prior high/low strictly excluding current bar)
+    df_15m["EMA20"] = ema(df_15m["Close"], 20)
+    df_15m["EMA50"] = ema(df_15m["Close"], 50)
     df_15m["ATR14"] = atr(df_15m["High"], df_15m["Low"], df_15m["Close"], 14)
     df_15m["VolAvg20"] = prior_volume_average(df_15m["Volume"], 20)
     df_15m["PriorHigh32"] = df_15m["High"].shift(1).rolling(32, min_periods=32).max()
@@ -161,12 +171,14 @@ def evaluate_htf_swing_breakout(frame: pd.DataFrame, cfg: ORBSettings = settings
     cc = float(curr_15m["Close"])
     co = float(curr_15m["Open"])
     cv = float(curr_15m["Volume"])
+    ema20_15m = float(curr_15m["EMA20"]) if pd.notna(curr_15m["EMA20"]) else float("nan")
+    ema50_15m = float(curr_15m["EMA50"]) if pd.notna(curr_15m["EMA50"]) else float("nan")
     catr = float(curr_15m["ATR14"]) if pd.notna(curr_15m["ATR14"]) else float("nan")
     cvavg = float(curr_15m["VolAvg20"]) if pd.notna(curr_15m["VolAvg20"]) else float("nan")
     ph32 = float(curr_15m["PriorHigh32"]) if pd.notna(curr_15m["PriorHigh32"]) else float("nan")
     pl32 = float(curr_15m["PriorLow32"]) if pd.notna(curr_15m["PriorLow32"]) else float("nan")
 
-    if any(np.isnan(x) for x in (catr, cvavg, ph32, pl32)) or catr <= 0 or cvavg <= 0:
+    if any(np.isnan(x) for x in (ema20_15m, ema50_15m, catr, cvavg, ph32, pl32)) or catr <= 0 or cvavg <= 0:
         return _no_trade("NO TRADE: 15m breakout indicators warming up.", "HTF_15M_WARMING_UP")
 
     direction = None
@@ -180,6 +192,35 @@ def evaluate_htf_swing_breakout(frame: pd.DataFrame, cfg: ORBSettings = settings
             return _no_trade("NO TRADE: SHORT breakouts disabled for HTF_SWING_BREAKOUT (LONG_ONLY validation rule).", "HTF_SHORT_DISABLED")
         return _no_trade("NO TRADE: no 15m 32-bar breakout aligned with 1h trend.", "NO_15M_BREAKOUT")
     checklist["breakout_15m_close"] = True
+
+    if direction == "SHORT" and not (ema20_1h < ema20_1h_prev3):
+        return _no_trade("NO TRADE: 1h EMA20 is not falling vs EMA20[-4].", "HTF_1H_EMA_NOT_FALLING")
+
+    # 15m structural trend confirmation
+    ltf_aligned = (ema20_15m > ema50_15m) if direction == "LONG" else (ema20_15m < ema50_15m)
+    if not ltf_aligned:
+        return _no_trade(
+            f"NO TRADE: 15m EMA20 ({ema20_15m:.2f}) not aligned with 15m EMA50 ({ema50_15m:.2f}) for {direction}.",
+            "LTF_15M_TREND_MISALIGNED",
+        )
+    checklist["ltf_15m_trend_aligned"] = True
+
+    # Anti-chase extension filter: prevent entering over-extended spikes
+    max_breakout_ext_atr = 1.50
+    max_ema_ext_atr = 3.50
+    breakout_ext_atr = ((cc - ph32) / catr) if direction == "LONG" else ((pl32 - cc) / catr)
+    ema_ext_atr = ((cc - ema20_15m) / catr) if direction == "LONG" else ((ema20_15m - cc) / catr)
+    if breakout_ext_atr > max_breakout_ext_atr:
+        return _no_trade(
+            f"NO TRADE: breakout extension ({breakout_ext_atr:.2f} ATR) exceeds {max_breakout_ext_atr:.2f} ATR cap.",
+            "LATE_BREAKOUT_EXTENSION",
+        )
+    if ema_ext_atr > max_ema_ext_atr:
+        return _no_trade(
+            f"NO TRADE: EMA20 extension ({ema_ext_atr:.2f} ATR) exceeds {max_ema_ext_atr:.2f} ATR cap.",
+            "LATE_EMA_EXTENSION",
+        )
+    checklist["anti_chase_ok"] = True
 
     min_vol_ratio = 1.0
     vol_ratio = cv / max(cvavg, 1e-6)

@@ -318,7 +318,11 @@ def run_backtest(
 
             if can_evaluate:
                 loc = ts_to_iloc[ts]
-                lookback_bars = 900 if strat_type in {"HTF_SWING_BREAKOUT", "HTF_BREAKOUT"} else 300
+                is_htf_swing = (
+                    strat_type.upper() in {"HTF_SWING_BREAKOUT", "HTF_BREAKOUT"}
+                    or getattr(strategy_eval_fn, "__name__", "") == "evaluate_htf_swing_breakout"
+                )
+                lookback_bars = 900 if is_htf_swing else 300
                 prefix = df.iloc[max(0, loc - lookback_bars):loc + 1]
                 sig = strategy_eval_fn(prefix, cfg)
                 if sig.direction in {"LONG", "SHORT"} and sig.timestamp == str(ts):
