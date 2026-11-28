@@ -1,0 +1,16 @@
+{
+  "test_id": "EC2_24H_FORWARD_TEST_20261104_165531",
+  "original_start_time_utc": "2026-11-04T16:55:31.605476+00:00",
+  "original_start_time_ist": "2026-11-04T22:25:31.605476+00:00",
+  "target_duration_seconds": 5,
+  "target_end_time_utc": "2026-11-04T16:55:36.605476+00:00",
+  "target_end_time_ist": "2026-11-04T22:25:36.605476+00:00",
+  "cumulative_elapsed_seconds": 0.0,
+  "remaining_seconds": 5.0,
+  "last_heartbeat_utc": "2026-11-04T16:55:31.605476+00:00",
+  "last_heartbeat_ist": "2026-11-04T22:25:31.605476+00:00",
+  "run_count": 1,
+  "process_pid": 472,
+  "is_active": false,
+  "completed": true
+}

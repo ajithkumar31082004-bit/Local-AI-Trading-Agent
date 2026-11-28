@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Center Candlestick -->
+    <path
+        android:fillColor="#E3B341"
+        android:pathData="M52,24h4v16h-4z M46,40h16v28h-16z M52,68h4v16h-4z" />
+    <!-- Left Candlestick -->
+    <path
+        android:fillColor="#2EA043"
+        android:pathData="M32,34h4v10h-4z M28,44h12v20h-12z M32,64h4v10h-4z" />
+    <!-- Right Candlestick -->
+    <path
+        android:fillColor="#58A6FF"
+        android:pathData="M72,30h4v12h-4z M68,42h12v24h-12z M72,66h4v12h-4z" />
+</vector>
+

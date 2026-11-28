@@ -1,0 +1,116 @@
+======================================================================
+PHASE 3.31 — BROKER STATE CONSISTENCY & SQLITE DURABILITY REMEDIATION TEST LOGS
+Date: 2026-11-10T22:39:30+05:30
+Repository: ajithkumar31082004-bit/Local-AI-Trading-Agent
+Branch: feature/phase3-31-broker-consistency-remediation
+Base Commit: 9f2b0d2
+Instrument: XAUTUSD
+Trading Mode: STRICT PAPER ONLY
+======================================================================
+
+--- 1. PHASE 3.31 DEDICATED REMEDIATION SUITE (12/12 PASSED) ---
+pytest tests/test_phase3_31_broker_consistency_remediation.py -v -s
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collected 12 items
+
+tests/test_phase3_31_broker_consistency_remediation.py::test_crash_boundary_before_reservation PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_crash_boundary_after_reservation_before_intent PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_crash_boundary_after_intent_before_json_persistence PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_crash_boundary_after_json_persistence_before_sqlite_committed PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_crash_boundary_before_caller_acknowledgement PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_repeated_crash_recovery_determinism PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_sqlite_durability_full_synchronous 
+Average reserve latency under PRAGMA synchronous=FULL: 24.07 ms
+PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_wal_checkpoint_truncate PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_backup_online_api_and_restore PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_windows_connection_teardown_corrupt_recovery PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_windows_fail_closed_when_history_unrecoverable PASSED
+tests/test_phase3_31_broker_consistency_remediation.py::test_safety_invariants_one_lot_and_live_disabled PASSED
+
+============================= 12 passed in 8.44s ==============================
+
+
+--- 2. PHASE 3.30 AUDIT TEST SUITE (16/16 PASSED) ---
+pytest tests/test_phase3_30_sqlite_durability_audit.py -v
+collected 16 items
+
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_a_pragma_settings PASSED [  6%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_a_transaction_rollback PASSED [ 12%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_a_wal_checkpoint_behavior PASSED [ 18%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_b_corruption_before_startup PASSED [ 25%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_b_missing_or_damaged_wal_file PASSED [ 31%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_b_keys_exist_only_in_sqlite PASSED [ 37%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_b_fail_closed_analysis_when_history_unrecoverable PASSED [ 43%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_c_crash_between_sqlite_commit_and_json_position_save PASSED [ 50%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_c_cash_conservation_across_reservation_failures PASSED [ 56%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_d_sqlite_online_backup_api PASSED [ 62%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_d_stale_file_copy_backup_vulnerability PASSED [ 68%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_d_restore_to_new_directory PASSED [ 75%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_e_position_size_guard_rejection PASSED [ 81%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_e_broker_rejects_oversized_orders PASSED [ 87%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_e_live_trading_hard_barrier PASSED [ 93%]
+tests/test_phase3_30_sqlite_durability_audit.py::test_audit_e_historical_484_lot_incident_intact PASSED [100%]
+
+============================= 16 passed in 5.58s ==============================
+
+
+--- 3. PHASE 3.29 PERMANENT IDEMPOTENCY SUITE (12/12 PASSED) ---
+pytest tests/test_phase3_29_idempotency_remediation.py -v
+collected 12 items
+
+tests/test_phase3_29_idempotency_remediation.py::test_1_duplicate_key_same_process PASSED [  8%]
+tests/test_phase3_29_idempotency_remediation.py::test_2_duplicate_key_after_restart PASSED [ 16%]
+tests/test_phase3_29_idempotency_remediation.py::test_3_replay_after_1005_keys_pruning PASSED [ 25%]
+tests/test_phase3_29_idempotency_remediation.py::test_4_replay_after_10000_unique_keys PASSED [ 33%]
+tests/test_phase3_29_idempotency_remediation.py::test_5_duplicate_key_after_trade_closed PASSED [ 41%]
+tests/test_phase3_29_idempotency_remediation.py::test_6_concurrent_processes_same_key PASSED [ 50%]
+tests/test_phase3_29_idempotency_remediation.py::test_7_crash_during_idempotency_persistence PASSED [ 58%]
+tests/test_phase3_29_idempotency_remediation.py::test_8_crash_after_persistence_before_ack PASSED [ 66%]
+tests/test_phase3_29_idempotency_remediation.py::test_9_corrupt_database_recovery PASSED [ 75%]
+tests/test_phase3_29_idempotency_remediation.py::test_10_recovery_without_duplicate_execution PASSED [ 83%]
+tests/test_phase3_29_idempotency_remediation.py::test_11_position_sizing_guard_unchanged PASSED [ 91%]
+tests/test_phase3_29_idempotency_remediation.py::test_12_historical_incident_record_intact PASSED [100%]
+
+============================= 12 passed in 11.23s =============================
+
+
+--- 4. PHASE 3.28 INDEPENDENT AUDIT SUITE (19/19 PASSED) ---
+pytest tests/test_phase3_28_independent_audit.py -v
+collected 19 items
+
+tests/test_phase3_28_independent_audit.py::test_audit_a_pruning_drops_old_keys PASSED [  5%]
+tests/test_phase3_28_independent_audit.py::test_audit_a_pruned_key_replay_vulnerability PASSED [ 10%]
+tests/test_phase3_28_independent_audit.py::test_audit_b_simultaneous_reservation_across_processes PASSED [ 15%]
+tests/test_phase3_28_independent_audit.py::test_audit_b_simultaneous_open_trade_across_processes PASSED [ 21%]
+tests/test_phase3_28_independent_audit.py::test_audit_b_simultaneous_close_across_processes PASSED [ 26%]
+tests/test_phase3_28_independent_audit.py::test_audit_b_concurrent_equity_persistence PASSED [ 31%]
+tests/test_phase3_28_independent_audit.py::test_audit_b_recovery_after_process_crash_while_locked PASSED [ 36%]
+tests/test_phase3_28_independent_audit.py::test_audit_c_atomic_state_replacement PASSED [ 42%]
+tests/test_phase3_28_independent_audit.py::test_audit_c_corrupt_state_recovery PASSED [ 47%]
+tests/test_phase3_28_independent_audit.py::test_audit_c_state_data_consistency PASSED [ 52%]
+tests/test_phase3_28_independent_audit.py::test_audit_d_expired_reservation_commit_rejected PASSED [ 57%]
+tests/test_phase3_28_independent_audit.py::test_audit_d_stale_worker_commit_after_generation_advance_rejected PASSED [ 63%]
+tests/test_phase3_28_independent_audit.py::test_audit_d_duplicate_commit_rejected PASSED [ 68%]
+tests/test_phase3_28_independent_audit.py::test_audit_d_commit_after_release_rejected PASSED [ 73%]
+tests/test_phase3_28_independent_audit.py::test_audit_d_commit_following_process_restart PASSED [ 78%]
+tests/test_phase3_28_independent_audit.py::test_audit_e_position_size_guard_rejection PASSED [ 84%]
+tests/test_phase3_28_independent_audit.py::test_audit_e_broker_rejects_oversized_orders PASSED [ 89%]
+tests/test_phase3_28_independent_audit.py::test_audit_e_live_trading_hard_barrier PASSED [ 94%]
+tests/test_phase3_28_independent_audit.py::test_audit_e_historical_484_lot_incident_intact PASSED [100%]
+
+============================= 19 passed in 22.12s =============================
+
+
+--- 5. BROKER & ACCOUNTING INTEGRITY SUITES (47/47 PASSED) ---
+pytest tests/test_paper_broker.py tests/test_delta_paper_trading.py tests/test_paper_execution_integrity.py -v
+======================= 47 passed, 4 warnings in 15.08s =======================
+
+
+--- 6. FULL REPOSITORY REGRESSION SUITE (414/414 PASSED) ---
+pytest tests/ -q
+414 passed, 4 warnings in 120.03s (0:02:00)
+======================================================================

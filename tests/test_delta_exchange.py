@@ -20,3 +20,23 @@ def test_delta_exchange_disabled():
     status = client.check_connection()
     assert status["available"] is False
     assert status["authenticated"] is False
+
+
+def test_delta_exchange_change_order_uses_timeout(monkeypatch):
+    import requests
+    from unittest.mock import MagicMock
+
+    captured = {}
+
+    def mock_put(url, data=None, headers=None, timeout=None):
+        captured["timeout"] = timeout
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"success": True, "result": {"id": "123"}}
+        return resp
+
+    monkeypatch.setattr(requests, "put", mock_put)
+    client = DeltaExchangeClient(api_key="test_key", api_secret="test_secret", enabled=True, timeout=7)
+    res = client.change_order(order_id="123", product_id=131253, stop_price=3560.0)
+    assert res["success"] is True
+    assert captured["timeout"] == 7

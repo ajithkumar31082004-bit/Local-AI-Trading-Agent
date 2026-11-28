@@ -1,0 +1,26 @@
+{
+  "phase": "PHASE_3_31_BROKER_CONSISTENCY_REMEDIATION",
+  "audit_date": "2026-11-10T22:38:40+05:30",
+  "checkpoint_evaluation": {
+    "method": "DeltaPaperBroker.checkpoint_db(mode='TRUNCATE')",
+    "wal_modes_supported": ["PASSIVE", "FULL", "RESTART", "TRUNCATE"],
+    "truncate_verified": true,
+    "size_reduction_verified": true,
+    "integrated_with_reset": true
+  },
+  "online_backup_api": {
+    "method": "src_conn.backup(dest_conn) via DurableIdempotencyRegistry.backup_to_file()",
+    "coordinated_with_broker": "DeltaPaperBroker.backup_state()",
+    "atomic_json_included": true,
+    "wal_frames_flushed": true,
+    "concurrent_reader_writer_safe": true
+  },
+  "restore_verification": {
+    "tested_in_isolated_dir": true,
+    "records_restored": 3,
+    "deduplication_preserved": true,
+    "key_replay_blocked": true,
+    "rejection_message_verified": "Duplicate order: idempotency key already executed in durable registry"
+  },
+  "verdict": "PASS"
+}

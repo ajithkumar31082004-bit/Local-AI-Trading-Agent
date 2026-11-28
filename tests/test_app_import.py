@@ -9,10 +9,13 @@ def test_app_import():
     assert hasattr(app, "get_shared_resources")
 
 
-def test_supervisor_wiring():
+def test_supervisor_wiring(monkeypatch):
     from agents.trading_supervisor import TradingSupervisor
     from market_data.mock_provider import MockMarketDataProvider
-    from database.repository import DatabaseRepository
+    from agents.ollama_client import OllamaClient
+
+    # Fast offline mock for local LLM so test runs in milliseconds
+    monkeypatch.setattr(OllamaClient, "generate_response", lambda self, *args, **kwargs: "Mock quantitative summary.")
 
     mock_provider = MockMarketDataProvider()
     supervisor = TradingSupervisor(data_provider=mock_provider)

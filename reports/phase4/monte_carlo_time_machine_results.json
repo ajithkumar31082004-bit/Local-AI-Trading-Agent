@@ -1,0 +1,138 @@
+{
+  "overall": {
+    "timestamp_utc": "2026-11-18T18:13:36.211301+00:00",
+    "num_simulations": 10000,
+    "sample_size_per_session": 100,
+    "empirical_pool_size": 299,
+    "overall_acceptance_rate_pct": 0.0,
+    "kpi_pass_probabilities": {
+      "win_rate_ge_50": 0.0,
+      "profit_factor_ge_1_30": 0.81,
+      "expectancy_gt_0_20_r": 0.0,
+      "max_drawdown_le_3_50": 99.62,
+      "annualized_sharpe_ge_1_20": 3.71
+    },
+    "percentiles": {
+      "win_rate": {
+        "p5": 23.0,
+        "p25": 28.0,
+        "p50": 31.0,
+        "p75": 34.0,
+        "p95": 38.0
+      },
+      "profit_factor": {
+        "p5": 0.51,
+        "p25": 0.65,
+        "p50": 0.77,
+        "p75": 0.9,
+        "p95": 1.12
+      },
+      "expectancy_r": {
+        "p5": -0.05,
+        "p25": -0.033,
+        "p50": -0.021,
+        "p75": -0.009,
+        "p95": 0.01
+      },
+      "max_drawdown_pct": {
+        "p5": 0.72,
+        "p25": 1.13,
+        "p50": 1.56,
+        "p75": 2.02,
+        "p95": 2.75
+      },
+      "annualized_sharpe": {
+        "p5": -5.8,
+        "p25": -3.62,
+        "p50": -2.22,
+        "p75": -0.88,
+        "p95": 0.94
+      },
+      "final_equity_usd": {
+        "p5": 9748.96,
+        "p25": 9833.86,
+        "p50": 9893.92,
+        "p75": 9956.7,
+        "p95": 10047.65
+      }
+    },
+    "medians": {
+      "win_rate": 31.0,
+      "profit_factor": 0.77,
+      "expectancy_r": -0.021,
+      "max_drawdown_pct": 1.56,
+      "annualized_sharpe": -2.22,
+      "final_equity_usd": 9893.92
+    },
+    "risk_of_ruin_or_breach": {
+      "prob_drawdown_exceeds_3_5_pct": 0.38,
+      "prob_drawdown_exceeds_5_0_pct": 0.0,
+      "prob_drawdown_exceeds_10_0_pct": 0.0
+    }
+  },
+  "strategies": {
+    "2. Trend-Following V2": {
+      "sample_size": 45,
+      "median_win_rate": 37.78,
+      "median_profit_factor": 1.09,
+      "median_expectancy_r": 0.008,
+      "median_drawdown_pct": 0.6,
+      "median_sharpe": 0.72,
+      "pass_all_kpis_rate_pct": 0.0
+    },
+    "3. VWAP + EMA V2": {
+      "sample_size": 53,
+      "median_win_rate": 36.0,
+      "median_profit_factor": 1.02,
+      "median_expectancy_r": 0.002,
+      "median_drawdown_pct": 0.66,
+      "median_sharpe": 0.22,
+      "pass_all_kpis_rate_pct": 0.0
+    },
+    "4. Bollinger + RSI (Disabled in Port)": {
+      "sample_size": 34,
+      "median_win_rate": 26.47,
+      "median_profit_factor": 0.39,
+      "median_expectancy_r": -0.059,
+      "median_drawdown_pct": 1.11,
+      "median_sharpe": -7.7,
+      "pass_all_kpis_rate_pct": 0.0
+    },
+    "5. ATR Compression Breakout V2": {
+      "sample_size": 33,
+      "median_win_rate": 30.3,
+      "median_profit_factor": 0.88,
+      "median_expectancy_r": -0.01,
+      "median_drawdown_pct": 0.58,
+      "median_sharpe": -1.04,
+      "pass_all_kpis_rate_pct": 0.0
+    },
+    "6. Liquidity Sweep Reversal V2": {
+      "sample_size": 22,
+      "median_win_rate": 31.82,
+      "median_profit_factor": 0.69,
+      "median_expectancy_r": -0.033,
+      "median_drawdown_pct": 0.64,
+      "median_sharpe": -3.19,
+      "pass_all_kpis_rate_pct": 0.0
+    },
+    "7. Strategy Intelligence V2 Portfolio": {
+      "sample_size": 50,
+      "median_win_rate": 26.0,
+      "median_profit_factor": 0.63,
+      "median_expectancy_r": -0.037,
+      "median_drawdown_pct": 1.21,
+      "median_sharpe": -3.95,
+      "pass_all_kpis_rate_pct": 0.0
+    },
+    "Strategy Intelligence V2 Portfolio": {
+      "sample_size": 50,
+      "median_win_rate": 26.0,
+      "median_profit_factor": 0.63,
+      "median_expectancy_r": -0.037,
+      "median_drawdown_pct": 1.21,
+      "median_sharpe": -3.95,
+      "pass_all_kpis_rate_pct": 0.0
+    }
+  }
+}

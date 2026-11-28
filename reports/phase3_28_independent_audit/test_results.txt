@@ -1,0 +1,32 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0 -- C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collecting ... collected 19 items
+
+tests/test_phase3_28_independent_audit.py::test_audit_a_pruning_drops_old_keys PASSED [  5%]
+tests/test_phase3_28_independent_audit.py::test_audit_a_pruned_key_replay_vulnerability PASSED [ 10%]
+tests/test_phase3_28_independent_audit.py::test_audit_b_simultaneous_reservation_across_processes PASSED [ 15%]
+tests/test_phase3_28_independent_audit.py::test_audit_b_simultaneous_open_trade_across_processes PASSED [ 21%]
+tests/test_phase3_28_independent_audit.py::test_audit_b_simultaneous_close_across_processes PASSED [ 26%]
+tests/test_phase3_28_independent_audit.py::test_audit_b_concurrent_equity_persistence PASSED [ 31%]
+tests/test_phase3_28_independent_audit.py::test_audit_b_recovery_after_process_crash_while_locked PASSED [ 36%]
+tests/test_phase3_28_independent_audit.py::test_audit_c_atomic_state_replacement PASSED [ 42%]
+tests/test_phase3_28_independent_audit.py::test_audit_c_corrupt_state_recovery PASSED [ 47%]
+tests/test_phase3_28_independent_audit.py::test_audit_c_state_data_consistency PASSED [ 52%]
+tests/test_phase3_28_independent_audit.py::test_audit_d_expired_reservation_commit_rejected PASSED [ 57%]
+tests/test_phase3_28_independent_audit.py::test_audit_d_stale_worker_commit_after_generation_advance_rejected PASSED [ 63%]
+tests/test_phase3_28_independent_audit.py::test_audit_d_duplicate_commit_rejected PASSED [ 68%]
+tests/test_phase3_28_independent_audit.py::test_audit_d_commit_after_release_rejected PASSED [ 73%]
+tests/test_phase3_28_independent_audit.py::test_audit_d_commit_following_process_restart PASSED [ 78%]
+tests/test_phase3_28_independent_audit.py::test_audit_e_position_size_guard_rejection PASSED [ 84%]
+tests/test_phase3_28_independent_audit.py::test_audit_e_broker_rejects_oversized_orders PASSED [ 89%]
+tests/test_phase3_28_independent_audit.py::test_audit_e_live_trading_hard_barrier PASSED [ 94%]
+tests/test_phase3_28_independent_audit.py::test_audit_e_historical_484_lot_incident_intact PASSED [100%]
+
+============================= 19 passed in 21.34s =============================
+
+FULL REGRESSION SUITE:
+374 passed, 4 warnings in 88.63s (0:01:28)

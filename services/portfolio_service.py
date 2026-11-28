@@ -75,27 +75,36 @@ class PortfolioService:
         total_equity = cash + positions_val
 
         unrealized_pct = (unrealized / initial_bal * 100.0) if initial_bal > 0 else 0.0
-        total_pnl = realized + unrealized - fees
+        # Realized P&L from PaperBroker already deducts entry + exit fees on closed trades;
+        # deduct only entry fees still held in open positions to avoid double-counting.
+        open_entry_fees = sum(getattr(p, "entry_fee", 0.0) for p in positions)
+        total_pnl = round(realized + unrealized - open_entry_fees, 2)
 
         new_peak = max(peak, total_equity)
         drawdown_dollars = max(0.0, new_peak - total_equity)
         drawdown_pct = (drawdown_dollars / new_peak * 100.0) if new_peak > 0 else 0.0
 
-        # Calculate trade statistics from SELL trades
+        # Calculate trade statistics from closed SELL executions using numeric realized_pnl
         sell_trades = [t for t in trades if t.side.upper() == "SELL"]
         win_count = 0
         loss_count = 0
         gross_profit = 0.0
         gross_loss = 0.0
 
-        # Group buy costs and sell proceeds by symbol
-        for t in trades:
-            if t.notes and "Profit" in t.notes:
+        for t in sell_trades:
+            pnl = float(getattr(t, "realized_pnl", 0.0) or 0.0)
+            if pnl > 0:
+                win_count += 1
+                gross_profit += pnl
+            elif pnl < 0:
+                loss_count += 1
+                gross_loss += abs(pnl)
+            elif t.notes and "Profit" in t.notes:
                 win_count += 1
             elif t.notes and "Loss" in t.notes:
                 loss_count += 1
 
-        # Use realized PnL proxy if note tags are generic
+        # Fallback if legacy DB rows have no SELL trade realized_pnl populated
         if win_count == 0 and loss_count == 0 and realized != 0:
             if realized > 0:
                 win_count = max(1, len(sell_trades))
@@ -103,9 +112,6 @@ class PortfolioService:
             else:
                 loss_count = max(1, len(sell_trades))
                 gross_loss = abs(realized)
-        else:
-            win_count = sum(1 for p in positions if p.realized_pnl > 0)
-            loss_count = sum(1 for p in positions if p.realized_pnl < 0)
 
         total_closed = win_count + loss_count
         win_rate = (win_count / total_closed * 100.0) if total_closed > 0 else 0.0

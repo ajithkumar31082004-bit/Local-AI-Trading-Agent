@@ -1,5 +1,7 @@
 """Deterministic Financial Risk Management Engine."""
 
+import math
+import threading
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 from config.settings import settings
@@ -54,20 +56,23 @@ class RiskManager:
         self.default_slippage_pct = (
             default_slippage_pct if default_slippage_pct is not None else settings.default_slippage_pct
         )
+        self._lock = threading.RLock()
 
     def calculate_execution_price(self, price: float, side: str) -> Tuple[float, float]:
         """Apply modeled slippage based on trade direction. Returns (effective_price, slippage_amount)."""
-        slippage_factor = self.default_slippage_pct / 100.0
-        slippage_amt = round(price * slippage_factor, 4)
-        if side.upper() == OrderSide.BUY.value:
-            effective = round(price + slippage_amt, 4)
-        else:
-            effective = round(max(0.01, price - slippage_amt), 4)
-        return effective, slippage_amt
+        with self._lock:
+            slippage_factor = self.default_slippage_pct / 100.0
+            slippage_amt = round(price * slippage_factor, 4)
+            if str(side).upper() == OrderSide.BUY.value:
+                effective = round(price + slippage_amt, 4)
+            else:
+                effective = round(max(0.01, price - slippage_amt), 4)
+            return effective, slippage_amt
 
     def calculate_fee(self, amount: float) -> float:
         """Calculate transaction fee for order value."""
-        return round(amount * (self.transaction_fee_pct / 100.0), 2)
+        with self._lock:
+            return round(amount * (self.transaction_fee_pct / 100.0), 2)
 
     def evaluate_order(
         self,
@@ -84,8 +89,63 @@ class RiskManager:
         existing_position_qty: float = 0.0,
     ) -> RiskCheckResult:
         """Perform comprehensive risk check and determine approval or rejection."""
+        with self._lock:
+            return self._evaluate_order_locked(
+                symbol=symbol,
+                side=side,
+                requested_quantity=requested_quantity,
+                current_price=current_price,
+                portfolio_equity=portfolio_equity,
+                cash_balance=cash_balance,
+                current_open_positions_count=current_open_positions_count,
+                today_realized_loss=today_realized_loss,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                existing_position_qty=existing_position_qty,
+            )
+
+    def _evaluate_order_locked(
+        self,
+        symbol: str,
+        side: str,
+        requested_quantity: float,
+        current_price: float,
+        portfolio_equity: float,
+        cash_balance: float,
+        current_open_positions_count: int,
+        today_realized_loss: float,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        existing_position_qty: float = 0.0,
+    ) -> RiskCheckResult:
+        """Internal locked risk evaluation implementation."""
         rejection_reasons: List[str] = []
         warning_notes: List[str] = []
+
+        # 0. Strict Financial Input Validation (NaN, Inf, and Boundary Audits)
+        for val_name, val in [
+            ("Current price", current_price),
+            ("Requested quantity", requested_quantity),
+            ("Portfolio equity", portfolio_equity),
+            ("Cash balance", cash_balance),
+            ("Today realized loss", today_realized_loss),
+        ]:
+            if val is None or math.isnan(val) or math.isinf(val):
+                return RiskCheckResult(
+                    approved=False,
+                    rejection_reasons=[f"{val_name} must be a finite numerical value (no NaN or Infinity)."],
+                    suggested_quantity=0.0,
+                    max_allowed_quantity=0.0,
+                    dollar_risk=0.0,
+                    position_value=0.0,
+                    estimated_fee=0.0,
+                    estimated_slippage=0.0,
+                    effective_price=0.0,
+                    stop_loss=0.0,
+                    take_profit=0.0,
+                    risk_reward_ratio=0.0,
+                    warning_notes=[],
+                )
 
         if current_price <= 0:
             return RiskCheckResult(
@@ -104,9 +164,60 @@ class RiskManager:
                 warning_notes=[],
             )
 
+        if requested_quantity <= 0:
+            return RiskCheckResult(
+                approved=False,
+                rejection_reasons=["Requested quantity must be strictly positive."],
+                suggested_quantity=0.0,
+                max_allowed_quantity=0.0,
+                dollar_risk=0.0,
+                position_value=0.0,
+                estimated_fee=0.0,
+                estimated_slippage=0.0,
+                effective_price=0.0,
+                stop_loss=0.0,
+                take_profit=0.0,
+                risk_reward_ratio=0.0,
+                warning_notes=[],
+            )
+
+        if portfolio_equity <= 0:
+            return RiskCheckResult(
+                approved=False,
+                rejection_reasons=["Portfolio equity must be greater than zero."],
+                suggested_quantity=0.0,
+                max_allowed_quantity=0.0,
+                dollar_risk=0.0,
+                position_value=0.0,
+                estimated_fee=0.0,
+                estimated_slippage=0.0,
+                effective_price=0.0,
+                stop_loss=0.0,
+                take_profit=0.0,
+                risk_reward_ratio=0.0,
+                warning_notes=[],
+            )
+
+        clean_side = str(side).strip().upper()
+        if clean_side not in (OrderSide.BUY.value, OrderSide.SELL.value):
+            return RiskCheckResult(
+                approved=False,
+                rejection_reasons=[f"Invalid order side '{side}'. Must be BUY or SELL."],
+                suggested_quantity=0.0,
+                max_allowed_quantity=0.0,
+                dollar_risk=0.0,
+                position_value=0.0,
+                estimated_fee=0.0,
+                estimated_slippage=0.0,
+                effective_price=0.0,
+                stop_loss=0.0,
+                take_profit=0.0,
+                risk_reward_ratio=0.0,
+                warning_notes=[],
+            )
+
         # 1. Effective execution price and slippage
-        effective_price, slippage_per_share = self.calculate_execution_price(current_price, side)
-        clean_side = side.upper()
+        effective_price, slippage_per_share = self.calculate_execution_price(current_price, clean_side)
 
         # Handle SELL orders (closing/reducing positions)
         if clean_side == OrderSide.SELL.value:
@@ -194,12 +305,12 @@ class RiskManager:
             rejection_reasons.append(
                 f"Insufficient Cash: Order cost with fees is ${cost:,.2f}, but available cash is ${cash_balance:,.2f}."
             )
-        elif requested_quantity > allocation_based_qty * 1.02:
+        elif requested_quantity > allocation_based_qty + 1e-6:
             rejection_reasons.append(
                 f"Position Allocation Exceeded: Requested position size (${requested_quantity * effective_price:,.2f}) "
                 f"exceeds max position allocation limit (${max_allocation_dollars:,.2f} = {self.max_position_allocation_pct}% of equity)."
             )
-        elif (requested_quantity * stop_distance) > (max_risk_dollars * 1.05):
+        elif (requested_quantity * stop_distance) > (max_risk_dollars + 1e-6):
             risk_amt = requested_quantity * stop_distance
             rejection_reasons.append(
                 f"Risk Per Trade Limit Exceeded: Stop loss risk (${risk_amt:,.2f}) "

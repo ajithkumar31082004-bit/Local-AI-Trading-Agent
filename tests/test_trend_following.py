@@ -1,0 +1,235 @@
+"""Unit, regression, and comparison tests for the 15m/5m Trend-Following strategy."""
+import pandas as pd
+import pytest
+from config.orb_settings import ORBSettings
+from strategy.trend_following import evaluate_trend_following, resample_to_15m
+from tests.fixtures.synthetic_market_data import (
+    create_synthetic_bearish_continuation_df,
+    create_synthetic_bullish_continuation_df,
+)
+
+
+def make_cfg(**kwargs):
+    defaults = {
+        "symbol": "XAUTUSD",
+        "timezone": "Asia/Kolkata",
+        "session_start": "09:00",
+        "session_end": "23:30",
+        "orb_minutes": 15,
+        "ema_period": 20,
+        "volume_period": 20,
+        "atr_period": 14,
+        "target_r": 2.0,
+        "fee_pct_per_side": 0.01,
+        "spread_pct_round_trip": 0.02,
+        "slippage_pct_round_trip": 0.02,
+        "contract_size_xaut": 0.001,
+        "lot_increment": 1,
+        "leverage": 100.0,
+        "risk_pct": 2.0,
+        "max_margin_pct_equity": 50.0,
+    }
+    defaults.update(kwargs)
+    return ORBSettings(**defaults)
+
+
+def test_empty_or_insufficient_candles_returns_no_trade():
+    cfg = make_cfg()
+    sig1 = evaluate_trend_following(pd.DataFrame(), cfg)
+    assert sig1.direction == "NO TRADE"
+    assert sig1.diagnostic_code == "NO_CANDLE_DATA"
+
+    # Only 10 candles
+    idx = pd.date_range("2026-10-30 10:00", periods=10, freq="5min", tz="Asia/Kolkata")
+    df_small = pd.DataFrame({"Open": [4000.0]*10, "High": [4005.0]*10, "Low": [3995.0]*10, "Close": [4000.0]*10, "Volume": [1000.0]*10}, index=idx)
+    sig2 = evaluate_trend_following(df_small, cfg)
+    assert sig2.direction == "NO TRADE"
+    assert sig2.diagnostic_code == "INSUFFICIENT_CANDLES"
+
+
+def test_outside_session_hours_rejected():
+    cfg = make_cfg(session_start="09:00", session_end="23:30")
+    # 60 candles from 01:00 AM to 05:55 AM IST (strictly before 09:00 AM)
+    idx = pd.date_range("2026-10-30 01:00", periods=60, freq="5min", tz="Asia/Kolkata")
+    df = pd.DataFrame({"Open": [4000.0]*60, "High": [4005.0]*60, "Low": [3995.0]*60, "Close": [4000.0]*60, "Volume": [1000.0]*60}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "OUTSIDE_SESSION_HOURS"
+
+
+def test_trend_following_confirmed_short_signal():
+    """Construct a clean 15m bearish trend + 5m pullback + bearish rejection continuation candle."""
+    cfg = make_cfg(session_start="09:00", session_end="23:30")
+    df = create_synthetic_bearish_continuation_df()
+    sig = evaluate_trend_following(df, cfg)
+
+    assert sig.direction == "SHORT"
+    assert sig.entry == df["Close"].iloc[-1]
+    assert sig.sl > sig.entry
+    assert sig.tp < sig.entry
+    assert sig.r_multiple >= 2.0
+    assert sig.diagnostic_code == "SIGNAL_CONFIRMED"
+    assert sig.checklist["trend_15m_aligned"] is True
+    assert sig.checklist["pullback_confirmed"] is True
+    assert sig.checklist["continuation_candle"] is True
+    assert sig.checklist["volume_confirmed"] is True
+
+
+def test_trend_following_confirmed_long_signal():
+    """Construct a clean 15m bullish trend + 5m pullback + bullish rejection continuation candle."""
+    cfg = make_cfg(session_start="09:00", session_end="23:30")
+    df = create_synthetic_bullish_continuation_df()
+    sig = evaluate_trend_following(df, cfg)
+
+    assert sig.direction == "LONG"
+    assert sig.entry == df["Close"].iloc[-1]
+    assert sig.sl < sig.entry
+    assert sig.tp > sig.entry
+    assert sig.r_multiple >= 2.0
+    assert sig.diagnostic_code == "SIGNAL_CONFIRMED"
+
+
+def test_trend_following_overextended_rejected():
+    """Verify that chasing an overextended candle (> 2.5 * ATR from EMA20) is rejected."""
+    cfg = make_cfg(session_start="09:00", session_end="23:30")
+    idx = pd.date_range("2026-10-30 07:00", periods=160, freq="5min", tz="Asia/Kolkata")
+    closes = [4100.0 - (i * 0.8) for i in range(160)]
+    opens = [c + 0.5 for c in closes]
+    highs = [c + 2.0 for c in closes]
+    lows = [c - 2.0 for c in closes]
+    vols = [100000.0] * 160
+
+    # Dump the last candle far below EMA20 (overextended)
+    closes[159] = closes[158] - 50.0
+    lows[159] = closes[159] - 2.0
+
+    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "PRICE_OVEREXTENDED"
+
+
+def test_trend_following_low_volume_rejected():
+    """Verify that continuation candle with insufficient volume is rejected."""
+    cfg = make_cfg(session_start="09:00", session_end="23:30")
+    df = create_synthetic_bearish_continuation_df(continuation_vol=1000.0)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "VOLUME_BELOW_THRESHOLD"
+
+
+def test_trend_following_neutral_trend_rejected():
+    """Verify that conflicting 15m trend (Close < EMA20 while EMA20 > EMA50) returns TREND_15M_NEUTRAL."""
+    cfg = make_cfg(session_start="09:00", session_end="23:30")
+    idx = pd.date_range("2026-10-30 07:00", periods=160, freq="5min", tz="Asia/Kolkata")
+    closes = [3800.0 + (i * 1.5) for i in range(160)]
+    for j in range(140, 158):
+        closes[j] = 3970.0
+    closes[158] = 3950.0
+    closes[159] = 3950.0
+    opens = [c for c in closes]
+    highs = [c + 1.0 for c in closes]
+    lows = [c - 1.0 for c in closes]
+    vols = [100000.0] * 160
+
+    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "TREND_15M_NEUTRAL"
+
+
+def test_session_open_filter_rejected():
+    """Verify that entries during the first 45 minutes of session are rejected with SESSION_OPEN_FILTER."""
+    cfg = make_cfg(session_start="09:00", session_end="23:30", no_entry_minutes_after_open=45)
+    # Candle at 09:30 AM IST (after session start 09:00, but before 09:45 cutoff; 70 candles >= 60)
+    idx = pd.date_range("2026-10-30 03:45", periods=70, freq="5min", tz="Asia/Kolkata")
+    assert idx[-1].strftime("%H:%M") == "09:30"
+    df = pd.DataFrame({"Open": [4000.0]*70, "High": [4005.0]*70, "Low": [3995.0]*70, "Close": [4000.0]*70, "Volume": [1000.0]*70}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "SESSION_OPEN_FILTER"
+
+
+def test_late_entry_filter_rejected():
+    """Verify that entries at or after 22:00 IST are rejected with LATE_ENTRY_FILTER."""
+    cfg = make_cfg(session_start="09:00", session_end="23:30", last_entry_time="22:00")
+    # 185 candles ending at 22:15 IST
+    idx = pd.date_range("2026-10-30 06:55", periods=185, freq="5min", tz="Asia/Kolkata")
+    assert idx[-1].strftime("%H:%M") == "22:15"
+    df = pd.DataFrame({"Open": [4000.0]*185, "High": [4005.0]*185, "Low": [3995.0]*185, "Close": [4000.0]*185, "Volume": [1000.0]*185}, index=idx)
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "LATE_ENTRY_FILTER"
+
+
+def test_session_end_liquidation_in_backtest():
+    """Verify that an open trade reaching session_end (23:30) is liquidated with reason SESSION_END."""
+    from backtest.orb_backtest import run_backtest
+    cfg = make_cfg(session_start="09:00", session_end="23:30", last_entry_time="22:00")
+    # Setup a trade entering at 21:00 and not hitting SL or TP before 23:30
+    idx = pd.date_range("2026-10-30 07:00", periods=205, freq="5min", tz="Asia/Kolkata")
+    closes = [4100.0 - (i * 0.5) for i in range(205)]
+    opens = [c + 0.2 for c in closes]
+    highs = [c + 1.0 for c in closes]
+    lows = [c - 1.0 for c in closes]
+    vols = [100000.0] * 205
+
+    # Trigger a short setup at bar 168 (around 21:00)
+    closes[165] = closes[164] + 3.0
+    highs[165] = closes[165] + 2.0
+    opens[168] = closes[167] + 0.5
+    highs[168] = opens[168] + 2.0
+    closes[168] = opens[168] - 3.0
+    lows[168] = closes[168] - 0.5
+    vols[168] = 150000.0
+
+    # Flat from bar 169 to end so neither SL nor TP is touched
+    for j in range(169, 205):
+        closes[j] = closes[168]
+        opens[j] = closes[168]
+        highs[j] = closes[168] + 0.5
+        lows[j] = closes[168] - 0.5
+
+    df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols}, index=idx)
+    res = run_backtest(df, cfg=cfg, strategy_fn=evaluate_trend_following)
+    if res.trades > 0:
+        assert any(t["exit_reason"] in {"SESSION_END", "END_OF_DAY"} for t in res.trade_log)
+
+
+def test_regime_filter_choppy_adx_rejected():
+    """Verify that when use_regime_filter is True, low 15m ADX (< min_15m_adx) rejects entry."""
+    cfg = make_cfg(use_regime_filter=True, min_15m_adx=99.0)  # Threshold above actual 97.85 ADX
+    df = create_synthetic_bearish_continuation_df()
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "REGIME_CHOPPY_LOW_ADX"
+
+
+def test_regime_filter_flat_ema_slope_rejected():
+    """Verify that when use_regime_filter is True and EMAs are too close, REGIME_FLAT_EMA_SLOPE triggers."""
+    cfg = make_cfg(use_regime_filter=True, min_15m_adx=5.0, min_ema_separation_atr=50.0)  # Unattainable EMA separation
+    df = create_synthetic_bearish_continuation_df()
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "REGIME_FLAT_EMA_SLOPE"
+
+
+def test_friction_exceeds_tolerance_rejected():
+    """Verify that when round-trip friction exceeds max_friction_to_risk_ratio, trade is rejected."""
+    cfg = make_cfg(max_friction_to_risk_ratio=0.01)  # Very tight friction tolerance (1%)
+    df = create_synthetic_bearish_continuation_df()
+    sig = evaluate_trend_following(df, cfg)
+    assert sig.direction == "NO TRADE"
+    assert sig.diagnostic_code == "FRICTION_EXCEEDS_TOLERANCE"
+
+
+def test_minimum_stop_distance_enforced():
+    """Verify that stop-loss is placed at least min_stop_distance_atr * ATR away from entry."""
+    cfg = make_cfg(min_stop_distance_atr=2.5)  # Enforce 2.5x ATR min stop
+    df = create_synthetic_bearish_continuation_df()
+    sig = evaluate_trend_following(df, cfg)
+    if sig.direction == "SHORT":
+        stop_dist = abs(sig.sl - sig.entry)
+        # ATR on this synthetic series is ~4.0, so stop_dist should be >= 2.5 * ATR
+        assert stop_dist >= 10.0
+

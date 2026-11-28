@@ -1,0 +1,42 @@
+{
+  "verification_name": "Step 4: Multi-Process Concurrency & OS-Level Locking Verification",
+  "phase": "Phase 3.27",
+  "target_file": "services/delta_paper_broker.py",
+  "remediated_defects": [
+    {
+      "id": "DEFECT-MP-OS-FILE-LOCK",
+      "status": "REMEDIATED_VERIFIED",
+      "fix_description": "Introduced CrossProcessReentrantLock using portalocker.Lock on state_file.with_suffix('.lock'). Provides mutual exclusion across separate operating system processes.",
+      "code_diff": "services/delta_paper_broker.py:40-100",
+      "tests": [
+        "tests/test_phase3_27_safety_remediations.py::test_two_independent_processes_request_same_reservation_simultaneously",
+        "tests/test_phase3_27_safety_remediations.py::test_ten_process_stress_test"
+      ]
+    },
+    {
+      "id": "DEFECT-MP-CRASH-RELEASE",
+      "status": "REMEDIATED_VERIFIED",
+      "fix_description": "Verified that hard process termination (os._exit) triggers operating system kernel lock release, enabling subsequent processes to acquire state without deadlocks.",
+      "code_diff": "services/delta_paper_broker.py:40-100",
+      "tests": [
+        "tests/test_phase3_27_safety_remediations.py::test_process_termination_while_holding_lock"
+      ]
+    },
+    {
+      "id": "DEFECT-MP-CROSS-PROCESS-IDEMP",
+      "status": "REMEDIATED_VERIFIED",
+      "fix_description": "Process 1 trade commits into disk state under OS lock. Process 2 checks state and rejects duplicate idempotency key across OS process boundary.",
+      "code_diff": "services/delta_paper_broker.py:235-255",
+      "tests": [
+        "tests/test_phase3_27_safety_remediations.py::test_duplicate_idempotency_keys_across_processes"
+      ]
+    }
+  ],
+  "test_matrix_results": {
+    "test_two_independent_processes_request_same_reservation_simultaneously": "PASSED",
+    "test_ten_process_stress_test": "PASSED",
+    "test_process_termination_while_holding_lock": "PASSED",
+    "test_duplicate_idempotency_keys_across_processes": "PASSED"
+  },
+  "overall_verdict": "PASS"
+}

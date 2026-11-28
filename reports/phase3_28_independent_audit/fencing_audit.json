@@ -1,0 +1,51 @@
+{
+  "audit_area": "Audit D — Fencing Validation at the Final State-Mutation Boundary",
+  "audit_target": "services/delta_paper_broker.py",
+  "fencing_architecture": {
+    "token_structure": "RES_GEN{generation}_{token_hex(8)}",
+    "generation_counter": "Monotonically increasing integer self._reservation_generation",
+    "lease_parameters": [
+      "timestamp_epoch",
+      "ttl_seconds",
+      "expires_at_epoch = timestamp_epoch + ttl_seconds"
+    ]
+  },
+  "fencing_attack_vector_tests": [
+    {
+      "vector": "Expired reservation commit (uncontended)",
+      "scenario": "Worker sleeps past TTL window and attempts commit without competing reservation",
+      "test_name": "test_audit_d_expired_reservation_commit_rejected",
+      "expected_behavior": "Commit rejected; expired reservation cleared from state",
+      "result": "PASSED"
+    },
+    {
+      "vector": "Stale worker commit after generation advance (contended pre-emption)",
+      "scenario": "Worker A experiences 1.1s lag; Worker B acquires next generation slot; Worker A attempts commit",
+      "test_name": "test_audit_d_stale_worker_commit_after_generation_advance_rejected",
+      "expected_behavior": "Worker A commit rejected due to token and generation mismatch; Worker B reservation preserved",
+      "result": "PASSED"
+    },
+    {
+      "vector": "Duplicate commit replay",
+      "scenario": "Worker commits valid token once, then immediately re-submits identical commit call",
+      "test_name": "test_audit_d_duplicate_commit_rejected",
+      "expected_behavior": "First commit succeeds; second commit rejected (reservation already cleared)",
+      "result": "PASSED"
+    },
+    {
+      "vector": "Commit after explicit release",
+      "scenario": "Worker releases reservation after order failure, then rogue caller attempts to commit released token",
+      "test_name": "test_audit_d_commit_after_release_rejected",
+      "expected_behavior": "Commit rejected (reservation is None)",
+      "result": "PASSED"
+    },
+    {
+      "vector": "Commit across broker process restart",
+      "scenario": "Reservation persisted; broker crashes and restarts; valid commit attempted by active worker",
+      "test_name": "test_audit_d_commit_following_process_restart",
+      "expected_behavior": "Pending reservation token and generation recovered from disk; valid commit accepted within TTL",
+      "result": "PASSED"
+    }
+  ],
+  "audit_verdict": "PASS"
+}

@@ -5,8 +5,18 @@ import threading
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from config.settings import settings
+
+
+def _get_now_iso(tz_name: Optional[str] = None) -> str:
+    """Return timezone-aware ISO-8601 string in the designated timezone."""
+    try:
+        tz = ZoneInfo(tz_name or getattr(settings, "timezone", "Asia/Kolkata"))
+    except Exception:
+        tz = ZoneInfo("Asia/Kolkata")
+    return datetime.now(tz).isoformat()
 from database.models import (
     TradeRecord,
     PositionRecord,
@@ -20,8 +30,8 @@ from database.supabase_client import SupabaseClient
 class DatabaseRepository:
     """Thread-safe SQLite repository with transaction guarantees and optional Supabase cloud sync."""
 
-    def __init__(self, db_path: Optional[Path] = None, supabase_client: Optional[SupabaseClient] = None):
-        self.db_path = db_path or settings.db_path
+    def __init__(self, db_path: Optional[Path | str] = None, supabase_client: Optional[SupabaseClient] = None):
+        self.db_path = Path(db_path) if db_path else settings.db_path
         self._lock = threading.Lock()
         self.supabase = supabase_client or SupabaseClient()
         self._init_db()
@@ -64,12 +74,18 @@ class DatabaseRepository:
                     unrealized_pnl REAL NOT NULL DEFAULT 0.0,
                     unrealized_pnl_pct REAL NOT NULL DEFAULT 0.0,
                     realized_pnl REAL NOT NULL DEFAULT 0.0,
+                    entry_fee REAL NOT NULL DEFAULT 0.0,
                     stop_loss REAL,
                     take_profit REAL,
                     opened_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
             """)
+
+            cursor.execute("PRAGMA table_info(positions);")
+            pos_cols = [row["name"] for row in cursor.fetchall()]
+            if "entry_fee" not in pos_cols:
+                cursor.execute("ALTER TABLE positions ADD COLUMN entry_fee REAL NOT NULL DEFAULT 0.0;")
 
             # Trade execution history
             cursor.execute("""
@@ -82,12 +98,18 @@ class DatabaseRepository:
                     fee REAL NOT NULL,
                     slippage REAL NOT NULL,
                     total_cost REAL NOT NULL,
+                    realized_pnl REAL NOT NULL DEFAULT 0.0,
                     timestamp TEXT NOT NULL,
                     strategy TEXT NOT NULL,
                     status TEXT NOT NULL,
                     notes TEXT
                 );
             """)
+
+            cursor.execute("PRAGMA table_info(trades);")
+            trade_cols = [row["name"] for row in cursor.fetchall()]
+            if "realized_pnl" not in trade_cols:
+                cursor.execute("ALTER TABLE trades ADD COLUMN realized_pnl REAL NOT NULL DEFAULT 0.0;")
 
             # Daily snapshots for performance and drawdown tracking
             cursor.execute("""
@@ -106,7 +128,7 @@ class DatabaseRepository:
             # Initialize account if not present
             cursor.execute("SELECT id FROM account WHERE id = 1;")
             if not cursor.fetchone():
-                now_str = datetime.now().isoformat()
+                now_str = _get_now_iso()
                 cursor.execute("""
                     INSERT INTO account (id, initial_balance, cash_balance, realized_pnl, total_fees_paid, peak_equity, updated_at)
                     VALUES (1, ?, ?, 0.0, 0.0, ?, ?);
@@ -124,7 +146,7 @@ class DatabaseRepository:
     def reset_account(self, starting_balance: Optional[float] = None) -> None:
         """Completely reset the paper trading account, positions, and trade history."""
         balance = starting_balance if starting_balance is not None else settings.default_starting_balance
-        now_str = datetime.now().isoformat()
+        now_str = _get_now_iso()
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM positions;")
@@ -156,7 +178,7 @@ class DatabaseRepository:
                 "realized_pnl": 0.0,
                 "total_fees_paid": 0.0,
                 "peak_equity": settings.default_starting_balance,
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": _get_now_iso(),
             }
 
     def get_positions(self) -> List[PositionRecord]:
@@ -177,6 +199,7 @@ class DatabaseRepository:
                     unrealized_pnl=r["unrealized_pnl"],
                     unrealized_pnl_pct=r["unrealized_pnl_pct"],
                     realized_pnl=r["realized_pnl"],
+                    entry_fee=r["entry_fee"] if ("entry_fee" in r.keys() and r["entry_fee"] is not None) else 0.0,
                     stop_loss=r["stop_loss"],
                     take_profit=r["take_profit"],
                     opened_at=r["opened_at"],
@@ -202,6 +225,7 @@ class DatabaseRepository:
                 unrealized_pnl=r["unrealized_pnl"],
                 unrealized_pnl_pct=r["unrealized_pnl_pct"],
                 realized_pnl=r["realized_pnl"],
+                entry_fee=r["entry_fee"] if ("entry_fee" in r.keys() and r["entry_fee"] is not None) else 0.0,
                 stop_loss=r["stop_loss"],
                 take_profit=r["take_profit"],
                 opened_at=r["opened_at"],
@@ -210,7 +234,7 @@ class DatabaseRepository:
 
     def update_positions_prices(self, price_map: Dict[str, float]) -> None:
         """Update market values and unrealized P&L for open positions given current prices."""
-        now_str = datetime.now().isoformat()
+        now_str = _get_now_iso()
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             for symbol, price in price_map.items():
@@ -238,20 +262,21 @@ class DatabaseRepository:
     def record_trade_and_update_portfolio(
         self,
         trade: TradeRecord,
-        new_cash: float,
-        updated_position: Optional[PositionRecord],
-        realized_pnl_delta: float,
-        fee_delta: float,
+        new_cash: Optional[float] = None,
+        updated_position: Optional[PositionRecord] = None,
+        realized_pnl_delta: float = 0.0,
+        fee_delta: float = 0.0,
+        cash_delta: Optional[float] = None,
     ) -> int:
         """Atomically execute a trade, update position, deduct/add cash, and record history."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
-            now_str = datetime.now().isoformat()
+            now_str = _get_now_iso()
 
             # 1. Insert trade record
             cursor.execute("""
-                INSERT INTO trades (symbol, side, quantity, price, fee, slippage, total_cost, timestamp, strategy, status, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                INSERT INTO trades (symbol, side, quantity, price, fee, slippage, total_cost, realized_pnl, timestamp, strategy, status, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """, (
                 trade.symbol.upper(),
                 trade.side,
@@ -260,6 +285,7 @@ class DatabaseRepository:
                 trade.fee,
                 trade.slippage,
                 trade.total_cost,
+                getattr(trade, "realized_pnl", 0.0),
                 trade.timestamp or now_str,
                 trade.strategy,
                 trade.status,
@@ -270,6 +296,7 @@ class DatabaseRepository:
             # 2. Update position
             if updated_position:
                 sym = updated_position.symbol.upper()
+                pos_entry_fee = getattr(updated_position, "entry_fee", 0.0)
                 if updated_position.quantity <= 0.000001:
                     # Closed position
                     cursor.execute("""
@@ -278,7 +305,8 @@ class DatabaseRepository:
                             market_value = 0.0,
                             unrealized_pnl = 0.0,
                             unrealized_pnl_pct = 0.0,
-                            realized_pnl = realized_pnl + ?,
+                            realized_pnl = round(realized_pnl + ?, 2),
+                            entry_fee = 0.0,
                             updated_at = ?
                         WHERE symbol = ?;
                     """, (realized_pnl_delta, now_str, sym))
@@ -294,7 +322,8 @@ class DatabaseRepository:
                                 market_value = ?,
                                 unrealized_pnl = ?,
                                 unrealized_pnl_pct = ?,
-                                realized_pnl = realized_pnl + ?,
+                                realized_pnl = round(realized_pnl + ?, 2),
+                                entry_fee = ?,
                                 stop_loss = ?,
                                 take_profit = ?,
                                 updated_at = ?
@@ -307,6 +336,7 @@ class DatabaseRepository:
                             updated_position.unrealized_pnl,
                             updated_position.unrealized_pnl_pct,
                             realized_pnl_delta,
+                            pos_entry_fee,
                             updated_position.stop_loss,
                             updated_position.take_profit,
                             now_str,
@@ -316,8 +346,8 @@ class DatabaseRepository:
                         cursor.execute("""
                             INSERT INTO positions (
                                 symbol, quantity, avg_entry_price, current_price, market_value,
-                                unrealized_pnl, unrealized_pnl_pct, realized_pnl, stop_loss, take_profit, opened_at, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                unrealized_pnl, unrealized_pnl_pct, realized_pnl, entry_fee, stop_loss, take_profit, opened_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                         """, (
                             sym,
                             updated_position.quantity,
@@ -327,33 +357,46 @@ class DatabaseRepository:
                             updated_position.unrealized_pnl,
                             updated_position.unrealized_pnl_pct,
                             realized_pnl_delta,
+                            pos_entry_fee,
                             updated_position.stop_loss,
                             updated_position.take_profit,
                             now_str,
                             now_str,
                         ))
 
-            # 3. Update account cash, realized P&L, fees, peak equity
-            cursor.execute("SELECT peak_equity FROM account WHERE id = 1;")
+            # 3. Determine cash delta atomically
+            if cash_delta is None:
+                if new_cash is not None:
+                    cursor.execute("SELECT cash_balance FROM account WHERE id = 1;")
+                    acc_r = cursor.fetchone()
+                    curr_c = acc_r["cash_balance"] if acc_r else settings.default_starting_balance
+                    cash_delta = round(new_cash - curr_c, 2)
+                else:
+                    cash_delta = round((trade.total_cost - trade.fee) if trade.side == "SELL" else -(trade.total_cost + trade.fee), 2)
+
+            cursor.execute("SELECT cash_balance, peak_equity FROM account WHERE id = 1;")
             peak_row = cursor.fetchone()
+            curr_cash = peak_row["cash_balance"] if peak_row else settings.default_starting_balance
             curr_peak = peak_row["peak_equity"] if peak_row else settings.default_starting_balance
 
+            updated_cash = round(curr_cash + cash_delta, 2)
+
             # Estimate total equity to update peak
-            cursor.execute("SELECT SUM(market_value) as total_mv FROM positions WHERE quantity > 0;")
+            cursor.execute("SELECT SUM(market_value) as total_mv FROM positions WHERE quantity > 0.000001;")
             mv_row = cursor.fetchone()
             total_mv = mv_row["total_mv"] if mv_row and mv_row["total_mv"] else 0.0
-            curr_equity = new_cash + total_mv
+            curr_equity = round(updated_cash + total_mv, 2)
             new_peak = max(curr_peak, curr_equity)
 
             cursor.execute("""
                 UPDATE account
-                SET cash_balance = ?,
-                    realized_pnl = realized_pnl + ?,
-                    total_fees_paid = total_fees_paid + ?,
+                SET cash_balance = round(cash_balance + ?, 2),
+                    realized_pnl = round(realized_pnl + ?, 2),
+                    total_fees_paid = round(total_fees_paid + ?, 2),
                     peak_equity = ?,
                     updated_at = ?
                 WHERE id = 1;
-            """, (new_cash, realized_pnl_delta, fee_delta, new_peak, now_str))
+            """, (cash_delta, realized_pnl_delta, fee_delta, new_peak, now_str))
 
             conn.commit()
 
@@ -377,6 +420,9 @@ class DatabaseRepository:
             rows = cursor.fetchall()
             trades = []
             for r in rows:
+                pnl_val = 0.0
+                if "realized_pnl" in r.keys() and r["realized_pnl"] is not None:
+                    pnl_val = float(r["realized_pnl"])
                 trades.append(TradeRecord(
                     id=r["id"],
                     symbol=r["symbol"],
@@ -386,6 +432,7 @@ class DatabaseRepository:
                     fee=r["fee"],
                     slippage=r["slippage"],
                     total_cost=r["total_cost"],
+                    realized_pnl=pnl_val,
                     timestamp=r["timestamp"],
                     strategy=r["strategy"],
                     status=r["status"],
@@ -393,16 +440,42 @@ class DatabaseRepository:
                 ))
             return trades
 
-    def get_today_realized_loss(self) -> float:
-        """Calculate total losses incurred today for daily loss limit checking."""
-        today_prefix = datetime.now().strftime("%Y-%m-%d")
+    def get_today_realized_loss(self, timezone_str: Optional[str] = None) -> float:
+        """Calculate total losses incurred today for daily loss limit checking.
+        
+        Uses the authoritative closed-trade ledger in trades table for executions today,
+        aggregating individual net losses (including fees and slippage) from the structured
+        numeric realized_pnl field for closed executions (status='FILLED', side='SELL', realized_pnl < 0)
+        in the designated exchange/account timezone.
+        """
+        from zoneinfo import ZoneInfo
+        tz_name = timezone_str or getattr(settings, "timezone", "Asia/Kolkata")
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("Asia/Kolkata")
+
+        today_prefix = datetime.now(tz).strftime("%Y-%m-%d")
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
-            # Calculate from closed trades / realized pnl today
+            total_loss = 0.0
+
             cursor.execute("""
-                SELECT realized_pnl FROM positions
-                WHERE updated_at LIKE ? AND realized_pnl < 0;
+                SELECT realized_pnl, notes FROM trades
+                WHERE timestamp LIKE ?
+                  AND status = 'FILLED'
+                  AND (side = 'SELL' OR notes LIKE '%Realized PnL%');
             """, (f"{today_prefix}%",))
-            rows = cursor.fetchall()
-            total_loss = sum(abs(r["realized_pnl"]) for r in rows)
-            return total_loss
+
+            import re
+            for tr in cursor.fetchall():
+                pnl_val = float(tr["realized_pnl"]) if tr["realized_pnl"] is not None else 0.0
+                if pnl_val < 0:
+                    total_loss += abs(pnl_val)
+                elif pnl_val == 0.0 and tr["notes"]:
+                    match = re.search(r"Realized PnL:\s*-\$?([0-9,.]+)", tr["notes"] or "")
+                    if match:
+                        loss_amt = float(match.group(1).replace(",", ""))
+                        total_loss += loss_amt
+
+            return round(total_loss, 2)

@@ -1,0 +1,177 @@
+{
+  "audit_phase": "3.32",
+  "audit_name": "Execution Transaction Crash Testing Matrix",
+  "timestamp": "2026-11-10T22:58:00Z",
+  "boundaries_tested": 9,
+  "verdict": "PASS",
+  "invariants_verified": {
+    "no_duplicate_position": true,
+    "no_phantom_position": true,
+    "no_missing_committed_position": true,
+    "no_double_deducted_fees": true,
+    "no_lost_cash": true,
+    "no_duplicate_idempotency_key_execution": true,
+    "deterministic_recovery": true
+  },
+  "scenarios": [
+    {
+      "boundary": "1",
+      "boundary_name": "Before Execution Intent Creation",
+      "injection_point": "Crash occurs before SQLite intent reservation is registered",
+      "disk_state_at_crash": {
+        "sqlite_intent": null,
+        "json_position": null,
+        "cash_balance": 10000.0
+      },
+      "recovery_action": "None required; no pending intent exists",
+      "post_recovery_state": {
+        "sqlite_status": null,
+        "json_position": null,
+        "cash_balance": 10000.0,
+        "retry_permitted": true
+      },
+      "result": "PASS"
+    },
+    {
+      "boundary": "2",
+      "boundary_name": "After Intent Insertion",
+      "injection_point": "SQLite records status='EXECUTING'; crash occurs before JSON temp file write",
+      "disk_state_at_crash": {
+        "sqlite_intent": "EXECUTING",
+        "json_position": null,
+        "cash_balance": 10000.0
+      },
+      "recovery_action": "Broker startup inspects open_position in JSON (None); transitions intent to 'ROLLED_BACK'",
+      "post_recovery_state": {
+        "sqlite_status": "ROLLED_BACK",
+        "json_position": null,
+        "cash_balance": 10000.0,
+        "retry_permitted": true
+      },
+      "result": "PASS"
+    },
+    {
+      "boundary": "3",
+      "boundary_name": "During JSON Temp File Writing",
+      "injection_point": "Crash injected mid-write into state.json.tmp",
+      "disk_state_at_crash": {
+        "sqlite_intent": "EXECUTING",
+        "json_tmp_file": "truncated/corrupt",
+        "json_position": null,
+        "cash_balance": 10000.0
+      },
+      "recovery_action": "state.json.tmp ignored/overwritten; broker detects open_position is None; rolls back intent",
+      "post_recovery_state": {
+        "sqlite_status": "ROLLED_BACK",
+        "json_position": null,
+        "cash_balance": 10000.0,
+        "retry_permitted": true
+      },
+      "result": "PASS"
+    },
+    {
+      "boundary": "4",
+      "boundary_name": "After JSON fsync Before Atomic Replace",
+      "injection_point": "Crash injected after state.json.tmp fsync, prior to os.replace(state.json.tmp, state.json)",
+      "disk_state_at_crash": {
+        "sqlite_intent": "EXECUTING",
+        "json_committed_state": "open_position is None",
+        "cash_balance": 10000.0
+      },
+      "recovery_action": "Active state.json remains intact without position; recovery rolls back intent to 'ROLLED_BACK'",
+      "post_recovery_state": {
+        "sqlite_status": "ROLLED_BACK",
+        "json_position": null,
+        "cash_balance": 10000.0,
+        "retry_permitted": true
+      },
+      "result": "PASS"
+    },
+    {
+      "boundary": "5",
+      "boundary_name": "After Atomic JSON Replacement",
+      "injection_point": "os.replace() successfully completed on state.json; crash injected before SQLite commit",
+      "disk_state_at_crash": {
+        "sqlite_intent": "EXECUTING",
+        "json_position": "LONG 1 micro-lot at 4000.0",
+        "cash_balance": 9998.0
+      },
+      "recovery_action": "Broker startup inspects JSON, matches idempotency_key with pending intent, commits intent to 'COMMITTED'",
+      "post_recovery_state": {
+        "sqlite_status": "COMMITTED",
+        "json_position": "LONG 1 micro-lot at 4000.0",
+        "cash_balance": 9998.0,
+        "retry_permitted": false
+      },
+      "result": "PASS"
+    },
+    {
+      "boundary": "6",
+      "boundary_name": "Before SQLite Intent Completion",
+      "injection_point": "JSON state durable; crash occurs immediately before commit_execution() call",
+      "disk_state_at_crash": {
+        "sqlite_intent": "EXECUTING",
+        "json_position": "LONG 1 micro-lot at 4000.0",
+        "cash_balance": 9998.0
+      },
+      "recovery_action": "Recovery detects position in JSON state matching pending intent; marks intent 'COMMITTED'",
+      "post_recovery_state": {
+        "sqlite_status": "COMMITTED",
+        "json_position": "LONG 1 micro-lot at 4000.0",
+        "cash_balance": 9998.0,
+        "retry_permitted": false
+      },
+      "result": "PASS"
+    },
+    {
+      "boundary": "7",
+      "boundary_name": "During SQLite Intent Completion",
+      "injection_point": "SQLite transaction aborted mid-execution during UPDATE to COMMITTED",
+      "disk_state_at_crash": {
+        "sqlite_intent": "EXECUTING",
+        "json_position": "LONG 1 micro-lot at 4000.0",
+        "cash_balance": 9998.0
+      },
+      "recovery_action": "Subsequent restart reconciliation successfully completes UPDATE to 'COMMITTED'",
+      "post_recovery_state": {
+        "sqlite_status": "COMMITTED",
+        "json_position": "LONG 1 micro-lot at 4000.0",
+        "cash_balance": 9998.0,
+        "retry_permitted": false
+      },
+      "result": "PASS"
+    },
+    {
+      "boundary": "8",
+      "boundary_name": "During Recovery Idempotence",
+      "injection_point": "Recovery process itself interrupted and restarted multiple times",
+      "disk_state_at_crash": {
+        "sqlite_intent": "EXECUTING",
+        "json_position": "LONG 1 micro-lot at 4000.0"
+      },
+      "recovery_action": "_recover_pending_execution_intents() re-executes idempotently across repeated invocations",
+      "post_recovery_state": {
+        "sqlite_status": "COMMITTED",
+        "reconciliation_passes": 5,
+        "duplicate_records_created": 0
+      },
+      "result": "PASS"
+    },
+    {
+      "boundary": "9",
+      "boundary_name": "After Recovery Before Caller Ack",
+      "injection_point": "Recovery completed; crash occurs before client receives order acknowledgment",
+      "disk_state_at_crash": {
+        "sqlite_intent": "COMMITTED",
+        "json_position": "LONG 1 micro-lot at 4000.0"
+      },
+      "recovery_action": "Caller resubmits same idempotency_key; broker rejects as duplicate order (status='COMMITTED')",
+      "post_recovery_state": {
+        "sqlite_status": "COMMITTED",
+        "open_positions_count": 1,
+        "duplicate_order_rejected": true
+      },
+      "result": "PASS"
+    }
+  ]
+}

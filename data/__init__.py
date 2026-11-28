@@ -1,0 +1,1 @@
+"""Market data adapters for the XAUT ORB assistant."""

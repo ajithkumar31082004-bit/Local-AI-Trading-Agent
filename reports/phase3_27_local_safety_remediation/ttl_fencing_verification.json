@@ -1,0 +1,54 @@
+{
+  "verification_name": "Step 2: Order Reservation TTL Expiration & Fencing Verification",
+  "phase": "Phase 3.27",
+  "target_file": "services/delta_paper_broker.py",
+  "remediated_defects": [
+    {
+      "id": "DEFECT-1-TTL-PARAM-COUPLING",
+      "status": "REMEDIATED_VERIFIED",
+      "fix_description": "Stored active reservation's own ttl_seconds and expires_at_epoch in _pending_reservation. Decoupled expiration evaluation from incoming caller's TTL parameter.",
+      "code_diff": "services/delta_paper_broker.py:246-270",
+      "tests": [
+        "tests/test_phase3_27_safety_remediations.py::test_short_ttl_followed_by_longer_ttl",
+        "tests/test_phase3_27_safety_remediations.py::test_long_ttl_followed_by_shorter_ttl"
+      ]
+    },
+    {
+      "id": "DEFECT-2-UNCONTENDED-EXPIRED-COMMIT",
+      "status": "REMEDIATED_VERIFIED",
+      "fix_description": "commit_order_reservation() validates that now_epoch < expires_at_epoch. Rejects commit and clears expired reservation even if no competing worker requested the slot.",
+      "code_diff": "services/delta_paper_broker.py:330-345",
+      "tests": [
+        "tests/test_phase3_27_safety_remediations.py::test_expired_commit_without_competing_worker"
+      ]
+    },
+    {
+      "id": "DEFECT-3-FENCING-GENERATION",
+      "status": "REMEDIATED_VERIFIED",
+      "fix_description": "Introduced self._reservation_generation persisted in state schema. Each new reservation increments generation. Preempted worker cannot commit after generation advances.",
+      "code_diff": "services/delta_paper_broker.py:255-275",
+      "tests": [
+        "tests/test_phase3_27_safety_remediations.py::test_worker_a_expires_worker_b_reserves_worker_a_commit_fails"
+      ]
+    },
+    {
+      "id": "DEFECT-4-GATED-POSITION-ASSIGNMENT",
+      "status": "REMEDIATED_VERIFIED",
+      "fix_description": "In open_simulated_trade(), position assignment self.open_position = pos occurs strictly after commit_order_reservation() returns True. On commit failure, fees/slippage are rolled back and state remains unmutated.",
+      "code_diff": "services/delta_paper_broker.py:650-665",
+      "tests": [
+        "tests/test_phase3_27_safety_remediations.py::test_failed_commit_leaves_broker_state_unchanged"
+      ]
+    }
+  ],
+  "test_matrix_results": {
+    "test_short_ttl_followed_by_longer_ttl": "PASSED",
+    "test_long_ttl_followed_by_shorter_ttl": "PASSED",
+    "test_expired_commit_without_competing_worker": "PASSED",
+    "test_worker_a_expires_worker_b_reserves_worker_a_commit_fails": "PASSED",
+    "test_failed_commit_leaves_broker_state_unchanged": "PASSED",
+    "test_concurrent_reservation_attempts_in_memory": "PASSED",
+    "test_reservation_cleanup_and_recovery": "PASSED"
+  },
+  "overall_verdict": "PASS"
+}

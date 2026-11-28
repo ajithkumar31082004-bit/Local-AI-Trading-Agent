@@ -1,0 +1,85 @@
+{
+  "audit_phase": "3.34",
+  "audit_name": "EC2 Read-Only Production Environment Inspection",
+  "timestamp": "2026-11-11T07:50:30Z",
+  "ssh_connection_status": "CONNECTED_SUCCESSFUL",
+  "ssh_target": "ubuntu@16.4.36.144",
+  "ssh_auth_method": "RSA Key (Super_Market.pem)",
+  "connect_latency_seconds": 2.1,
+  "system_information": {
+    "hostname": "ip-172-31-4-192",
+    "operating_system": "Ubuntu 26.04.1 LTS (Resolute Raccoon)",
+    "kernel": "7.0.0-1016-aws x86_64",
+    "uptime": "6 days, 9 hours, 43 minutes",
+    "load_average": [0.08, 0.07, 0.08]
+  },
+  "git_repository_status": {
+    "repo_path": "/home/ubuntu/Local-AI-Trading-Agent",
+    "current_branch": "feature/stage1-readonly-observer",
+    "current_commit": "a7d7c9a",
+    "commit_summary": "docs(stage1): capture 1-hour EC2 public market data observation report and telemetry",
+    "upstream_status": "Up to date with origin/feature/stage1-readonly-observer"
+  },
+  "systemd_services": {
+    "delta-paper-trading.service": {
+      "state": "inactive (dead)",
+      "active_since": null,
+      "inactive_since": "Fri 2026-11-06 01:33:08 UTC",
+      "exit_code": "0/SUCCESS",
+      "trading_daemon_running": false
+    },
+    "delta-monitoring-api.service": {
+      "state": "active (running)",
+      "main_pid": 27611,
+      "process": "uvicorn services.monitoring_api:app --host 127.0.0.1 --port 8088",
+      "memory_mb": 158.5,
+      "running": true
+    },
+    "delta-paper-dashboard.service": {
+      "state": "active (running)",
+      "main_pid": 10830,
+      "process": "streamlit run app.py --server.port 8501 --server.address 127.0.0.1",
+      "memory_mb": 15.7,
+      "running": true
+    }
+  },
+  "process_inspection": {
+    "active_python_processes": [
+      {
+        "pid": 10830,
+        "command": "/home/ubuntu/Local-AI-Trading-Agent/.venv/bin/streamlit run app.py",
+        "role": "Dashboard"
+      },
+      {
+        "pid": 27611,
+        "command": "/home/ubuntu/Local-AI-Trading-Agent/.venv/bin/uvicorn services.monitoring_api:app",
+        "role": "Read-Only Monitoring API"
+      }
+    ],
+    "unauthorized_trading_daemons": 0
+  },
+  "resources": {
+    "disk_space": {
+      "filesystem": "/dev/root",
+      "total_gb": 28.0,
+      "used_gb": 13.0,
+      "available_gb": 16.0,
+      "use_percent": "45%"
+    },
+    "memory": {
+      "total_mb": 908.0,
+      "used_mb": 421.0,
+      "free_mb": 151.0,
+      "available_mb": 486.0,
+      "swap_total_mb": 4096.0,
+      "swap_free_mb": 3993.0
+    }
+  },
+  "state_files_integrity": {
+    "file_path": "/home/ubuntu/Local-AI-Trading-Agent/data/paper_forward_24h_state.json",
+    "sha256": "dad10844b0e77ed19db058eec1e541aa858eb8e2d3ea1ada66d83a69390ced25",
+    "matches_local_hash": true,
+    "tampering_detected": false
+  },
+  "verdict": "PASS"
+}

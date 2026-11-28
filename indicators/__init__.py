@@ -1,0 +1,1 @@
+"""Indicators for the XAUT ORB strategy."""

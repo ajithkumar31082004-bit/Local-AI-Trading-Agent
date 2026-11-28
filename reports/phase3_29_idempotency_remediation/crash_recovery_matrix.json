@@ -1,0 +1,97 @@
+{
+  "audit_phase": "Phase 3.29 — Permanent Idempotency Remediation",
+  "component": "services/idempotency_registry.py and services/delta_paper_broker.py",
+  "crash_recovery_scenarios": [
+    {
+      "point_id": "CR-01",
+      "lifecycle_stage": "Pre-Reservation",
+      "failure_mode": "Client submits duplicate key while previous order is in-flight or filled",
+      "storage_state": "Registry contains COMMITTED or active RESERVED record",
+      "recovery_behavior": "reserve_order_slot() rejects duplicate order immediately without state changes",
+      "test_reference": "test_1_duplicate_key_same_process",
+      "status": "VERIFIED"
+    },
+    {
+      "point_id": "CR-02",
+      "lifecycle_stage": "Mid-Reservation Crash",
+      "failure_mode": "Process crashes or throws unhandled exception during SQLite INSERT transaction",
+      "storage_state": "Uncommitted SQLite transaction",
+      "recovery_behavior": "SQLite WAL rollback automatically purges uncommitted record; on restart, no phantom reservation exists",
+      "test_reference": "test_7_crash_during_idempotency_persistence",
+      "status": "VERIFIED"
+    },
+    {
+      "point_id": "CR-03",
+      "lifecycle_stage": "Post-Reservation Unfilled Order",
+      "failure_mode": "Limit price not reached, zero fill, or margin check fails",
+      "storage_state": "Registry has RESERVED record; broker calls release_order_reservation()",
+      "recovery_behavior": "Status transitions to RELEASED; slot is cleared for subsequent orders; retry permitted if authorized",
+      "test_reference": "test_phase3_28_independent_audit::test_audit_d_commit_after_release_rejected",
+      "status": "VERIFIED"
+    },
+    {
+      "point_id": "CR-04",
+      "lifecycle_stage": "Expired Reservation Without Commit",
+      "failure_mode": "Worker dies or experiences network lag exceeding lease TTL (30s)",
+      "storage_state": "Registry record status is RESERVED with now_epoch >= expires_at",
+      "recovery_behavior": "Subsequent worker detects expired lease, clears stale reservation, and claims slot with incremented generation",
+      "test_reference": "test_phase3_28_independent_audit::test_audit_d_expired_reservation_commit_rejected",
+      "status": "VERIFIED"
+    },
+    {
+      "point_id": "CR-05",
+      "lifecycle_stage": "Post-Commit / Pre-Acknowledgement Crash",
+      "failure_mode": "Order filled and COMMITTED to SQLite + JSON, but client dies before receiving response",
+      "storage_state": "Registry has COMMITTED status; JSON state has open_position",
+      "recovery_behavior": "Client retries with same idempotency_key on restart; registry rejects as duplicate COMMITTED order, preventing double execution",
+      "test_reference": "test_8_crash_after_persistence_before_ack",
+      "status": "VERIFIED"
+    },
+    {
+      "point_id": "CR-06",
+      "lifecycle_stage": "L1 Cache Pruning Replay",
+      "failure_mode": "1,005 subsequent orders fill, dropping original key from in-memory FIFO dictionary",
+      "storage_state": "Original key absent from _processed_idempotency_keys, but present as COMMITTED in SQLite and closed_trades",
+      "recovery_behavior": "L2 check in SQLite registry intercepts request and deterministically rejects duplicate",
+      "test_reference": "test_3_replay_after_1005_keys_pruning",
+      "status": "VERIFIED"
+    },
+    {
+      "point_id": "CR-07",
+      "lifecycle_stage": "High-Volume 10,000 Key Stress Replay",
+      "failure_mode": "Massive trading volume (>10,000 trades) followed by restart and replay of historical key",
+      "storage_state": "SQLite registry contains 10,001 historical records",
+      "recovery_behavior": "Indexed B-tree lookup instantly matches primary key and blocks re-execution",
+      "test_reference": "test_4_replay_after_10000_unique_keys",
+      "status": "VERIFIED"
+    },
+    {
+      "point_id": "CR-08",
+      "lifecycle_stage": "Database File Corruption",
+      "failure_mode": "Underlying SQLite database file corrupted with garbage bytes or zeroed headers",
+      "storage_state": "Corrupt SQLite file on disk",
+      "recovery_behavior": "Registry isolates damaged DB to .corrupt.<timestamp>, initializes fresh schema, and backfills historical trade IDs from closed_trades; duplicate keys remain blocked",
+      "test_reference": "test_9_corrupt_database_recovery",
+      "status": "VERIFIED"
+    },
+    {
+      "point_id": "CR-09",
+      "lifecycle_stage": "Kernel Lock Abrupt Crash",
+      "failure_mode": "Process crashes hard (os._exit) while holding portalocker OS file lock",
+      "storage_state": "Lock file handle open in terminated process",
+      "recovery_behavior": "Operating system kernel automatically frees file descriptor locks upon process termination; next process acquires lock immediately without deadlock",
+      "test_reference": "test_phase3_28_independent_audit::test_audit_b_recovery_after_process_crash_while_locked",
+      "status": "VERIFIED"
+    },
+    {
+      "point_id": "CR-10",
+      "lifecycle_stage": "Post-Trade Closure Duplicate Attempt",
+      "failure_mode": "Order filled, position closed via TP/SL, account is flat; rogue client replays key",
+      "storage_state": "open_position is None, key is COMMITTED in SQLite and recorded in closed_trades",
+      "recovery_behavior": "Durable registry blocks re-execution permanently; ledger remains intact",
+      "test_reference": "test_5_duplicate_key_after_trade_closed",
+      "status": "VERIFIED"
+    }
+  ],
+  "overall_durability_verdict": "PASS"
+}

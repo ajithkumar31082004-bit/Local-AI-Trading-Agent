@@ -1,0 +1,143 @@
+================================================================================
+PHASE 3.40 FINAL OFFLINE OPERATIONAL SAFETY REVIEW — TEST RESULTS
+================================================================================
+Date: 2026-11-11
+Repository: ajithkumar31082004-bit/Local-AI-Trading-Agent
+Branch: feature/phase3-39-independent-transport-audit
+Starting Commit: c7f4697
+Environment: Local Windows Offline / Python 3.13.14 / pytest 9.1.1
+Mode: STRICT READ-ONLY SHADOW / OFFLINE MOCKED ONLY
+
+--------------------------------------------------------------------------------
+1. PHASE 3.40 OPERATIONAL SAFETY & CANCELLATION TEST SUITE (8 TESTS)
+--------------------------------------------------------------------------------
+Command: .venv\Scripts\python -m pytest tests/test_phase3_40_operational_safety.py -v
+
+============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0 -- C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collecting ... collected 8 items
+
+tests/test_phase3_40_operational_safety.py::test_01_asyncio_cancelled_error_handling_and_cleanup PASSED [ 12%]
+tests/test_phase3_40_operational_safety.py::test_02_keyboard_interrupt_and_system_exit_propagation PASSED [ 25%]
+tests/test_phase3_40_operational_safety.py::test_03_supervisor_base_exception_handling PASSED [ 37%]
+tests/test_phase3_40_operational_safety.py::test_04_queue_overflow_causes_degraded_state PASSED [ 50%]
+tests/test_phase3_40_operational_safety.py::test_05_transport_import_purity_and_zero_side_effects PASSED [ 62%]
+tests/test_phase3_40_operational_safety.py::test_06_trading_daemon_zero_transport_dependencies PASSED [ 75%]
+tests/test_phase3_40_operational_safety.py::test_07_filesystem_isolation_and_write_protection PASSED [ 87%]
+tests/test_phase3_40_operational_safety.py::test_08_core_safety_invariants_preserved PASSED [100%]
+
+============================== 8 passed in 4.49s ==============================
+
+--------------------------------------------------------------------------------
+2. COMBINED SHADOW OBSERVER TEST SUITES (68 TESTS)
+--------------------------------------------------------------------------------
+Command: .venv\Scripts\python -m pytest tests/test_phase3_35_shadow_validation.py tests/test_phase3_36_independent_shadow_audit.py tests/test_phase3_38_transport_adapter.py tests/test_phase3_39_transport_audit.py tests/test_phase3_40_operational_safety.py -v
+
+============================= test session starts =============================
+platform win32 -- Python 3.13.14, pytest-9.1.1, pluggy-1.7.0 -- C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\ajith\Downloads\Local_AI_Agent
+configfile: pytest.ini
+plugins: anyio-4.15.1, platformdirs-4.13.6
+collecting ... collected 68 items
+
+tests/test_phase3_35_shadow_validation.py::test_1_strategy_registry_discovery PASSED [  1%]
+tests/test_phase3_35_shadow_validation.py::test_2_completed_candle_validation_and_incomplete_rejection PASSED [  2%]
+tests/test_phase3_35_shadow_validation.py::test_3_duplicate_candle_rejection PASSED [  4%]
+tests/test_phase3_35_shadow_validation.py::test_4_out_of_order_timestamp_detection PASSED [  5%]
+tests/test_phase3_35_shadow_validation.py::test_5_stale_ticker_detection PASSED [  7%]
+tests/test_phase3_35_shadow_validation.py::test_6_missing_candle_gap_detection PASSED [  8%]
+tests/test_phase3_35_shadow_validation.py::test_7_signal_generation_synthetic_data PASSED [ 10%]
+tests/test_phase3_35_shadow_validation.py::test_8_rejection_reason_recording PASSED [ 11%]
+tests/test_phase3_35_shadow_validation.py::test_9_recorder_restart_and_persistence PASSED [ 13%]
+tests/test_phase3_35_shadow_validation.py::test_10_output_file_integrity_and_schema PASSED [ 14%]
+tests/test_phase3_35_shadow_validation.py::test_11_broker_import_isolation PASSED [ 16%]
+tests/test_phase3_35_shadow_validation.py::test_12_zero_broker_state_mutation PASSED [ 17%]
+tests/test_phase3_35_shadow_validation.py::test_13_no_order_endpoint_access PASSED [ 19%]
+tests/test_phase3_35_shadow_validation.py::test_14_no_private_credential_access_and_path_enforcement PASSED [ 20%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_01_malicious_path_traversal PASSED [ 22%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_02_directory_escape_protection PASSED [ 23%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_03_in_progress_candle_rejection_boundary PASSED [ 25%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_04_future_candle_rejection PASSED [ 26%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_05_monotonicity_and_duplicate_rejection PASSED [ 27%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_06_extreme_candle_gaps PASSED [ 29%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_07_corrupted_ohlcv_structures PASSED [ 30%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_08_empty_and_warmup_handling PASSED [ 32%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_09_full_ast_dependency_and_callgraph_isolation PASSED [ 33%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_10_invariant_schema_purity PASSED [ 35%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_11_multi_threaded_concurrency_stress PASSED [ 36%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_12_environment_safety_tripwire PASSED [ 38%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_13_historical_production_trade_record_intact PASSED [ 39%]
+tests/test_phase3_36_independent_shadow_audit.py::test_adv_14_market_data_staleness_and_out_of_order PASSED [ 41%]
+tests/test_phase3_38_transport_adapter.py::test_01_transport_config_validation_and_safety PASSED [ 42%]
+tests/test_phase3_38_transport_adapter.py::test_02_successful_mocked_connection PASSED [ 44%]
+tests/test_phase3_38_transport_adapter.py::test_03_connection_timeout_handling PASSED [ 45%]
+tests/test_phase3_38_transport_adapter.py::test_04_connection_refusal_and_error_tracking PASSED [ 47%]
+tests/test_phase3_38_transport_adapter.py::test_05_reconnect_backoff_and_jitter PASSED [ 48%]
+tests/test_phase3_38_transport_adapter.py::test_06_maximum_retry_bound_behavior PASSED [ 50%]
+tests/test_phase3_38_transport_adapter.py::test_07_duplicate_connection_prevention PASSED [ 51%]
+tests/test_phase3_38_transport_adapter.py::test_08_duplicate_and_out_of_order_market_events PASSED [ 52%]
+tests/test_phase3_38_transport_adapter.py::test_09_malformed_market_data_messages PASSED [ 54%]
+tests/test_phase3_38_transport_adapter.py::test_10_foreign_product_symbol_rejection PASSED [ 55%]
+tests/test_phase3_38_transport_adapter.py::test_11_stale_feed_detection_and_degradation PASSED [ 57%]
+tests/test_phase3_38_transport_adapter.py::test_12_graceful_shutdown PASSED [ 58%]
+tests/test_phase3_38_transport_adapter.py::test_13_socket_closure_after_errors PASSED [ 60%]
+tests/test_phase3_38_transport_adapter.py::test_14_no_private_credential_access PASSED [ 61%]
+tests/test_phase3_38_transport_adapter.py::test_15_no_order_endpoint_access PASSED [ 63%]
+tests/test_phase3_38_transport_adapter.py::test_16_zero_broker_import_or_state_mutation PASSED [ 64%]
+tests/test_phase3_38_transport_adapter.py::test_17_zero_subprocess_creation PASSED [ 66%]
+tests/test_phase3_39_transport_audit.py::test_01_all_six_lifecycle_states_and_transitions PASSED [ 67%]
+tests/test_phase3_39_transport_audit.py::test_02_duplicate_connection_guards PASSED [ 69%]
+tests/test_phase3_39_transport_audit.py::test_03_connection_timeout_and_refusal_cleanup PASSED [ 70%]
+tests/test_phase3_39_transport_audit.py::test_04_reconnect_controller_math_and_bounds PASSED [ 72%]
+tests/test_phase3_39_transport_audit.py::test_05_cancellation_during_connection_and_streaming PASSED [ 73%]
+tests/test_phase3_39_transport_audit.py::test_06_socket_closure_after_exceptions PASSED [ 75%]
+tests/test_phase3_39_transport_audit.py::test_07_repeated_start_stop_cycles PASSED [ 76%]
+tests/test_phase3_39_transport_audit.py::test_08_bounded_queue_and_observable_overflow PASSED [ 77%]
+tests/test_phase3_39_transport_audit.py::test_09_bounded_reconnect_history PASSED [ 79%]
+tests/test_phase3_39_transport_audit.py::test_10_logging_flood_protection PASSED [ 80%]
+tests/test_phase3_39_transport_audit.py::test_11_ast_isolation_and_zero_credentials PASSED [ 82%]
+tests/test_phase3_39_transport_audit.py::test_12_strict_product_identity PASSED [ 83%]
+tests/test_phase3_39_transport_audit.py::test_13_separate_exchange_and_receipt_timestamps PASSED [ 85%]
+tests/test_phase3_39_transport_audit.py::test_14_malformed_incomplete_and_stale_events PASSED [ 86%]
+tests/test_phase3_39_transport_audit.py::test_15_safety_invariants_and_historical_ledger PASSED [ 88%]
+tests/test_phase3_40_operational_safety.py::test_01_asyncio_cancelled_error_handling_and_cleanup PASSED [ 89%]
+tests/test_phase3_40_operational_safety.py::test_02_keyboard_interrupt_and_system_exit_propagation PASSED [ 91%]
+tests/test_phase3_40_operational_safety.py::test_03_supervisor_base_exception_handling PASSED [ 92%]
+tests/test_phase3_40_operational_safety.py::test_04_queue_overflow_causes_degraded_state PASSED [ 94%]
+tests/test_phase3_40_operational_safety.py::test_05_transport_import_purity_and_zero_side_effects PASSED [ 95%]
+tests/test_phase3_40_operational_safety.py::test_06_trading_daemon_zero_transport_dependencies PASSED [ 97%]
+tests/test_phase3_40_operational_safety.py::test_07_filesystem_isolation_and_write_protection PASSED [ 98%]
+tests/test_phase3_40_operational_safety.py::test_08_core_safety_invariants_preserved PASSED [100%]
+
+============================= 68 passed in 17.24s =============================
+
+--------------------------------------------------------------------------------
+3. FULL REPOSITORY REGRESSION TEST SUITE (503 TESTS)
+--------------------------------------------------------------------------------
+Command: .venv\Scripts\python -m pytest -q
+
+........................................................................ [ 14%]
+........................................................................ [ 28%]
+........................................................................ [ 42%]
+........................................................................ [ 57%]
+........................................................................ [ 71%]
+........................................................................ [ 85%]
+.......................................................................  [100%]
+============================== warnings summary ===============================
+tests/test_paper_broker.py::test_buy_and_sell_cycle
+tests/test_paper_broker.py::test_account_reset
+  C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_paper_broker.py::test_buy_and_sell_cycle
+tests/test_paper_broker.py::test_account_reset
+  C:\Users\ajith\Downloads\Local_AI_Agent\.venv\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+503 passed, 4 warnings in 120.52s (0:02:00)
