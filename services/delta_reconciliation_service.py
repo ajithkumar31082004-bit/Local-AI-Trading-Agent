@@ -166,7 +166,7 @@ class DeltaReconciliationService:
     def get_active_orders(self) -> List[LiveOrderRecord]:
         with self._get_connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM live_orders WHERE status IN ('PENDING', 'ACCEPTED', 'PARTIALLY_FILLED') ORDER BY created_at DESC;"
+                "SELECT * FROM live_orders WHERE status IN ('PENDING', 'ACCEPTED', 'OPEN', 'PARTIALLY_FILLED') ORDER BY created_at DESC;"
             ).fetchall()
             return [LiveOrderRecord(**dict(r)) for r in rows]
 

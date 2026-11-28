@@ -260,7 +260,18 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                 data = res.json()
                 order_result = data.get("result", {})
                 exchange_id = str(order_result.get("id", ""))
-                status = str(order_result.get("state", "ACCEPTED")).upper()
+                raw_state = str(order_result.get("state", "ACCEPTED")).upper()
+                status_map = {
+                    "OPEN": "ACCEPTED",
+                    "PENDING": "PENDING",
+                    "ACCEPTED": "ACCEPTED",
+                    "FILLED": "FILLED",
+                    "CLOSED": "FILLED",
+                    "CANCELLED": "CANCELLED",
+                    "REJECTED": "REJECTED",
+                    "PARTIALLY_FILLED": "PARTIALLY_FILLED",
+                }
+                status = status_map.get(raw_state, raw_state)
                 if "size" in order_result:
                     total_size = int(order_result["size"])
                     unfilled_size = int(order_result.get("unfilled_size", total_size))
@@ -377,7 +388,7 @@ class DeltaLiveExecutor(BaseExecutionEngine):
         cancelled = []
         active_orders = self.reconciliation_service.get_active_orders()
         for ord_rec in active_orders:
-            if ord_rec.status in ("PENDING", "ACCEPTED") and ord_rec.created_at:
+            if ord_rec.status in ("PENDING", "ACCEPTED", "OPEN") and ord_rec.created_at:
                 try:
                     created_dt = datetime.fromisoformat(ord_rec.created_at)
                     age_seconds = (now - created_dt).total_seconds()
@@ -387,7 +398,12 @@ class DeltaLiveExecutor(BaseExecutionEngine):
                             ord_rec.client_order_id, age_seconds / 60.0, max_age_minutes
                         )
                         if ord_rec.exchange_order_id:
-                            self.client.cancel_order(ord_rec.exchange_order_id, self.cfg.product_id)
+                            cancel_res = self.client.cancel_order(ord_rec.exchange_order_id, self.cfg.product_id)
+                            if isinstance(cancel_res, dict) and cancel_res.get("success") is False:
+                                rec = self.reconciliation_service.reconcile_with_exchange(ord_rec.client_order_id, self.client)
+                                if rec and rec.status in ("FILLED", "PARTIALLY_FILLED", "CANCELLED"):
+                                    logger.info("Stale check skipped expiry for %s; reconciled status is %s.", ord_rec.client_order_id, rec.status)
+                                    continue
 
                         self.reconciliation_service.update_result(
                             client_order_id=ord_rec.client_order_id,

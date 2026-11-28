@@ -372,10 +372,13 @@ def test_executor_mocked_order_submission_payload(tmp_path, monkeypatch):
     )
 
     assert result["success"] is True
+    assert result["status"] == "ACCEPTED"
     assert result["exchange_order_id"] == "DELTA_ORD_9999"
     rec = rec_svc.get_order(result["client_order_id"])
     assert rec is not None
+    assert rec.status == "ACCEPTED"
     assert rec.filled_size == 0
+    assert len(rec_svc.get_active_orders()) == 1
 
     # Verify payload format sent to exchange
     assert len(intercepted_requests) == 1
@@ -565,5 +568,43 @@ def test_stale_order_auto_cancellation(tmp_path, monkeypatch):
 
     fresh_rec = reconcile_svc.get_order("ORB_FRESH_1")
     assert fresh_rec.status == "ACCEPTED"
+
+
+def test_stale_order_reconciles_if_already_filled_instead_of_expiring(tmp_path, monkeypatch):
+    from datetime import timedelta, datetime, timezone
+    db_file = tmp_path / "test_stale_filled.sqlite3"
+    reconcile_svc = DeltaReconciliationService(db_path=db_file)
+    old_time = (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat()
+
+    reconcile_svc.record_intent(
+        client_order_id="ORB_ALREADY_FILLED",
+        candle_timestamp="2026-10-28 21:00:00",
+        symbol="XAUTUSD",
+        side="buy",
+        size=2,
+        limit_price=4050.0,
+    )
+    with reconcile_svc._get_connection() as conn:
+        conn.execute(
+            "UPDATE live_orders SET status = 'OPEN', exchange_order_id = 'EXCH_FILLED_1', created_at = ? WHERE client_order_id = 'ORB_ALREADY_FILLED';",
+            (old_time,),
+        )
+        conn.commit()
+
+    assert len(reconcile_svc.get_active_orders()) == 1
+    cfg = ORBSettings(mode="LIVE", live_trading_acknowledged="YES", api_key="real_key", api_secret="real_secret")
+    client = DeltaExchangeClient(api_key="real_key", api_secret="real_secret")
+    monkeypatch.setattr(client, "cancel_order", lambda oid, pid: {"success": False, "error": "order_not_open", "status_code": 400})
+    monkeypatch.setattr(client, "get_order_by_client_id", lambda cid: {
+        "success": True,
+        "result": {"id": "EXCH_FILLED_1", "state": "filled", "size": 2, "unfilled_size": 0, "avg_fill_price": 4050.0},
+    })
+
+    executor = DeltaLiveExecutor(cfg=cfg, client=client, reconciliation_service=reconcile_svc)
+    stale_cancelled = executor.cancel_stale_orders(max_age_minutes=5)
+    assert stale_cancelled == []
+    updated = reconcile_svc.get_order("ORB_ALREADY_FILLED")
+    assert updated.status == "FILLED"
+    assert updated.filled_size == 2
 
 
